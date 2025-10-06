@@ -46,6 +46,8 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, Strin
     let file_path = app.dialog()
         .file()
         .add_filter("Video Files", &["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv"])
+        .add_filter("Image Files", &["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "avif", "heic", "heif"])
+        .add_filter("All Media", &["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv", "jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "avif", "heic", "heif"])
         .blocking_pick_file();
     
     match file_path {
@@ -243,7 +245,8 @@ pub fn run() {
                 println!("*** LAUNCHED WITH ARGUMENTS - POTENTIAL FILE ASSOCIATION ***");
                 
                 let video_extensions = vec!["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv"];
-                let mut video_files: Vec<String> = Vec::new();
+                let image_extensions = vec!["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "avif", "heic", "heif"];
+                let mut media_files: Vec<String> = Vec::new();
 
                 for arg in &args[1..] {
                     // Sanitize the path
@@ -251,18 +254,33 @@ pub fn run() {
                     println!("Processing argument: {} -> {}", arg, clean_arg);
 
                     let lower = clean_arg.to_lowercase();
+                    
+                    // Check if it's a video file
+                    let mut is_media = false;
                     for ext in &video_extensions {
                         if lower.ends_with(&format!(".{}", ext)) {
-                            video_files.push(clean_arg.clone());
+                            media_files.push(clean_arg.clone());
                             println!("Found video file: {}", clean_arg);
+                            is_media = true;
                             break;
+                        }
+                    }
+                    
+                    // Check if it's an image file
+                    if !is_media {
+                        for ext in &image_extensions {
+                            if lower.ends_with(&format!(".{}", ext)) {
+                                media_files.push(clean_arg.clone());
+                                println!("Found image file: {}", clean_arg);
+                                break;
+                            }
                         }
                     }
                 }
 
-                if !video_files.is_empty() {
-                    println!("Queued {} video files", video_files.len());
-                    process_video_files(&app.handle(), video_files);
+                if !media_files.is_empty() {
+                    println!("Queued {} media files", media_files.len());
+                    process_video_files(&app.handle(), media_files);
                 }
             } else {
                 println!("*** LAUNCHED WITHOUT ARGUMENTS - NORMAL APP LAUNCH ***");
@@ -295,7 +313,8 @@ pub fn run() {
                     println!("Received opened event with URLs: {:?}", urls);
                     
                     let video_extensions = vec!["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv"];
-                    let mut video_files: Vec<String> = Vec::new();
+                    let image_extensions = vec!["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "avif", "heic", "heif"];
+                    let mut media_files: Vec<String> = Vec::new();
                     
                     for url in urls {
                         let url_str = url.to_string();
@@ -308,19 +327,34 @@ pub fn run() {
                             println!("Decoded path: {}", decoded_path);
                             
                             let lower = decoded_path.to_lowercase();
+                            let mut is_media = false;
+                            
+                            // Check video extensions
                             for ext in &video_extensions {
                                 if lower.ends_with(&format!(".{}", ext)) {
-                                    video_files.push(decoded_path.to_string());
+                                    media_files.push(decoded_path.to_string());
                                     println!("Found video file from opened event: {}", decoded_path);
+                                    is_media = true;
                                     break;
+                                }
+                            }
+                            
+                            // Check image extensions
+                            if !is_media {
+                                for ext in &image_extensions {
+                                    if lower.ends_with(&format!(".{}", ext)) {
+                                        media_files.push(decoded_path.to_string());
+                                        println!("Found image file from opened event: {}", decoded_path);
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
                     
-                    if !video_files.is_empty() {
-                        println!("Processing {} video files from file association event", video_files.len());
-                        process_video_files(&_app_handle, video_files);
+                    if !media_files.is_empty() {
+                        println!("Processing {} media files from file association event", media_files.len());
+                        process_video_files(&_app_handle, media_files);
                     }
                 }
                 _ => {}
