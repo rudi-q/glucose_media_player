@@ -46,6 +46,8 @@
     // Listen for file open events from Rust
     listen<string>("open-file", (event) => {
       loadVideo(event.payload);
+      // Mark file as processed
+      invoke("mark_file_processed").catch(console.error);
     });
 
     // Listen for drag and drop events
@@ -73,6 +75,9 @@
         loadingRecent = false;
       }
     })();
+
+    // Notify backend that frontend is ready
+    invoke("frontend_ready").catch(console.error);
 
     return () => {
       document.removeEventListener("keydown", handleKeyPress);
