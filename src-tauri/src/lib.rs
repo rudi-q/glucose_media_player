@@ -91,6 +91,12 @@ fn frontend_ready(app_handle: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn exit_app(app_handle: tauri::AppHandle) {
+    println!("Exit app command called");
+    app_handle.exit(0);
+}
+
 #[derive(Serialize, Clone)]
 struct VideoFile {
     path: String,
@@ -267,7 +273,8 @@ pub fn run() {
             get_recent_videos,
             get_pending_file,
             mark_file_processed,
-            frontend_ready
+            frontend_ready,
+            exit_app
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
