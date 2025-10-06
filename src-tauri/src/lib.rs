@@ -15,7 +15,7 @@ static FILE_PROCESSED: Mutex<bool> = Mutex::new(false);
 
 // Configuration constants
 const MAX_FILE_LOADING_ATTEMPTS: u32 = 30;
-const FRONTEND_READY_WAIT_MS: u64 = 3000;
+const FRONTEND_READY_WAIT_MS: u64 = 500;
 const INITIAL_ATTEMPT_DELAY_MS: u64 = 2000;
 const MIDDLE_ATTEMPT_DELAY_MS: u64 = 1000;
 const FINAL_ATTEMPT_DELAY_MS: u64 = 500;
@@ -175,10 +175,6 @@ fn process_video_files(app_handle: &tauri::AppHandle, video_files: Vec<String>) 
         // Spawn background thread for persistent file loading attempts
         let app_handle_clone = app_handle.clone();
         thread::spawn(move || {
-            // Wait for frontend to be ready
-            println!("Waiting for frontend to be ready...");
-            thread::sleep(Duration::from_millis(FRONTEND_READY_WAIT_MS));
-            
             for attempt in 1..=MAX_FILE_LOADING_ATTEMPTS {
                 // Check if file has been processed
                 {
@@ -189,18 +185,7 @@ fn process_video_files(app_handle: &tauri::AppHandle, video_files: Vec<String>) 
                     }
                 }
 
-                // Wait with decreasing intervals
-                let delay = if attempt <= INITIAL_ATTEMPT_COUNT {
-                    Duration::from_millis(INITIAL_ATTEMPT_DELAY_MS)
-                } else if attempt <= MIDDLE_ATTEMPT_COUNT {
-                    Duration::from_millis(MIDDLE_ATTEMPT_DELAY_MS)
-                } else {
-                    Duration::from_millis(FINAL_ATTEMPT_DELAY_MS)
-                };
-
-                thread::sleep(delay);
-
-                // Try to emit event for first video file
+                // Try to emit event for first video file immediately on first attempt
                 if let Some(video_file) = video_files.first() {
                     match app_handle_clone.emit("open-file", video_file) {
                         Ok(_) => {
@@ -216,6 +201,22 @@ fn process_video_files(app_handle: &tauri::AppHandle, video_files: Vec<String>) 
                             );
                         }
                     }
+                }
+
+                // Wait before next attempt (no delay before first attempt)
+                if attempt < MAX_FILE_LOADING_ATTEMPTS {
+                    let delay = if attempt == 1 {
+                        // First retry: wait for frontend to be fully ready
+                        Duration::from_millis(FRONTEND_READY_WAIT_MS)
+                    } else if attempt <= INITIAL_ATTEMPT_COUNT {
+                        Duration::from_millis(INITIAL_ATTEMPT_DELAY_MS)
+                    } else if attempt <= MIDDLE_ATTEMPT_COUNT {
+                        Duration::from_millis(MIDDLE_ATTEMPT_DELAY_MS)
+                    } else {
+                        Duration::from_millis(FINAL_ATTEMPT_DELAY_MS)
+                    };
+
+                    thread::sleep(delay);
                 }
             }
 
