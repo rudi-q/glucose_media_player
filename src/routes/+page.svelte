@@ -42,6 +42,9 @@
   let selectedVideoIndex = $state(0);
   let showCloseButton = $state(false);
   let showVolumeMenu = $state(false);
+  let subtitleSrc = $state<string | null>(null);
+  let subtitlesEnabled = $state(true);
+  let trackElement = $state<HTMLTrackElement>();
 
   onMount(() => {
     // Listen for file open events from Rust
@@ -123,6 +126,11 @@
         case "m":
           toggleMute();
           break;
+        case "c":
+        case "s":
+          e.preventDefault();
+          toggleSubtitles();
+          break;
         case "ArrowLeft":
           e.preventDefault();
           skip(-5);
@@ -182,12 +190,125 @@
     }
   }
 
-  function loadVideo(path: string) {
+  async function openSubtitleDialog() {
+    const result = await invoke<string | null>("open_subtitle_dialog");
+    if (result) {
+      await loadSubtitle(result);
+    }
+  }
+
+  async function loadVideo(path: string) {
     const src = convertFileSrc(path);
     videoSrc = src;
+    // Reset subtitles when loading new video
+    subtitleSrc = null;
     if (videoElement) {
       videoElement.load();
     }
+    
+    // Auto-detect and load subtitle file
+    try {
+      const subtitlePath = await invoke<string | null>('find_subtitle_for_video', { videoPath: path });
+      if (subtitlePath) {
+        console.log('Auto-loading subtitle:', subtitlePath);
+        await loadSubtitle(subtitlePath);
+      }
+    } catch (err) {
+      console.log('No subtitle found or error:', err);
+    }
+  }
+
+  async function loadSubtitle(path: string) {
+    try {
+      console.log('=== LOADING SUBTITLE ===');
+      console.log('Path:', path);
+      
+      // Read the subtitle file content
+      const { readTextFile } = await import('@tauri-apps/plugin-fs');
+      const content = await readTextFile(path);
+      console.log('Subtitle content loaded, length:', content.length);
+      console.log('First 200 chars:', content.substring(0, 200));
+      
+      // Check if it's SRT and convert to WebVTT if needed
+      let vttContent = content;
+      if (path.toLowerCase().endsWith('.srt')) {
+        console.log('Converting SRT to WebVTT');
+        vttContent = convertSrtToVtt(content);
+        console.log('WebVTT first 200 chars:', vttContent.substring(0, 200));
+      } else if (!content.startsWith('WEBVTT')) {
+        // If it's not VTT format, assume it's SRT
+        console.log('File does not start with WEBVTT, converting as SRT');
+        vttContent = convertSrtToVtt(content);
+      }
+      
+      // Create a blob URL from the content
+      const blob = new Blob([vttContent], { type: 'text/vtt;charset=utf-8' });
+      const blobUrl = URL.createObjectURL(blob);
+      
+      // Revoke previous blob URL if exists
+      if (subtitleSrc && subtitleSrc.startsWith('blob:')) {
+        URL.revokeObjectURL(subtitleSrc);
+      }
+      
+      subtitleSrc = blobUrl;
+      subtitlesEnabled = true;
+      console.log('Subtitle blob URL created:', blobUrl);
+      
+      // Force enable text tracks on video element
+      if (videoElement && videoElement.textTracks) {
+        console.log('Video element exists, text tracks count:', videoElement.textTracks.length);
+        
+        // Wait a bit for track to be added
+        setTimeout(() => {
+          if (videoElement && videoElement.textTracks.length > 0) {
+            for (let i = 0; i < videoElement.textTracks.length; i++) {
+              videoElement.textTracks[i].mode = 'showing';
+              console.log('Track', i, 'mode set to showing');
+              console.log('Track', i, 'cues:', videoElement.textTracks[i].cues?.length || 0);
+            }
+          } else {
+            console.warn('No text tracks found on video element yet');
+          }
+          
+          if (trackElement && trackElement.track) {
+            trackElement.track.mode = 'showing';
+            console.log('Track element mode:', trackElement.track.mode);
+            console.log('Track element readyState:', trackElement.readyState);
+          }
+        }, 300);
+      }
+      
+      console.log('=== SUBTITLE LOADING COMPLETE ===');
+    } catch (err) {
+      console.error('Failed to load subtitle:', err);
+      alert('Failed to load subtitle file: ' + err);
+    }
+  }
+  
+  function convertSrtToVtt(srt: string): string {
+    // Convert SRT to WebVTT format
+    let vtt = 'WEBVTT\n\n';
+    
+    // Clean up the SRT content
+    // Remove BOM if present
+    let cleanSrt = srt.replace(/^\uFEFF/, '');
+    
+    // Replace SRT timestamps (00:00:00,000) with VTT timestamps (00:00:00.000)
+    // SRT format: 00:00:20,000 --> 00:00:24,400
+    // VTT format: 00:00:20.000 --> 00:00:24.400
+    cleanSrt = cleanSrt.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+    
+    vtt += cleanSrt;
+    
+    return vtt;
+  }
+
+  function toggleSubtitles() {
+    if (!trackElement || !trackElement.track || !subtitleSrc) return;
+    
+    subtitlesEnabled = !subtitlesEnabled;
+    trackElement.track.mode = subtitlesEnabled ? 'showing' : 'hidden';
+    console.log('Subtitles toggled:', subtitlesEnabled, 'mode:', trackElement.track.mode);
   }
 
   function goHome() {
@@ -260,6 +381,26 @@
     const newVolume = Math.max(0, Math.min(1, volume + delta));
     volume = newVolume;
     videoElement.volume = newVolume;
+  }
+
+  function handleTrackLoad() {
+    // Ensure track is set to showing mode when it loads
+    if (trackElement && trackElement.track) {
+      trackElement.track.mode = 'showing';
+      console.log('Track loaded successfully, mode set to showing');
+      console.log('Track cues:', trackElement.track.cues?.length || 0);
+      console.log('Track activeCues:', trackElement.track.activeCues?.length || 0);
+      
+      // Add cuechange listener to monitor when cues become active
+      trackElement.track.addEventListener('cuechange', () => {
+        if (!trackElement) return;
+        console.log('Cue changed, active cues:', trackElement.track.activeCues?.length || 0);
+        if (trackElement.track.activeCues && trackElement.track.activeCues.length > 0) {
+          const cue = trackElement.track.activeCues[0] as VTTCue;
+          console.log('Current cue text:', cue.text);
+        }
+      });
+    }
   }
 
   function seek(e: MouseEvent) {
@@ -365,6 +506,15 @@
   function handleLoadedMetadata() {
     if (!videoElement) return;
     duration = videoElement.duration;
+    
+    // Enable text tracks if they exist
+    if (videoElement.textTracks && videoElement.textTracks.length > 0) {
+      for (let i = 0; i < videoElement.textTracks.length; i++) {
+        videoElement.textTracks[i].mode = 'showing';
+      }
+      console.log('Text tracks enabled:', videoElement.textTracks.length);
+    }
+    
     // Auto-play when video loads
     videoElement.play().catch(err => {
       console.log('Auto-play prevented:', err);
@@ -489,6 +639,7 @@
 
       video.muted = true;
       video.preload = 'metadata';
+      video.crossOrigin = 'anonymous'; // Allow canvas export
       
       video.onloadedmetadata = () => {
         // Seek to 1 second or 10% of video
@@ -496,12 +647,18 @@
       };
       
       video.onseeked = () => {
-        canvas.width = 320;
-        canvas.height = 180;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const thumbnail = canvas.toDataURL('image/jpeg', 0.7);
-        thumbnailCache.set(videoPath, thumbnail);
-        resolve(thumbnail);
+        try {
+          canvas.width = 320;
+          canvas.height = 180;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const thumbnail = canvas.toDataURL('image/jpeg', 0.7);
+          thumbnailCache.set(videoPath, thumbnail);
+          resolve(thumbnail);
+        } catch (err) {
+          // If canvas is tainted, just resolve empty
+          console.log('Thumbnail generation skipped (CORS):', videoPath);
+          resolve('');
+        }
       };
       
       video.onerror = () => resolve('');
@@ -616,7 +773,20 @@
         ontimeupdate={handleTimeUpdate}
         onloadedmetadata={handleLoadedMetadata}
         onclick={togglePlay}
-      ></video>
+        crossorigin="anonymous"
+      >
+        {#if subtitleSrc}
+          <track
+            bind:this={trackElement}
+            kind="subtitles"
+            src={subtitleSrc}
+            srclang="en"
+            label="Subtitles"
+            default
+            onload={handleTrackLoad}
+          />
+        {/if}
+      </video>
     </div>
 
     <!-- Hidden preview video for generating thumbnails -->
@@ -767,6 +937,30 @@
                 </div>
               {/if}
             </div>
+          {/if}
+          <button class="control-button" onclick={openSubtitleDialog} title="Load subtitles">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="7" width="20" height="10" rx="2" ry="2"></rect>
+              <line x1="6" y1="11" x2="6.01" y2="11"></line>
+              <line x1="10" y1="11" x2="14" y2="11"></line>
+              <line x1="6" y1="15" x2="10" y2="15"></line>
+              <line x1="14" y1="15" x2="18" y2="15"></line>
+            </svg>
+          </button>
+          {#if subtitleSrc}
+            <button 
+              class="control-button" 
+              class:subtitle-active={subtitlesEnabled}
+              onclick={toggleSubtitles} 
+              title="Toggle subtitles (C/S)"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"></path>
+                {#if !subtitlesEnabled}
+                  <line x1="3" y1="3" x2="21" y2="21"></line>
+                {/if}
+              </svg>
+            </button>
           {/if}
           <button class="control-button" onclick={openFileDialog} title="Open file (O)">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -980,12 +1174,8 @@
   .thumbnail-img {
     width: 100%;
     height: 100%;
-    object-fit: cover;
-    transition: transform 0.3s ease;
-  }
-
-  .video-card:hover .thumbnail-img {
-    transform: scale(1.05);
+    object-fit: contain;
+    background: rgba(0, 0, 0, 0.3);
   }
 
   .play-overlay {
@@ -1287,6 +1477,11 @@
     opacity: 1;
   }
 
+  .control-button.subtitle-active {
+    opacity: 1;
+    color: #4CAF50;
+  }
+
   .time {
     font-size: 0.875rem;
     font-variant-numeric: tabular-nums;
@@ -1428,5 +1623,43 @@
     background: rgba(255, 255, 255, 0.15);
     color: #fff;
     font-weight: 500;
+  }
+
+  /* Subtitle styling */
+  :global(video::cue) {
+    background-color: rgba(0, 0, 0, 0.8) !important;
+    color: #ffffff !important;
+    font-size: 1.5em !important;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif !important;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9) !important;
+    line-height: 1.4 !important;
+    padding: 0.2em 0.5em !important;
+  }
+  
+  /* Position subtitle container at bottom */
+  :global(video::-webkit-media-text-track-container) {
+    position: absolute !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: flex-end !important;
+    padding-bottom: 8vh !important;
+    pointer-events: none !important;
+  }
+  
+  :global(video::-webkit-media-text-track-display) {
+    position: static !important;
+    text-align: center !important;
+    width: 100% !important;
+  }
+  
+  /* Firefox subtitle positioning */
+  :global(video::cue-region) {
+    position: absolute !important;
+    bottom: 86vh !important;
+    left: 0 !important;
+    right: 0 !important;
   }
 </style>

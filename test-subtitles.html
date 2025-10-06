@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Subtitle Test</title>
+    <style>
+        video {
+            width: 800px;
+            height: 450px;
+            background: black;
+        }
+        video::cue {
+            background-color: rgba(0, 0, 0, 0.8);
+            color: #ffffff;
+            font-size: 1.5em;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9);
+        }
+        .controls {
+            margin-top: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Subtitle Loading Test</h1>
+    
+    <video id="video" controls crossorigin="anonymous">
+        <source src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" type="video/mp4">
+    </video>
+    
+    <div class="controls">
+        <button onclick="loadSampleSubtitle()">Load Sample Subtitle</button>
+        <button onclick="toggleSubtitles()">Toggle Subtitles</button>
+        <button onclick="logTrackInfo()">Log Track Info</button>
+        <input type="file" id="fileInput" accept=".srt,.vtt" onchange="loadFile(event)">
+    </div>
+    
+    <div id="log" style="margin-top: 20px; font-family: monospace; white-space: pre-wrap; background: #f0f0f0; padding: 10px;"></div>
+    
+    <script>
+        const video = document.getElementById('video');
+        const logDiv = document.getElementById('log');
+        let currentTrack = null;
+        
+        function log(message) {
+            console.log(message);
+            logDiv.textContent += message + '\n';
+        }
+        
+        function loadSampleSubtitle() {
+            // Sample WebVTT content
+            const vttContent = `WEBVTT
+
+1
+00:00:00.000 --> 00:00:05.000
+This is the first subtitle
+
+2
+00:00:05.000 --> 00:00:10.000
+This is the second subtitle
+
+3
+00:00:10.000 --> 00:00:15.000
+This is the third subtitle`;
+            
+            loadSubtitleFromText(vttContent);
+        }
+        
+        function loadSubtitleFromText(content) {
+            log('Loading subtitle...');
+            
+            // Remove existing tracks
+            while (video.firstChild) {
+                video.removeChild(video.firstChild);
+            }
+            
+            // Create blob
+            const blob = new Blob([content], { type: 'text/vtt;charset=utf-8' });
+            const blobUrl = URL.createObjectURL(blob);
+            log('Blob URL: ' + blobUrl);
+            
+            // Create track element
+            const track = document.createElement('track');
+            track.kind = 'subtitles';
+            track.src = blobUrl;
+            track.srclang = 'en';
+            track.label = 'English';
+            track.default = true;
+            
+            track.addEventListener('load', () => {
+                log('Track loaded!');
+                track.track.mode = 'showing';
+                logTrackInfo();
+            });
+            
+            track.addEventListener('error', (e) => {
+                log('Track error: ' + e.message);
+            });
+            
+            video.appendChild(track);
+            currentTrack = track;
+            
+            // Also try setting via textTracks
+            setTimeout(() => {
+                if (video.textTracks.length > 0) {
+                    video.textTracks[0].mode = 'showing';
+                    log('Track mode set to showing via textTracks');
+                }
+            }, 100);
+        }
+        
+        function toggleSubtitles() {
+            if (video.textTracks.length > 0) {
+                const mode = video.textTracks[0].mode;
+                video.textTracks[0].mode = mode === 'showing' ? 'hidden' : 'showing';
+                log('Track mode toggled to: ' + video.textTracks[0].mode);
+            } else {
+                log('No text tracks found');
+            }
+        }
+        
+        function logTrackInfo() {
+            log('=== Track Info ===');
+            log('Text tracks count: ' + video.textTracks.length);
+            
+            if (video.textTracks.length > 0) {
+                const track = video.textTracks[0];
+                log('Track mode: ' + track.mode);
+                log('Track cues: ' + (track.cues ? track.cues.length : 0));
+                log('Track activeCues: ' + (track.activeCues ? track.activeCues.length : 0));
+                
+                if (track.cues && track.cues.length > 0) {
+                    log('First cue: ' + track.cues[0].text);
+                }
+            }
+        }
+        
+        function loadFile(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    let content = e.target.result;
+                    log('File loaded: ' + file.name);
+                    log('Content length: ' + content.length);
+                    
+                    // Convert SRT to VTT if needed
+                    if (file.name.toLowerCase().endsWith('.srt')) {
+                        log('Converting SRT to WebVTT');
+                        content = convertSrtToVtt(content);
+                    }
+                    
+                    loadSubtitleFromText(content);
+                };
+                reader.readAsText(file);
+            }
+        }
+        
+        function convertSrtToVtt(srt) {
+            let vtt = 'WEBVTT\n\n';
+            let cleanSrt = srt.replace(/^\uFEFF/, '');
+            cleanSrt = cleanSrt.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+            vtt += cleanSrt;
+            return vtt;
+        }
+        
+        // Monitor cue changes
+        video.addEventListener('loadedmetadata', () => {
+            log('Video loaded metadata');
+            if (video.textTracks.length > 0) {
+                video.textTracks[0].addEventListener('cuechange', () => {
+                    if (video.textTracks[0].activeCues && video.textTracks[0].activeCues.length > 0) {
+                        log('Active cue: ' + video.textTracks[0].activeCues[0].text);
+                    }
+                });
+            }
+        });
+        
+        log('Test page loaded. Click "Load Sample Subtitle" to test.');
+    </script>
+</body>
+</html>

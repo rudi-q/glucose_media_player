@@ -59,6 +59,25 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, Strin
 }
 
 #[tauri::command]
+async fn open_subtitle_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    
+    let file_path = app.dialog()
+        .file()
+        .add_filter("Subtitle Files", &["srt", "vtt", "ass", "ssa", "sub"])
+        .blocking_pick_file();
+    
+    match file_path {
+        Some(file) => {
+            let path_buf = file.into_path().map_err(|e| e.to_string())?;
+            let path = path_buf.to_string_lossy().to_string();
+            Ok(Some(path))
+        },
+        None => Ok(None)
+    }
+}
+
+#[tauri::command]
 fn convert_file_path(path: String) -> Result<String, String> {
     Ok(format!("https://asset.localhost/{}", path))
 }
@@ -99,6 +118,30 @@ fn exit_app(app_handle: tauri::AppHandle) {
     app_handle.exit(0);
 }
 
+#[tauri::command]
+fn find_subtitle_for_video(video_path: String) -> Result<Option<String>, String> {
+    use std::path::Path;
+    
+    let video_path_obj = Path::new(&video_path);
+    let video_dir = video_path_obj.parent().ok_or("Could not get video directory")?;
+    let video_stem = video_path_obj.file_stem().ok_or("Could not get video filename")?;
+    
+    // Subtitle extensions to check
+    let subtitle_exts = vec!["srt", "vtt", "ass", "ssa", "sub"];
+    
+    // Check for subtitle with same name as video
+    for ext in subtitle_exts {
+        let subtitle_path = video_dir.join(format!("{}.{}", video_stem.to_string_lossy(), ext));
+        if subtitle_path.exists() {
+            println!("Found subtitle file: {:?}", subtitle_path);
+            return Ok(Some(subtitle_path.to_string_lossy().to_string()));
+        }
+    }
+    
+    println!("No subtitle file found for video: {}", video_path);
+    Ok(None)
+}
+
 #[derive(Serialize, Clone)]
 struct VideoFile {
     path: String,
@@ -116,6 +159,7 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
     let mut search_dirs = Vec::new();
     
     if let Some(home) = dirs::home_dir() {
+        println!("Home directory: {:?}", home);
         search_dirs.push(home.join("Videos"));
         search_dirs.push(home.join("Downloads"));
         search_dirs.push(home.join("Desktop"));
@@ -123,8 +167,10 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
     }
     
     // Scan directories
-    for dir in search_dirs {
+    for dir in &search_dirs {
+        println!("Checking directory: {:?} (exists: {})", dir, dir.exists());
         if dir.exists() {
+            let mut dir_video_count = 0;
             if let Ok(entries) = fs::read_dir(&dir) {
                 for entry in entries.flatten() {
                     if let Ok(metadata) = entry.metadata() {
@@ -140,6 +186,7 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
                                                     size: metadata.len(),
                                                     modified: duration.as_secs(),
                                                 });
+                                                dir_video_count += 1;
                                             }
                                         }
                                     }
@@ -149,6 +196,7 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
                     }
                 }
             }
+            println!("Found {} videos in {:?}", dir_video_count, dir);
         }
     }
     
@@ -230,6 +278,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // Handle command line arguments for file associations
@@ -272,12 +321,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_file_dialog,
+            open_subtitle_dialog,
             convert_file_path,
             get_recent_videos,
             get_pending_file,
             mark_file_processed,
             frontend_ready,
-            exit_app
+            exit_app,
+            find_subtitle_for_video
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
