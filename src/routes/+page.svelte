@@ -596,6 +596,8 @@
 
     <div 
       class="controls-zone" 
+      role="region"
+      aria-label="Video controls"
       onmouseenter={handleControlsEnter}
       onmouseleave={handleControlsLeave}
     >
@@ -686,7 +688,8 @@
                   min="0" 
                   max="1" 
                   step="0.01" 
-                  orient="vertical"
+                  aria-label="Volume"
+                  aria-orientation="vertical"
                   bind:value={volume}
                   oninput={(e) => { if (videoElement) { videoElement.volume = (e.target as HTMLInputElement).valueAsNumber; if (videoElement.muted) videoElement.muted = false; } }}
                 />
