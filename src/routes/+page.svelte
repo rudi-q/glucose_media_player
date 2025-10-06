@@ -23,6 +23,7 @@
   let showPreview = $state(false);
   let previewTime = $state(0);
   let previewPosition = $state(0);
+  let shouldLoadGallery = $state(true); // Control whether to load gallery
   
   interface VideoFile {
     path: string;
@@ -46,6 +47,7 @@
     // Listen for file open events from Rust
     listen<string>("open-file", (event) => {
       loadVideo(event.payload);
+      shouldLoadGallery = false; // Skip gallery when file is opened via association
       // Mark file as processed
       invoke("mark_file_processed").catch(console.error);
     });
@@ -64,14 +66,21 @@
     // Load audio devices
     loadAudioDevices();
     
-    // Load recent videos asynchronously
+    // Load recent videos asynchronously (only if no file was opened)
     (async () => {
-      try {
-        const videos = await invoke<VideoFile[]>("get_recent_videos");
-        recentVideos = videos;
-      } catch (err) {
-        console.error("Failed to load recent videos:", err);
-      } finally {
+      // Small delay to check if a file is being opened via file association
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      if (shouldLoadGallery && !videoSrc) {
+        try {
+          const videos = await invoke<VideoFile[]>("get_recent_videos");
+          recentVideos = videos;
+        } catch (err) {
+          console.error("Failed to load recent videos:", err);
+        } finally {
+          loadingRecent = false;
+        }
+      } else {
         loadingRecent = false;
       }
     })();
