@@ -33,6 +33,7 @@ Enjoy your media with a beautifully blurred background and centered content for 
 
 ### 🖼️ Universal Media Support
 - **Videos**: MP4, MKV, AVI, MOV, WebM, WMV, FLV, M4V
+- **Subtitles**: SRT, VTT, ASS, SSA, SUB
 - **Images**: JPG, JPEG, PNG, GIF, WebP, BMP, SVG, AVIF, HEIC, HEIF
 
 ### 🎯 Minimal by Design
@@ -122,6 +123,7 @@ glucose offers three convenient ways to open your media:
 | `↑` | Increase volume |
 | `↓` | Decrease volume |
 | `M` | Mute/Unmute |
+| `C` or `S` | Toggle subtitles on/off |
 | `F` | Toggle cinematic/fullscreen mode |
 
 #### Navigation
@@ -134,6 +136,10 @@ glucose offers three convenient ways to open your media:
 
 ### Advanced Features
 
+- **Subtitle Support**: 
+  - Automatically loads .srt files in the same folder as the video
+  - Manually load subtitle files from anywhere
+  - Toggle subtitles on/off during playback (C/S keys)
 - **Timeline Scrubbing**: Hover over the progress bar to see video preview thumbnails
 - **Audio Device Selection**: Click the audio device icon to switch between output devices
 - **Volume Popup**: Click the volume icon for a vertical volume slider
@@ -228,7 +234,7 @@ glucose embraces **brutal minimalism**:
 - [ ] Image-specific controls and transitions
 - [ ] Image gallery with thumbnail view
 - [ ] Slideshow mode for images
-- [ ] Subtitle support for videos
+- [x] Subtitle support for videos (SRT, VTT, ASS, SSA, SUB)
 - [ ] Custom keyboard shortcut configuration
 - [ ] Multiple window support
 - [ ] Folder watching and auto-refresh
