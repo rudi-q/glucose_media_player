@@ -9,6 +9,7 @@
   let previewVideo = $state<HTMLVideoElement>();
   let previewCanvas = $state<HTMLCanvasElement>();
   let videoSrc = $state<string | null>(null);
+  let mediaType = $state<'video' | 'image' | null>(null);
   let isPlaying = $state(false);
   let currentTime = $state(0);
   let duration = $state(0);
@@ -185,13 +186,25 @@
   function loadVideo(path: string) {
     const src = convertFileSrc(path);
     videoSrc = src;
-    if (videoElement) {
-      videoElement.load();
+    
+    // Detect media type from file extension
+    const lowerPath = path.toLowerCase();
+    const imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'avif', 'heic', 'heif'];
+    const videoExtensions = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'mpg', 'mpeg', 'ogv'];
+    
+    if (imageExtensions.some(ext => lowerPath.endsWith(`.${ext}`))) {
+      mediaType = 'image';
+    } else if (videoExtensions.some(ext => lowerPath.endsWith(`.${ext}`))) {
+      mediaType = 'video';
+      if (videoElement) {
+        videoElement.load();
+      }
     }
   }
 
   function goHome() {
     videoSrc = null;
+    mediaType = null;
     if (videoElement) {
       videoElement.pause();
     }
@@ -594,48 +607,70 @@
   {:else}
     <div class="video-container" class:cinematic={isCinematicMode} class:fullscreen={!isCinematicMode}>
       {#if isCinematicMode}
-        <!-- Blurred background video for cinematic mode -->
-        <!-- svelte-ignore a11y_media_has_caption -->
-        <video
-          bind:this={backgroundVideo}
-          class="background-video"
-          src={videoSrc}
-          muted
-          aria-hidden="true"
-        ></video>
+        {#if mediaType === 'image'}
+          <!-- Blurred background image for cinematic mode -->
+          <img
+            class="background-video"
+            src={videoSrc}
+            alt="Background"
+            aria-hidden="true"
+          />
+        {:else}
+          <!-- Blurred background video for cinematic mode -->
+          <!-- svelte-ignore a11y_media_has_caption -->
+          <video
+            bind:this={backgroundVideo}
+            class="background-video"
+            src={videoSrc}
+            muted
+            aria-hidden="true"
+          ></video>
+        {/if}
       {/if}
 
-      <!-- Main video -->
-      <!-- svelte-ignore a11y_media_has_caption -->
-      <video
-        bind:this={videoElement}
-        class="main-video"
-        class:cinematic-video={isCinematicMode}
-        class:fullscreen-video={!isCinematicMode}
-        src={videoSrc}
-        ontimeupdate={handleTimeUpdate}
-        onloadedmetadata={handleLoadedMetadata}
-        onclick={togglePlay}
-      ></video>
+      {#if mediaType === 'image'}
+        <!-- Main image -->
+        <img
+          class="main-video"
+          class:cinematic-video={isCinematicMode}
+          class:fullscreen-video={!isCinematicMode}
+          src={videoSrc}
+          alt=""
+        />
+      {:else}
+        <!-- Main video -->
+        <!-- svelte-ignore a11y_media_has_caption -->
+        <video
+          bind:this={videoElement}
+          class="main-video"
+          class:cinematic-video={isCinematicMode}
+          class:fullscreen-video={!isCinematicMode}
+          src={videoSrc}
+          ontimeupdate={handleTimeUpdate}
+          onloadedmetadata={handleLoadedMetadata}
+          onclick={togglePlay}
+        ></video>
+      {/if}
     </div>
 
-    <!-- Hidden preview video for generating thumbnails -->
-    <!-- svelte-ignore a11y_media_has_caption -->
-    <video
-      bind:this={previewVideo}
-      src={videoSrc}
-      class="preview-video"
-      muted
-      onseeked={drawPreview}
-    ></video>
+    {#if mediaType === 'video'}
+      <!-- Hidden preview video for generating thumbnails -->
+      <!-- svelte-ignore a11y_media_has_caption -->
+      <video
+        bind:this={previewVideo}
+        src={videoSrc}
+        class="preview-video"
+        muted
+        onseeked={drawPreview}
+      ></video>
 
-    <div 
-      class="controls-zone" 
-      role="region"
-      aria-label="Video controls"
-      onmouseenter={handleControlsEnter}
-      onmouseleave={handleControlsLeave}
-    >
+      <div 
+        class="controls-zone" 
+        role="region"
+        aria-label="Video controls"
+        onmouseenter={handleControlsEnter}
+        onmouseleave={handleControlsLeave}
+      >
     <div 
       class="controls" 
       class:visible={showControls} 
@@ -782,6 +817,7 @@
       </div>
     </div>
     </div>
+    {/if}
   {/if}
 </main>
 
