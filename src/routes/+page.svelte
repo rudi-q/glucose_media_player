@@ -529,7 +529,7 @@
     <div class="empty-state" class:dragging={isDragging}>
       <div class="library-container">
         <div class="library-header">
-          <h1>glucose</h1>
+          <img src="/logo-dark.svg" alt="glucose" class="logo" />
           <button class="open-button" onclick={openFileDialog}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
@@ -891,11 +891,10 @@
     margin-bottom: 3rem;
   }
 
-  .library-header h1 {
-    font-size: 2.5rem;
-    font-weight: 200;
-    letter-spacing: -0.02em;
-    color: #fff;
+  .library-header .logo {
+    height: 48px;
+    width: auto;
+    opacity: 0.95;
   }
 
   .loading {

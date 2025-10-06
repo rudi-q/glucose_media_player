@@ -1,0 +1,5 @@
+*.svelte linguist-language=Svelte
+*.ts linguist-language=TypeScript
+*.config.js linguist-language=TypeScript
+app.html linguist-language=TypeScript
+*.rs linguist-language=Rust
