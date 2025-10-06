@@ -47,7 +47,8 @@
         "name": "Video File",
         "ext": ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v"],
         "role": "Viewer",
-        "description": "Glucose Video Player"
+        "rank": "Owner",
+        "description": "Glucose Video File"
       }
     ]
   }

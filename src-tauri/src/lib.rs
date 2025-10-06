@@ -1,4 +1,6 @@
-use tauri::{Manager, Emitter, RunEvent};
+use tauri::Emitter;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use tauri::{Manager, RunEvent};
 use std::fs;
 use std::time::SystemTime;
 use std::collections::VecDeque;
@@ -278,15 +280,15 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app_handle, event| {
+        .run(|_app_handle, event| {
             // Log events for debugging
             if cfg!(debug_assertions) {
                 println!("Received event: {:?}", event);
             }
             
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             match event {
                 // Handle macOS file association events
-                #[cfg(any(target_os = "macos", target_os = "ios"))]
                 RunEvent::Opened { urls } => {
                     println!("*** FILE ASSOCIATION EVENT RECEIVED ***");
                     println!("Received opened event with URLs: {:?}", urls);
@@ -317,7 +319,7 @@ pub fn run() {
                     
                     if !video_files.is_empty() {
                         println!("Processing {} video files from file association event", video_files.len());
-                        process_video_files(&app_handle, video_files);
+                        process_video_files(&_app_handle, video_files);
                     }
                 }
                 _ => {}
