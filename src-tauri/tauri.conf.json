@@ -41,6 +41,14 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "name": "Video File",
+        "ext": ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v"],
+        "role": "Viewer",
+        "description": "Glucose Video Player"
+      }
     ]
   }
 }

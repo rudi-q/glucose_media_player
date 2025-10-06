@@ -40,6 +40,7 @@
   let showAudioMenu = $state(false);
   let selectedVideoIndex = $state(0);
   let showCloseButton = $state(false);
+  let showVolumeMenu = $state(false);
 
   onMount(() => {
     // Listen for file open events from Rust
@@ -303,11 +304,12 @@
   }
 
   function handleClickOutside(e: MouseEvent) {
-    if (showAudioMenu) {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.audio-device-selector')) {
-        showAudioMenu = false;
-      }
+    const target = e.target as HTMLElement;
+    if (showAudioMenu && !target.closest('.audio-device-selector')) {
+      showAudioMenu = false;
+    }
+    if (showVolumeMenu && !target.closest('.volume-control')) {
+      showVolumeMenu = false;
     }
   }
 
@@ -396,11 +398,6 @@
 
   async function loadAudioDevices() {
     try {
-      // Request microphone permission to get device labels
-      await navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-        stream.getTracks().forEach(track => track.stop());
-      }).catch(() => {});
-      
       const devices = await navigator.mediaDevices.enumerateDevices();
       const outputDevices = devices.filter(device => device.kind === 'audiooutput');
       audioDevices = outputDevices;
@@ -428,6 +425,10 @@
 
   function toggleAudioMenu() {
     showAudioMenu = !showAudioMenu;
+  }
+
+  function toggleVolumeMenu() {
+    showVolumeMenu = !showVolumeMenu;
   }
 
   async function generateThumbnail(videoPath: string): Promise<string> {
@@ -653,7 +654,7 @@
 
         <div class="controls-right">
           <div class="volume-control">
-            <button class="control-button" onclick={toggleMute} title="Mute (M)">
+            <button class="control-button" onclick={toggleVolumeMenu} title="Volume">
               {#if videoElement?.muted || volume === 0}
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
@@ -672,16 +673,33 @@
                 </svg>
               {/if}
             </button>
-            <input 
-              type="range" 
-              class="volume-slider"
-              min="0" 
-              max="1" 
-              step="0.01" 
-              bind:value={volume}
-              oninput={(e) => { if (videoElement) videoElement.volume = (e.target as HTMLInputElement).valueAsNumber; }}
-              title="Volume: {Math.round(volume * 100)}%"
-            />
+            {#if showVolumeMenu}
+              <div class="volume-menu">
+                <input 
+                  type="range" 
+                  class="volume-slider-vertical"
+                  min="0" 
+                  max="1" 
+                  step="0.01" 
+                  orient="vertical"
+                  bind:value={volume}
+                  oninput={(e) => { if (videoElement) { videoElement.volume = (e.target as HTMLInputElement).valueAsNumber; if (videoElement.muted) videoElement.muted = false; } }}
+                />
+                <button class="mute-toggle" onclick={toggleMute} class:muted={videoElement?.muted}>
+                  {#if videoElement?.muted}
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
+                      <line x1="23" y1="9" x2="17" y2="15"></line>
+                      <line x1="17" y1="9" x2="23" y2="15"></line>
+                    </svg>
+                  {:else}
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
+                    </svg>
+                  {/if}
+                </button>
+              </div>
+            {/if}
           </div>
           
           {#if audioDevices.length > 0}
@@ -1235,23 +1253,46 @@
   }
 
   .volume-control {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 0.5rem;
   }
 
-  .volume-slider {
-    width: 80px;
-    height: 4px;
-    -webkit-appearance: none;
-    appearance: none;
+  .volume-menu {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-bottom: 0.5rem;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 1rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 100;
+  }
+
+  .volume-slider-vertical {
+    width: 4px;
+    height: 100px;
+    -webkit-appearance: slider-vertical;
+    appearance: slider-vertical;
     background: rgba(255, 255, 255, 0.2);
     border-radius: 2px;
     outline: none;
     cursor: pointer;
+    writing-mode: bt-lr; /* IE */
+    -webkit-appearance: slider-vertical; /* WebKit */
   }
 
-  .volume-slider::-webkit-slider-thumb {
+  .volume-slider-vertical::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
     width: 12px;
@@ -1262,7 +1303,7 @@
     transition: transform 0.15s ease;
   }
 
-  .volume-slider::-moz-range-thumb {
+  .volume-slider-vertical::-moz-range-thumb {
     width: 12px;
     height: 12px;
     border-radius: 50%;
@@ -1272,12 +1313,36 @@
     transition: transform 0.15s ease;
   }
 
-  .volume-slider::-webkit-slider-thumb:hover {
+  .volume-slider-vertical::-webkit-slider-thumb:hover {
     transform: scale(1.2);
   }
 
-  .volume-slider::-moz-range-thumb:hover {
+  .volume-slider-vertical::-moz-range-thumb:hover {
     transform: scale(1.2);
+  }
+
+  .mute-toggle {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 0.5rem;
+    color: rgba(255, 255, 255, 0.9);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+  }
+
+  .mute-toggle:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .mute-toggle.muted {
+    background: rgba(255, 0, 0, 0.2);
+    border-color: rgba(255, 0, 0, 0.3);
+    color: #ff5555;
   }
 
   .audio-device-selector {
