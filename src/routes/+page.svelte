@@ -193,8 +193,34 @@
   }
 
   async function closeApp() {
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    await getCurrentWindow().close();
+    console.log('closeApp called');
+    try {
+      // Try using the process plugin first (recommended for Tauri 2)
+      console.log('Attempting to use process plugin...');
+      const { exit } = await import('@tauri-apps/plugin-process');
+      console.log('Process plugin imported, calling exit(0)...');
+      await exit(0);
+    } catch (err) {
+      console.error('Failed to exit app with process plugin:', err);
+      // Fallback to window API
+      try {
+        console.log('Attempting fallback to window API...');
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const window = getCurrentWindow();
+        console.log('Window obtained:', window);
+        await window.close();
+        console.log('Window close called');
+      } catch (fallbackErr) {
+        console.error('Fallback close also failed:', fallbackErr);
+        // Last resort: try using invoke to call a backend close command
+        try {
+          console.log('Trying invoke as last resort...');
+          await invoke('exit_app');
+        } catch (invokeErr) {
+          console.error('Invoke exit_app also failed:', invokeErr);
+        }
+      }
+    }
   }
 
   function togglePlay() {
