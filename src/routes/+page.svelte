@@ -1113,11 +1113,11 @@
   .progress-bar {
     width: 100%;
     height: 4px;
-    background: rgba(255, 255, 255, 0.2);
+    background: transparent;
     cursor: pointer;
     margin-bottom: 1rem;
     position: relative;
-    transition: height 0.15s ease;
+    transition: height 0.15s ease, background 0.2s ease;
     border-radius: 2px;
     overflow: visible;
   }
@@ -1125,6 +1125,7 @@
   .progress-bar:hover,
   .progress-bar.scrubbing {
     height: 6px;
+    background: rgba(255, 255, 255, 0.2);
   }
 
   .progress-filled {
