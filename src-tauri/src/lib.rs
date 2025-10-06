@@ -1,7 +1,41 @@
-use tauri::{Manager, Emitter};
+use tauri::{Manager, Emitter, RunEvent};
 use std::fs;
 use std::time::SystemTime;
+use std::collections::VecDeque;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 use serde::Serialize;
+
+// Global state to store pending file paths
+static PENDING_FILES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+static FILE_PROCESSED: Mutex<bool> = Mutex::new(false);
+
+// Configuration constants
+const MAX_FILE_LOADING_ATTEMPTS: u32 = 30;
+const FRONTEND_READY_WAIT_MS: u64 = 3000;
+const INITIAL_ATTEMPT_DELAY_MS: u64 = 2000;
+const MIDDLE_ATTEMPT_DELAY_MS: u64 = 1000;
+const FINAL_ATTEMPT_DELAY_MS: u64 = 500;
+const INITIAL_ATTEMPT_COUNT: u32 = 5;
+const MIDDLE_ATTEMPT_COUNT: u32 = 15;
+
+// Path sanitization function
+fn sanitize_path(path: &str) -> String {
+    let mut clean_path = path.trim().to_string();
+
+    // Remove surrounding quotes if present
+    if clean_path.starts_with('"') && clean_path.ends_with('"') {
+        clean_path = clean_path[1..clean_path.len() - 1].to_string();
+    }
+
+    // Handle Windows UNC paths and long path names
+    if clean_path.starts_with("\\\\?\\") {
+        clean_path = clean_path[4..].to_string();
+    }
+
+    clean_path
+}
 
 #[tauri::command]
 async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
@@ -25,6 +59,36 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, Strin
 #[tauri::command]
 fn convert_file_path(path: String) -> Result<String, String> {
     Ok(format!("https://asset.localhost/{}", path))
+}
+
+#[tauri::command]
+fn get_pending_file() -> Option<String> {
+    let mut pending = PENDING_FILES.lock().unwrap();
+    pending.pop_front()
+}
+
+#[tauri::command]
+fn mark_file_processed() {
+    let mut processed = FILE_PROCESSED.lock().unwrap();
+    *processed = true;
+}
+
+#[tauri::command]
+fn frontend_ready(app_handle: tauri::AppHandle) -> Result<(), String> {
+    println!("Frontend is ready to receive events");
+    
+    // Check if there are any pending files and emit them now
+    let pending_files: Vec<String> = {
+        let mut pending = PENDING_FILES.lock().unwrap();
+        pending.drain(..).collect()
+    };
+    
+    if !pending_files.is_empty() {
+        println!("Frontend ready - processing {} pending files", pending_files.len());
+        process_video_files(&app_handle, pending_files);
+    }
+    
+    Ok(())
 }
 
 #[derive(Serialize, Clone)]
@@ -89,6 +153,69 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
     Ok(videos)
 }
 
+// Function to process video files and emit events
+fn process_video_files(app_handle: &tauri::AppHandle, video_files: Vec<String>) {
+    if !video_files.is_empty() {
+        // Store in global queue
+        {
+            let mut pending = PENDING_FILES.lock().unwrap();
+            for video_file in &video_files {
+                pending.push_back(video_file.clone());
+            }
+        }
+
+        // Spawn background thread for persistent file loading attempts
+        let app_handle_clone = app_handle.clone();
+        thread::spawn(move || {
+            // Wait for frontend to be ready
+            println!("Waiting for frontend to be ready...");
+            thread::sleep(Duration::from_millis(FRONTEND_READY_WAIT_MS));
+            
+            for attempt in 1..=MAX_FILE_LOADING_ATTEMPTS {
+                // Check if file has been processed
+                {
+                    let processed = FILE_PROCESSED.lock().unwrap();
+                    if *processed {
+                        println!("File already processed, stopping attempts");
+                        break;
+                    }
+                }
+
+                // Wait with decreasing intervals
+                let delay = if attempt <= INITIAL_ATTEMPT_COUNT {
+                    Duration::from_millis(INITIAL_ATTEMPT_DELAY_MS)
+                } else if attempt <= MIDDLE_ATTEMPT_COUNT {
+                    Duration::from_millis(MIDDLE_ATTEMPT_DELAY_MS)
+                } else {
+                    Duration::from_millis(FINAL_ATTEMPT_DELAY_MS)
+                };
+
+                thread::sleep(delay);
+
+                // Try to emit event for first video file
+                if let Some(video_file) = video_files.first() {
+                    match app_handle_clone.emit("open-file", video_file) {
+                        Ok(_) => {
+                            println!(
+                                "Attempt {}: Successfully emitted open-file for {}",
+                                attempt, video_file
+                            );
+                        }
+                        Err(e) => {
+                            println!(
+                                "Attempt {}: Failed to emit event: {:?}",
+                                attempt, e
+                            );
+                        }
+                    }
+                }
+            }
+
+            println!("File loading attempts completed");
+        });
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -96,14 +223,97 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            // Handle file opening via command line arguments
-            if let Some(args) = std::env::args().nth(1) {
-                let window = app.get_webview_window("main").unwrap();
-                window.emit("open-file", args).ok();
+            // Handle command line arguments for file associations
+            let args: Vec<String> = std::env::args().collect();
+            
+            println!("=== GLUCOSE STARTUP ===");
+            println!("Command line arguments: {:?}", args);
+            
+            // Check if we're being launched via file association
+            if args.len() > 1 {
+                println!("*** LAUNCHED WITH ARGUMENTS - POTENTIAL FILE ASSOCIATION ***");
+                
+                let video_extensions = vec!["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv"];
+                let mut video_files: Vec<String> = Vec::new();
+
+                for arg in &args[1..] {
+                    // Sanitize the path
+                    let clean_arg = sanitize_path(arg);
+                    println!("Processing argument: {} -> {}", arg, clean_arg);
+
+                    let lower = clean_arg.to_lowercase();
+                    for ext in &video_extensions {
+                        if lower.ends_with(&format!(".{}", ext)) {
+                            video_files.push(clean_arg.clone());
+                            println!("Found video file: {}", clean_arg);
+                            break;
+                        }
+                    }
+                }
+
+                if !video_files.is_empty() {
+                    println!("Queued {} video files", video_files.len());
+                    process_video_files(&app.handle(), video_files);
+                }
+            } else {
+                println!("*** LAUNCHED WITHOUT ARGUMENTS - NORMAL APP LAUNCH ***");
             }
+            
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![open_file_dialog, convert_file_path, get_recent_videos])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .invoke_handler(tauri::generate_handler![
+            open_file_dialog,
+            convert_file_path,
+            get_recent_videos,
+            get_pending_file,
+            mark_file_processed,
+            frontend_ready
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Log events for debugging
+            if cfg!(debug_assertions) {
+                println!("Received event: {:?}", event);
+            }
+            
+            match event {
+                // Handle macOS file association events
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                RunEvent::Opened { urls } => {
+                    println!("*** FILE ASSOCIATION EVENT RECEIVED ***");
+                    println!("Received opened event with URLs: {:?}", urls);
+                    
+                    let video_extensions = vec!["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv"];
+                    let mut video_files: Vec<String> = Vec::new();
+                    
+                    for url in urls {
+                        let url_str = url.to_string();
+                        println!("Processing URL: {}", url_str);
+                        
+                        if url_str.starts_with("file://") {
+                            let path = url_str.replace("file://", "");
+                            let decoded_path = urlencoding::decode(&path).unwrap_or_default();
+                            
+                            println!("Decoded path: {}", decoded_path);
+                            
+                            let lower = decoded_path.to_lowercase();
+                            for ext in &video_extensions {
+                                if lower.ends_with(&format!(".{}", ext)) {
+                                    video_files.push(decoded_path.to_string());
+                                    println!("Found video file from opened event: {}", decoded_path);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if !video_files.is_empty() {
+                        println!("Processing {} video files from file association event", video_files.len());
+                        process_video_files(&app_handle, video_files);
+                    }
+                }
+                _ => {}
+            }
+        });
 }
