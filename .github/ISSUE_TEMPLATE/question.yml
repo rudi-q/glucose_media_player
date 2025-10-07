@@ -1,0 +1,75 @@
+name: Question / Help
+description: Ask a question or get help with glucose
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have a question about glucose? We're here to help!
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your Question
+      description: What would you like to know?
+      placeholder: "How do I..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Provide any additional context that might help us answer your question
+      placeholder: "I'm trying to... because..."
+    validations:
+      required: false
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Question Category
+      description: What is your question about?
+      options:
+        - Installation / Setup
+        - Usage / Features
+        - Performance
+        - Keyboard Shortcuts
+        - Video Formats
+        - Subtitles
+        - Configuration
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What have you tried?
+      description: Have you tried anything to solve this yourself?
+      placeholder: "I tried..."
+    validations:
+      required: false
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      description: What OS are you using?
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Not OS-specific
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: glucose Version
+      description: What version are you using?
+      placeholder: "e.g., 0.2.0"
+    validations:
+      required: false

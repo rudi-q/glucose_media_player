@@ -1,0 +1,116 @@
+name: Bug Report
+description: Report a bug or issue with glucose
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the information below to help us understand and fix the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Tell us what happened!
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior
+      placeholder: |
+        1. Open video file '...'
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen
+      placeholder: Describe what should happen instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened
+      placeholder: Describe what actually happens
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      description: What OS are you running?
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS Version
+      description: What version of the OS?
+      placeholder: "e.g., Windows 11 23H2, macOS 14.2, Ubuntu 22.04"
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: glucose Version
+      description: What version of glucose are you using?
+      placeholder: "e.g., 0.2.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: video-info
+    attributes:
+      label: Video File Information (if applicable)
+      description: Information about the video file that caused the issue
+      placeholder: |
+        Format: MP4, MKV, etc.
+        Codec: H.264, H.265, etc.
+        Resolution: 1920x1080
+        File size: 500MB
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Please paste any relevant logs or error messages
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: If applicable, add screenshots to help explain the problem
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other context about the problem here
+    validations:
+      required: false
