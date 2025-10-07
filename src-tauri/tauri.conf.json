@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "glucose",
+  "productName": "Glucose",
   "identifier": "one.doubl.glucose",
   "build": {
     "beforeDevCommand": "pnpm dev",
