@@ -66,7 +66,10 @@ When reporting a vulnerability, please include:
 
 glucose is a desktop video player that:
 - Reads local video files
-- Loads subtitle files (SRT, VTT)
+- Loads subtitle files (SRT, VTT, ASS, SSA, SUB)
+  - SRT files are automatically converted to WebVTT format
+  - VTT files are used directly without conversion
+  - ASS, SSA, and SUB formats are detected but not yet supported (planned for future releases)
 - Generates video thumbnails
 - Accesses local file system
 
@@ -97,7 +100,9 @@ While glucose is designed with security in mind, be aware of:
    - We rely on system codecs and WebKit for video decoding
 
 2. **Subtitle Files**
-   - SRT/VTT files are parsed and converted
+   - SRT files are parsed and automatically converted to WebVTT
+   - VTT files are loaded directly
+   - ASS, SSA, and SUB formats are currently rejected (not yet supported)
    - Malformed subtitle files could potentially cause issues
 
 3. **Thumbnail Generation**
@@ -152,11 +157,13 @@ Currently, we do not have a formal bug bounty program. However:
 glucose uses several third-party libraries:
 
 ### Frontend
+
 - Svelte/SvelteKit
 - Tauri API
 - Vite
 
 ### Backend (Rust)
+
 - Tauri framework
 - tokio
 - serde
@@ -175,18 +182,21 @@ If you find a vulnerability in a dependency:
 We implement security best practices:
 
 ### Code Level
+
 - Input validation and sanitization
 - Safe Rust practices (avoiding unsafe code where possible)
 - Regular dependency updates
 - Code review for security implications
 
 ### Build & Distribution
+
 - CI/CD pipeline security
 - Code signing (when available)
 - Checksum verification
 - Supply chain security
 
 ### Runtime
+
 - Principle of least privilege
 - Sandboxing where possible (via Tauri)
 - Safe file handling
