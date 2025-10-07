@@ -255,7 +255,7 @@ This implementation follows glucose's minimalist philosophy:
 
 The UI maintains glucose's brutalist/minimalist aesthetic:
 - **Dark Mode**: Black overlays with subtle transparency
-- **Green Accents**: Progress bar uses glucose's accent color (#4CAF50)
+- **Purple Accents**: Progress bar uses glucose's brand color (#C065B6)
 - **Typography**: System fonts, clear hierarchy
 - **Animations**: Subtle and purposeful (spinner, pulse, fade)
 - **Spacing**: Generous padding, comfortable click targets

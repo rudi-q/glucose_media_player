@@ -1,6 +1,6 @@
 [package]
 name = "glucose"
-version = "0.3.1"
+version = "2.0.0"
 description = "A minimalist video player"
 edition = "2021"
 

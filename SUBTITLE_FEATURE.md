@@ -25,7 +25,7 @@ The subtitle feature allows users to load external subtitle files (.srt, .vtt, .
 - Only appears after a subtitle file has been loaded
 - Icon: Chat bubble (with slash when disabled)
 - Tooltip: "Toggle subtitles (C/S)"
-- Green highlight when subtitles are active
+- Purple highlight when subtitles are active
 - Click to show/hide subtitles
 
 ### Keyboard Shortcuts
@@ -111,7 +111,7 @@ Custom CSS for subtitle appearance:
 3. **Toggle Visibility**
    - Click the toggle button (chat bubble icon) that appears after loading
    - Or press **C** or **S** keys on your keyboard
-   - Green highlight indicates subtitles are active
+   - Purple highlight indicates subtitles are active
 
 ### Tips
 - The subtitle file should be synchronized with your video

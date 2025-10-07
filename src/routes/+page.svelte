@@ -1650,7 +1650,7 @@
 
   .control-button.subtitle-active {
     opacity: 1;
-    color: #4CAF50;
+    color: #C065B6;
   }
 
   .time {
@@ -1843,7 +1843,7 @@
   }
   
   .control-button.generating {
-    color: #4CAF50;
+    color: #C065B6;
     opacity: 1;
     animation: pulse 1.5s ease-in-out infinite;
   }
@@ -1961,7 +1961,7 @@
   
   .spinner {
     animation: spin 2s linear infinite;
-    color: #4CAF50;
+    color: #C065B6;
   }
   
   @keyframes spin {
@@ -1991,16 +1991,16 @@
   
   .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, #4CAF50, #66BB6A);
+    background: linear-gradient(90deg, #C065B6, #8C77FF);
     border-radius: 4px;
     transition: width 0.3s ease;
-    box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+    box-shadow: 0 0 10px rgba(192, 101, 182, 0.5);
   }
   
   .progress-percentage {
     font-size: 1.25rem;
     font-weight: 600;
-    color: #4CAF50;
+    color: #C065B6;
     font-variant-numeric: tabular-nums;
   }
   
