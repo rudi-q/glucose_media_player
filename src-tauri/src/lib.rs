@@ -125,16 +125,41 @@ fn find_subtitle_for_video(video_path: String) -> Result<Option<String>, String>
     let video_path_obj = Path::new(&video_path);
     let video_dir = video_path_obj.parent().ok_or("Could not get video directory")?;
     let video_stem = video_path_obj.file_stem().ok_or("Could not get video filename")?;
+    let video_stem_str = video_stem.to_string_lossy();
+    let video_stem_lower = video_stem_str.to_lowercase();
     
     // Subtitle extensions to check
     let subtitle_exts = vec!["srt", "vtt", "ass", "ssa", "sub"];
     
-    // Check for subtitle with same name as video
-    for ext in subtitle_exts {
-        let subtitle_path = video_dir.join(format!("{}.{}", video_stem.to_string_lossy(), ext));
+    // First try: exact case match (fastest, works on case-insensitive filesystems)
+    for ext in &subtitle_exts {
+        let subtitle_path = video_dir.join(format!("{}.{}", video_stem_str, ext));
         if subtitle_path.exists() {
-            println!("Found subtitle file: {:?}", subtitle_path);
+            println!("Found subtitle file (exact match): {:?}", subtitle_path);
             return Ok(Some(subtitle_path.to_string_lossy().to_string()));
+        }
+    }
+    
+    // Second try: case-insensitive search (for case-sensitive filesystems)
+    // Read directory entries and match case-insensitively
+    if let Ok(entries) = fs::read_dir(video_dir) {
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            
+            // Get the file stem and extension
+            if let (Some(file_stem), Some(file_ext)) = (
+                entry_path.file_stem().and_then(|s| s.to_str()),
+                entry_path.extension().and_then(|s| s.to_str())
+            ) {
+                let file_stem_lower = file_stem.to_lowercase();
+                let file_ext_lower = file_ext.to_lowercase();
+                
+                // Check if stem matches (case-insensitive) and extension is a subtitle format
+                if file_stem_lower == video_stem_lower && subtitle_exts.contains(&file_ext_lower.as_str()) {
+                    println!("Found subtitle file (case-insensitive match): {:?}", entry_path);
+                    return Ok(Some(entry_path.to_string_lossy().to_string()));
+                }
+            }
         }
     }
     
