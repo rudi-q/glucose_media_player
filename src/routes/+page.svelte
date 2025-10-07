@@ -46,6 +46,11 @@
   let subtitleSrc = $state<string | null>(null);
   let subtitlesEnabled = $state(true);
   let trackElement = $state<HTMLTrackElement>();
+  let isGeneratingSubtitles = $state(false);
+  let generationProgress = $state(0);
+  let generationMessage = $state("");
+  let showModelSelector = $state(false);
+  let currentVideoPath = $state<string | null>(null);
 
   onMount(() => {
     // Listen for file open events from Rust
@@ -60,6 +65,22 @@
     listen<string[]>("tauri://drag-drop", (event) => {
       if (event.payload && event.payload.length > 0) {
         loadVideo(event.payload[0]);
+      }
+    });
+    
+    // Listen for subtitle generation progress
+    listen<{stage: string, progress: number, message: string}>("subtitle-generation-progress", (event) => {
+      generationProgress = event.payload.progress;
+      generationMessage = event.payload.message;
+      
+      if (event.payload.stage === "complete") {
+        setTimeout(() => {
+          isGeneratingSubtitles = false;
+          generationProgress = 0;
+          generationMessage = "";
+        }, 2000);
+      } else if (event.payload.stage === "error") {
+        isGeneratingSubtitles = false;
       }
     });
 
@@ -201,6 +222,7 @@
   async function loadVideo(path: string) {
     const src = convertFileSrc(path);
     videoSrc = src;
+    currentVideoPath = path;  // Store original path for subtitle generation
     
     // Reset subtitles when loading new video
     // Revoke blob URL to prevent memory leak
@@ -545,6 +567,9 @@
     if (showVolumeMenu && !target.closest('.volume-control')) {
       showVolumeMenu = false;
     }
+    if (showModelSelector && !target.closest('.ai-subtitle-generator')) {
+      showModelSelector = false;
+    }
   }
 
   function handleTimeUpdate() {
@@ -718,6 +743,38 @@
       video.src = convertFileSrc(videoPath);
     });
   }
+  
+  function toggleModelSelector() {
+    showModelSelector = !showModelSelector;
+  }
+  
+  async function startSubtitleGeneration(modelSize: string) {
+    if (!currentVideoPath) {
+      alert('No video loaded');
+      return;
+    }
+    
+    showModelSelector = false;
+    isGeneratingSubtitles = true;
+    generationProgress = 0;
+    generationMessage = 'Starting subtitle generation...';
+    
+    try {
+      const subtitlePath = await invoke<string>('generate_subtitles', {
+        videoPath: currentVideoPath,
+        modelSize: modelSize
+      });
+      
+      // Auto-load the generated subtitle
+      await loadSubtitle(subtitlePath);
+    } catch (err) {
+      console.error('Failed to generate subtitles:', err);
+      alert(`Subtitle generation failed: ${err}`);
+      isGeneratingSubtitles = false;
+      generationProgress = 0;
+      generationMessage = '';
+    }
+  }
 </script>
 
 <main 
@@ -839,6 +896,27 @@
         {/if}
       </video>
     </div>
+    
+    <!-- AI Subtitle Generation Progress Overlay -->
+    {#if isGeneratingSubtitles}
+      <div class="generation-overlay">
+        <div class="generation-modal">
+          <div class="generation-icon">
+            <svg class="spinner" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+            </svg>
+          </div>
+          <h3>Generating AI Subtitles</h3>
+          <div class="progress-container">
+            <div class="progress-track">
+              <div class="progress-fill" style="width: {generationProgress}%"></div>
+            </div>
+            <div class="progress-percentage">{Math.round(generationProgress)}%</div>
+          </div>
+          <p class="generation-message">{generationMessage}</p>
+        </div>
+      </div>
+    {/if}
 
     <!-- Hidden preview video for generating thumbnails -->
     <!-- svelte-ignore a11y_media_has_caption -->
@@ -998,6 +1076,48 @@
               <line x1="14" y1="15" x2="18" y2="15"></line>
             </svg>
           </button>
+          
+          <!-- AI Subtitle Generation Button -->
+          <div class="ai-subtitle-generator">
+            <button 
+              class="control-button" 
+              class:generating={isGeneratingSubtitles}
+              onclick={toggleModelSelector} 
+              disabled={isGeneratingSubtitles}
+              title="Generate AI Subtitles"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 014 12.93V21a1 1 0 01-1 1H7a1 1 0 01-1-1v-1.07A7 7 0 0110 7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 012-2z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+            </button>
+            {#if showModelSelector && !isGeneratingSubtitles}
+              <div class="model-selector">
+                <div class="model-header">Select AI Model</div>
+                <button class="model-option" onclick={() => startSubtitleGeneration('tiny')}>
+                  <span class="model-name">Tiny</span>
+                  <span class="model-desc">~75MB • Fastest</span>
+                </button>
+                <button class="model-option" onclick={() => startSubtitleGeneration('base')}>
+                  <span class="model-name">Base</span>
+                  <span class="model-desc">~142MB • Fast</span>
+                </button>
+                <button class="model-option" onclick={() => startSubtitleGeneration('small')}>
+                  <span class="model-name">Small</span>
+                  <span class="model-desc">~466MB • Balanced</span>
+                </button>
+                <button class="model-option" onclick={() => startSubtitleGeneration('medium')}>
+                  <span class="model-name">Medium</span>
+                  <span class="model-desc">~1.5GB • Accurate</span>
+                </button>
+                <button class="model-option" onclick={() => startSubtitleGeneration('large')}>
+                  <span class="model-name">Large</span>
+                  <span class="model-desc">~3GB • Best</span>
+                </button>
+              </div>
+            {/if}
+          </div>
+          
           {#if subtitleSrc}
             <button 
               class="control-button" 
@@ -1715,5 +1835,179 @@
     bottom: 86vh !important;
     left: 0 !important;
     right: 0 !important;
+  }
+  
+  /* AI Subtitle Generation Styles */
+  .ai-subtitle-generator {
+    position: relative;
+  }
+  
+  .control-button.generating {
+    color: #4CAF50;
+    opacity: 1;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  
+  .model-selector {
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    margin-bottom: 0.5rem;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.75rem 0;
+    min-width: 220px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 100;
+  }
+  
+  .model-header {
+    padding: 0.5rem 1rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.6);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    margin-bottom: 0.5rem;
+  }
+  
+  .model-option {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.9);
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: all 0.15s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  
+  .model-option:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+  
+  .model-name {
+    font-weight: 600;
+    color: #fff;
+  }
+  
+  .model-desc {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
+  }
+  
+  .generation-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn 0.3s ease;
+  }
+  
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  
+  .generation-modal {
+    background: rgba(20, 20, 20, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 2.5rem;
+    min-width: 400px;
+    max-width: 500px;
+    text-align: center;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+    animation: slideUp 0.3s ease;
+  }
+  
+  @keyframes slideUp {
+    from {
+      transform: translateY(20px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+  
+  .generation-icon {
+    margin-bottom: 1.5rem;
+    display: flex;
+    justify-content: center;
+  }
+  
+  .spinner {
+    animation: spin 2s linear infinite;
+    color: #4CAF50;
+  }
+  
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  
+  .generation-modal h3 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: 1.5rem;
+    color: #fff;
+  }
+  
+  .progress-container {
+    margin-bottom: 1.5rem;
+  }
+  
+  .progress-track {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 0.75rem;
+  }
+  
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4CAF50, #66BB6A);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+    box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+  }
+  
+  .progress-percentage {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #4CAF50;
+    font-variant-numeric: tabular-nums;
+  }
+  
+  .generation-message {
+    font-size: 0.875rem;
+    color: rgba(255, 255, 255, 0.7);
+    line-height: 1.5;
+    margin: 0;
   }
 </style>
