@@ -41,6 +41,7 @@
   let showAudioMenu = $state(false);
   let selectedVideoIndex = $state(0);
   let showCloseButton = $state(false);
+  let hideCloseButtonTimeout: number;
   let showVolumeMenu = $state(false);
   let subtitleSrc = $state<string | null>(null);
   let subtitlesEnabled = $state(true);
@@ -200,8 +201,18 @@
   async function loadVideo(path: string) {
     const src = convertFileSrc(path);
     videoSrc = src;
+    
     // Reset subtitles when loading new video
+    // Revoke blob URL to prevent memory leak
+    if (subtitleSrc && subtitleSrc.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(subtitleSrc);
+      } catch (err) {
+        console.error('Failed to revoke subtitle blob URL:', err);
+      }
+    }
     subtitleSrc = null;
+    
     if (videoElement) {
       videoElement.load();
     }
@@ -220,24 +231,29 @@
 
   async function loadSubtitle(path: string) {
     try {
-      console.log('=== LOADING SUBTITLE ===');
-      console.log('Path:', path);
+      if (import.meta.env.DEV) {
+        console.log('=== LOADING SUBTITLE ===');
+        console.log('Path:', path);
+      }
       
       // Read the subtitle file content
       const { readTextFile } = await import('@tauri-apps/plugin-fs');
       const content = await readTextFile(path);
-      console.log('Subtitle content loaded, length:', content.length);
-      console.log('First 200 chars:', content.substring(0, 200));
+      
+      if (import.meta.env.DEV) {
+        console.log('Subtitle content loaded, length:', content.length);
+        console.log('First 200 chars:', content.substring(0, 200));
+      }
       
       // Check if it's SRT and convert to WebVTT if needed
       let vttContent = content;
       if (path.toLowerCase().endsWith('.srt')) {
-        console.log('Converting SRT to WebVTT');
+        if (import.meta.env.DEV) console.log('Converting SRT to WebVTT');
         vttContent = convertSrtToVtt(content);
-        console.log('WebVTT first 200 chars:', vttContent.substring(0, 200));
+        if (import.meta.env.DEV) console.log('WebVTT first 200 chars:', vttContent.substring(0, 200));
       } else if (!content.startsWith('WEBVTT')) {
         // If it's not VTT format, assume it's SRT
-        console.log('File does not start with WEBVTT, converting as SRT');
+        if (import.meta.env.DEV) console.log('File does not start with WEBVTT, converting as SRT');
         vttContent = convertSrtToVtt(content);
       }
       
@@ -252,33 +268,11 @@
       
       subtitleSrc = blobUrl;
       subtitlesEnabled = true;
-      console.log('Subtitle blob URL created:', blobUrl);
       
-      // Force enable text tracks on video element
-      if (videoElement && videoElement.textTracks) {
-        console.log('Video element exists, text tracks count:', videoElement.textTracks.length);
-        
-        // Wait a bit for track to be added
-        setTimeout(() => {
-          if (videoElement && videoElement.textTracks.length > 0) {
-            for (let i = 0; i < videoElement.textTracks.length; i++) {
-              videoElement.textTracks[i].mode = 'showing';
-              console.log('Track', i, 'mode set to showing');
-              console.log('Track', i, 'cues:', videoElement.textTracks[i].cues?.length || 0);
-            }
-          } else {
-            console.warn('No text tracks found on video element yet');
-          }
-          
-          if (trackElement && trackElement.track) {
-            trackElement.track.mode = 'showing';
-            console.log('Track element mode:', trackElement.track.mode);
-            console.log('Track element readyState:', trackElement.readyState);
-          }
-        }, 300);
+      if (import.meta.env.DEV) {
+        console.log('Subtitle blob URL created:', blobUrl);
+        console.log('=== SUBTITLE LOADING COMPLETE ===');
       }
-      
-      console.log('=== SUBTITLE LOADING COMPLETE ===');
     } catch (err) {
       console.error('Failed to load subtitle:', err);
       alert('Failed to load subtitle file: ' + err);
@@ -304,11 +298,14 @@
   }
 
   function toggleSubtitles() {
-    if (!trackElement || !trackElement.track || !subtitleSrc) return;
+    if (!trackElement?.track || !subtitleSrc) return;
     
     subtitlesEnabled = !subtitlesEnabled;
     trackElement.track.mode = subtitlesEnabled ? 'showing' : 'hidden';
-    console.log('Subtitles toggled:', subtitlesEnabled, 'mode:', trackElement.track.mode);
+    
+    if (import.meta.env.DEV) {
+      console.log('Subtitles toggled:', subtitlesEnabled, 'mode:', trackElement.track.mode);
+    }
   }
 
   function goHome() {
@@ -385,21 +382,24 @@
 
   function handleTrackLoad() {
     // Ensure track is set to showing mode when it loads
-    if (trackElement && trackElement.track) {
+    if (trackElement?.track) {
       trackElement.track.mode = 'showing';
-      console.log('Track loaded successfully, mode set to showing');
-      console.log('Track cues:', trackElement.track.cues?.length || 0);
-      console.log('Track activeCues:', trackElement.track.activeCues?.length || 0);
       
-      // Add cuechange listener to monitor when cues become active
-      trackElement.track.addEventListener('cuechange', () => {
-        if (!trackElement) return;
-        console.log('Cue changed, active cues:', trackElement.track.activeCues?.length || 0);
-        if (trackElement.track.activeCues && trackElement.track.activeCues.length > 0) {
-          const cue = trackElement.track.activeCues[0] as VTTCue;
-          console.log('Current cue text:', cue.text);
-        }
-      });
+      if (import.meta.env.DEV) {
+        console.log('Track loaded successfully, mode set to showing');
+        console.log('Track cues:', trackElement.track.cues?.length || 0);
+        console.log('Track activeCues:', trackElement.track.activeCues?.length || 0);
+        
+        // Add cuechange listener to monitor when cues become active
+        trackElement.track.addEventListener('cuechange', () => {
+          if (!trackElement) return;
+          console.log('Cue changed, active cues:', trackElement.track.activeCues?.length || 0);
+          if (trackElement.track.activeCues && trackElement.track.activeCues.length > 0) {
+            const cue = trackElement.track.activeCues[0] as VTTCue;
+            console.log('Current cue text:', cue.text);
+          }
+        });
+      }
     }
   }
 
@@ -468,9 +468,17 @@
     }
   }
 
-  function handleMouseMove() {
-    // This is now only called from video container, not controls
-    // Don't automatically show controls on video area
+  function handleMainContainerMouseMove() {
+    // Show close button on mouse movement
+    showCloseButton = true;
+    
+    // Clear existing timeout
+    clearTimeout(hideCloseButtonTimeout);
+    
+    // Hide close button after 1 second of inactivity
+    hideCloseButtonTimeout = setTimeout(() => {
+      showCloseButton = false;
+    }, 1000);
   }
 
   function handleControlsEnter() {
@@ -506,14 +514,6 @@
   function handleLoadedMetadata() {
     if (!videoElement) return;
     duration = videoElement.duration;
-    
-    // Enable text tracks if they exist
-    if (videoElement.textTracks && videoElement.textTracks.length > 0) {
-      for (let i = 0; i < videoElement.textTracks.length; i++) {
-        videoElement.textTracks[i].mode = 'showing';
-      }
-      console.log('Text tracks enabled:', videoElement.textTracks.length);
-    }
     
     // Auto-play when video loads
     videoElement.play().catch(err => {
@@ -648,15 +648,22 @@
       
       video.onseeked = () => {
         try {
-          canvas.width = 320;
-          canvas.height = 180;
+          // Calculate canvas dimensions based on video aspect ratio
+          const targetWidth = 320;
+          const aspectRatio = video.videoWidth / video.videoHeight;
+          
+          canvas.width = targetWidth;
+          canvas.height = Math.round(targetWidth / aspectRatio);
+          
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
           const thumbnail = canvas.toDataURL('image/jpeg', 0.7);
           thumbnailCache.set(videoPath, thumbnail);
           resolve(thumbnail);
         } catch (err) {
           // If canvas is tainted, just resolve empty
-          console.log('Thumbnail generation skipped (CORS):', videoPath);
+          if (import.meta.env.DEV) {
+            console.log('Thumbnail generation skipped (CORS):', videoPath);
+          }
           resolve('');
         }
       };
@@ -673,8 +680,7 @@
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
-  onmouseenter={() => showCloseButton = true}
-  onmouseleave={() => showCloseButton = false}
+  onmousemove={handleMainContainerMouseMove}
 >
   <button class="close-button" class:visible={showCloseButton} onclick={closeApp} title="Close (Esc)">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1626,6 +1632,7 @@
   }
 
   /* Subtitle styling */
+  /* !important required to override browser default subtitle styles */
   :global(video::cue) {
     background-color: rgba(0, 0, 0, 0.8) !important;
     color: #ffffff !important;
@@ -1637,6 +1644,7 @@
   }
   
   /* Position subtitle container at bottom */
+  /* !important required for cross-browser subtitle positioning override */
   :global(video::-webkit-media-text-track-container) {
     position: absolute !important;
     bottom: 0 !important;
