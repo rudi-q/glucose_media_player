@@ -66,10 +66,10 @@ When reporting a vulnerability, please include:
 
 glucose is a desktop video player that:
 - Reads local video files
-- Loads subtitle files (SRT, VTT, ASS, SSA, SUB)
-  - SRT files are automatically converted to WebVTT format
-  - VTT files are used directly without conversion
-  - ASS, SSA, and SUB formats are detected but not yet supported (planned for future releases)
+- Supports subtitle files with the following behavior:
+  - **SRT files**: Parsed and automatically converted to WebVTT format (parsing risk: malformed SRT could cause display issues)
+  - **VTT files**: Loaded and used directly without conversion (parsing risk: malformed VTT could cause display issues)
+  - **ASS, SSA, and SUB files**: Detected and rejected with user-facing error messages (not currently supported)
 - Generates video thumbnails
 - Accesses local file system
 
@@ -100,10 +100,9 @@ While glucose is designed with security in mind, be aware of:
    - We rely on system codecs and WebKit for video decoding
 
 2. **Subtitle Files**
-   - SRT files are parsed and automatically converted to WebVTT
-   - VTT files are loaded directly
-   - ASS, SSA, and SUB formats are currently rejected (not yet supported)
-   - Malformed subtitle files could potentially cause issues
+   - **Supported formats**: SRT (converted to WebVTT) and VTT (used directly)
+   - **Unsupported formats**: ASS, SSA, and SUB files are detected and rejected with error messages before processing
+   - **Security risk**: Malformed SRT or VTT files are parsed by the browser's WebVTT engine and could cause rendering issues, crashes, or unexpected behavior if they contain malicious payloads targeting the WebVTT parser
 
 3. **Thumbnail Generation**
    - Canvas-based thumbnail generation accesses video frames
