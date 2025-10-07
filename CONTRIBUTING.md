@@ -22,11 +22,14 @@ By participating in this project, you agree to maintain a respectful and inclusi
 
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
+
    ```bash
    git clone https://github.com/YOUR_USERNAME/glucose_media_player.git
    cd glucose_media_player
    ```
+
 3. **Add upstream remote**:
+
    ```bash
    git remote add upstream https://github.com/rudi-q/glucose_media_player.git
    ```
@@ -46,16 +49,19 @@ By participating in this project, you agree to maintain a respectful and inclusi
 ### Installation
 
 1. Install pnpm globally (if not already installed):
+
    ```bash
    npm install -g pnpm
    ```
 
 2. Install project dependencies:
+
    ```bash
    pnpm install
    ```
 
 3. Start development server:
+
    ```bash
    pnpm tauri dev
    ```
@@ -134,12 +140,14 @@ Fixes #123
 ### Before Submitting
 
 1. **Sync with upstream**:
+
    ```bash
    git fetch upstream
    git rebase upstream/main
    ```
 
 2. **Run checks**:
+
    ```bash
    pnpm check
    pnpm tauri:check
@@ -152,6 +160,7 @@ Fixes #123
 ### Creating a Pull Request
 
 1. Push your branch to your fork:
+
    ```bash
    git push origin feature/your-feature-name
    ```

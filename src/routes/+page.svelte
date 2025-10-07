@@ -245,16 +245,51 @@
         console.log('First 200 chars:', content.substring(0, 200));
       }
       
-      // Check if it's SRT and convert to WebVTT if needed
-      let vttContent = content;
-      if (path.toLowerCase().endsWith('.srt')) {
+      // Determine subtitle format and handle accordingly
+      let vttContent: string;
+      const ext = path.toLowerCase().split('.').pop() || '';
+      
+      if (ext === 'vtt' || content.startsWith('WEBVTT')) {
+        // Already in WebVTT format
+        if (import.meta.env.DEV) console.log('Subtitle is WebVTT format');
+        vttContent = content;
+      } else if (ext === 'srt') {
+        // Convert SRT to WebVTT
         if (import.meta.env.DEV) console.log('Converting SRT to WebVTT');
         vttContent = convertSrtToVtt(content);
         if (import.meta.env.DEV) console.log('WebVTT first 200 chars:', vttContent.substring(0, 200));
-      } else if (!content.startsWith('WEBVTT')) {
-        // If it's not VTT format, assume it's SRT
-        if (import.meta.env.DEV) console.log('File does not start with WEBVTT, converting as SRT');
-        vttContent = convertSrtToVtt(content);
+      } else if (ext === 'ass' || ext === 'ssa' || ext === 'sub') {
+        // Reject unsupported formats gracefully
+        console.error(`Unsupported subtitle format: ${ext}`);
+        alert(`Sorry, ${ext.toUpperCase()} subtitle format is not yet supported.\n\nPlease convert your subtitles to SRT or VTT format.\n\nSupported formats: SRT, VTT`);
+        
+        // Clean up previous subtitle if any
+        if (subtitleSrc && subtitleSrc.startsWith('blob:')) {
+          URL.revokeObjectURL(subtitleSrc);
+        }
+        subtitleSrc = null;
+        subtitlesEnabled = false;
+        return;
+      } else {
+        // Unknown format - try to detect by content
+        if (content.includes('[Script Info]') || content.includes('Dialogue:')) {
+          console.error('Detected ASS/SSA format without proper extension');
+          alert('This appears to be an ASS/SSA subtitle file, which is not yet supported.\n\nPlease convert to SRT or VTT format.');
+        } else if (/^\{\d+\}\{\d+\}/.test(content)) {
+          console.error('Detected MicroDVD format');
+          alert('This appears to be a MicroDVD subtitle file, which is not yet supported.\n\nPlease convert to SRT or VTT format.');
+        } else {
+          console.error('Unknown subtitle format');
+          alert('Unsupported subtitle file format.\n\nSupported formats: SRT, VTT');
+        }
+        
+        // Clean up previous subtitle if any
+        if (subtitleSrc && subtitleSrc.startsWith('blob:')) {
+          URL.revokeObjectURL(subtitleSrc);
+        }
+        subtitleSrc = null;
+        subtitlesEnabled = false;
+        return;
       }
       
       // Create a blob URL from the content
@@ -381,25 +416,35 @@
   }
 
   function handleTrackLoad() {
-    // Ensure track is set to showing mode when it loads
-    if (trackElement?.track) {
-      trackElement.track.mode = 'showing';
-      
+    // Guard: return early if no track element or subtitles are disabled
+    if (!subtitlesEnabled || !trackElement || !trackElement.track) {
       if (import.meta.env.DEV) {
-        console.log('Track loaded successfully, mode set to showing');
-        console.log('Track cues:', trackElement.track.cues?.length || 0);
-        console.log('Track activeCues:', trackElement.track.activeCues?.length || 0);
-        
-        // Add cuechange listener to monitor when cues become active
-        trackElement.track.addEventListener('cuechange', () => {
-          if (!trackElement) return;
-          console.log('Cue changed, active cues:', trackElement.track.activeCues?.length || 0);
-          if (trackElement.track.activeCues && trackElement.track.activeCues.length > 0) {
-            const cue = trackElement.track.activeCues[0] as VTTCue;
-            console.log('Current cue text:', cue.text);
-          }
+        console.log('Track load handler skipped:', { 
+          subtitlesEnabled, 
+          hasTrackElement: !!trackElement,
+          hasTrack: !!trackElement?.track 
         });
       }
+      return;
+    }
+    
+    // Respect the subtitlesEnabled state when setting track mode
+    trackElement.track.mode = subtitlesEnabled ? 'showing' : 'hidden';
+    
+    if (import.meta.env.DEV) {
+      console.log('Track loaded successfully, mode set to:', trackElement.track.mode);
+      console.log('Track cues:', trackElement.track.cues?.length || 0);
+      console.log('Track activeCues:', trackElement.track.activeCues?.length || 0);
+      
+      // Add cuechange listener to monitor when cues become active
+      trackElement.track.addEventListener('cuechange', () => {
+        if (!trackElement) return;
+        console.log('Cue changed, active cues:', trackElement.track.activeCues?.length || 0);
+        if (trackElement.track.activeCues && trackElement.track.activeCues.length > 0) {
+          const cue = trackElement.track.activeCues[0] as VTTCue;
+          console.log('Current cue text:', cue.text);
+        }
+      });
     }
   }
 
