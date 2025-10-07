@@ -1703,7 +1703,8 @@
   }
   
   :global(video::-webkit-media-text-track-display) {
-    position: static !important;
+    font-size: 24px;
+    padding-top: 2vh !important;
     text-align: center !important;
     width: 100% !important;
   }
