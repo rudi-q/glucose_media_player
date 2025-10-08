@@ -50,6 +50,7 @@
   let generationProgress = $state(0);
   let generationMessage = $state("");
   let showModelSelector = $state(false);
+  let showSubtitleMenu = $state(false);
   let currentVideoPath = $state<string | null>(null);
   
   // Setup state
@@ -585,12 +586,13 @@
 
   function handleClickOutside(e: MouseEvent) {
     const target = e.target as HTMLElement;
-    if (showAudioMenu && !target.closest('.audio-device-selector')) {
-      showAudioMenu = false;
-    }
     if (showVolumeMenu && !target.closest('.volume-control')) {
       showVolumeMenu = false;
     }
+    if (showSubtitleMenu && !target.closest('.subtitle-menu-container')) {
+      showSubtitleMenu = false;
+    }
+    // Keep model selector open when clicking the AI button or inside the selector
     if (showModelSelector && !target.closest('.ai-subtitle-generator')) {
       showModelSelector = false;
     }
@@ -769,7 +771,25 @@
   }
   
   function toggleModelSelector() {
+    console.log('toggleModelSelector called, current value:', showModelSelector);
+    console.log('setupStatus:', setupStatus);
     showModelSelector = !showModelSelector;
+    console.log('showModelSelector now:', showModelSelector);
+  }
+  
+  function toggleSubtitleMenu() {
+    showSubtitleMenu = !showSubtitleMenu;
+    if (showSubtitleMenu) {
+      showModelSelector = false;
+    }
+  }
+  
+  function openAISubtitleSelector() {
+    console.log('Opening AI subtitle selector');
+    console.log('Setup status:', setupStatus);
+    showSubtitleMenu = false;
+    showModelSelector = true;
+    console.log('showModelSelector set to:', showModelSelector);
   }
   
   async function startSubtitleGeneration(modelSize: string) {
@@ -832,14 +852,27 @@
   async function runSetup() {
     if (!setupStatus) return;
     
+    // Check if the selected model is already installed
+    const isModelInstalled = setupStatus.models_installed.includes(selectedModelForSetup);
+    
+    if (isModelInstalled) {
+      // Model already installed, just mark setup as complete
+      try {
+        await invoke('mark_setup_completed');
+        await checkSetupStatus();
+        showSetupDialog = false;
+      } catch (err) {
+        console.error('Failed to mark setup complete:', err);
+      }
+      return;
+    }
+    
     isDownloading = true;
     downloadProgress = 0;
-    downloadMessage = "Starting setup...";
+    downloadMessage = "Starting download...";
     
     try {
-      // Note: FFmpeg download would need platform-specific handling
-      // For now, we'll just download the selected model
-      
+      // Download the selected model
       await invoke('download_whisper_model', {
         modelSize: selectedModelForSetup
       });
@@ -852,7 +885,7 @@
       
       isDownloading = false;
       downloadProgress = 100;
-      downloadMessage = "Setup complete!";
+      downloadMessage = "Download complete!";
       
       setTimeout(() => {
         showSetupDialog = false;
@@ -1149,29 +1182,6 @@
             {/if}
           </div>
           
-          {#if audioDevices.length > 0}
-            <div class="audio-device-selector">
-              <button class="control-button" onclick={toggleAudioMenu} title="Audio output device">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="2"></circle>
-                  <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"></path>
-                </svg>
-              </button>
-              {#if showAudioMenu}
-                <div class="audio-menu">
-                  {#each audioDevices as device}
-                    <button 
-                      class="audio-option" 
-                      class:selected={selectedAudioDevice === device.deviceId}
-                      onclick={() => changeAudioOutput(device.deviceId)}
-                    >
-                      {device.label || `Device ${device.deviceId.slice(0, 8)}`}
-                    </button>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {/if}
           <button class="control-button" onclick={openSubtitleDialog} title="Load subtitles">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="2" y="7" width="20" height="10" rx="2" ry="2"></rect>
@@ -1199,26 +1209,45 @@
             {#if showModelSelector && !isGeneratingSubtitles}
               <div class="model-selector">
                 <div class="model-header">Select AI Model</div>
-                <button class="model-option" onclick={() => startSubtitleGeneration('tiny')}>
-                  <span class="model-name">Tiny</span>
-                  <span class="model-desc">~75MB • Fastest</span>
-                </button>
-                <button class="model-option" onclick={() => startSubtitleGeneration('base')}>
-                  <span class="model-name">Base</span>
-                  <span class="model-desc">~142MB • Fast</span>
-                </button>
-                <button class="model-option" onclick={() => startSubtitleGeneration('small')}>
-                  <span class="model-name">Small</span>
-                  <span class="model-desc">~466MB • Balanced</span>
-                </button>
-                <button class="model-option" onclick={() => startSubtitleGeneration('medium')}>
-                  <span class="model-name">Medium</span>
-                  <span class="model-desc">~1.5GB • Accurate</span>
-                </button>
-                <button class="model-option" onclick={() => startSubtitleGeneration('large')}>
-                  <span class="model-name">Large</span>
-                  <span class="model-desc">~3GB • Best</span>
-                </button>
+                {#if setupStatus && setupStatus.models_installed.length > 0}
+                  {#each setupStatus.models_installed as model}
+                    {#if model === 'tiny'}
+                      <button class="model-option" onclick={() => startSubtitleGeneration('tiny')}>
+                        <span class="model-name">Tiny</span>
+                        <span class="model-desc">75MB • Fastest</span>
+                      </button>
+                    {:else if model === 'base'}
+                      <button class="model-option" onclick={() => startSubtitleGeneration('base')}>
+                        <span class="model-name">Base</span>
+                        <span class="model-desc">142MB • Fast</span>
+                      </button>
+                    {:else if model === 'small'}
+                      <button class="model-option" onclick={() => startSubtitleGeneration('small')}>
+                        <span class="model-name">Small</span>
+                        <span class="model-desc">466MB • Balanced</span>
+                      </button>
+                    {:else if model === 'medium'}
+                      <button class="model-option" onclick={() => startSubtitleGeneration('medium')}>
+                        <span class="model-name">Medium</span>
+                        <span class="model-desc">1.5GB • Accurate</span>
+                      </button>
+                    {:else if model === 'large'}
+                      <button class="model-option" onclick={() => startSubtitleGeneration('large')}>
+                        <span class="model-name">Large</span>
+                        <span class="model-desc">3GB • Best</span>
+                      </button>
+                    {:else if model === 'large-v3-turbo'}
+                      <button class="model-option" onclick={() => startSubtitleGeneration('large-v3-turbo')}>
+                        <span class="model-name">Large V3 Turbo</span>
+                        <span class="model-desc">574MB • Multilingual</span>
+                      </button>
+                    {/if}
+                  {/each}
+                {:else}
+                  <div class="no-models-message">
+                    No AI models installed. Open Settings to download models.
+                  </div>
+                {/if}
               </div>
             {/if}
           </div>
@@ -1238,11 +1267,6 @@
               </svg>
             </button>
           {/if}
-          <button class="control-button" onclick={openFileDialog} title="Open file (O)">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
-            </svg>
-          </button>
           <button class="control-button" onclick={toggleCinematicMode} title="Toggle view mode (F)">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"></path>
@@ -1381,7 +1405,7 @@
                 <div class="setup-item-info full-width">
                   <div class="setup-item-title">AI Model (Choose one)</div>
                   <div class="model-choices">
-                    <label class="model-radio">
+                    <label class="model-radio" class:installed={setupStatus.models_installed.includes('tiny')}>
                       <input 
                         type="radio" 
                         name="model" 
@@ -1390,12 +1414,17 @@
                         disabled={isDownloading}
                       />
                       <div class="radio-content">
-                        <span class="radio-title">Lite Model</span>
+                        <div class="radio-header">
+                          <span class="radio-title">Lite Model</span>
+                          {#if setupStatus.models_installed.includes('tiny')}
+                            <span class="installed-badge">✓ Installed</span>
+                          {/if}
+                        </div>
                         <span class="radio-desc">75 MB • Fastest • Good accuracy</span>
                       </div>
                     </label>
                     
-                    <label class="model-radio">
+                    <label class="model-radio" class:installed={setupStatus.models_installed.includes('small')}>
                       <input 
                         type="radio" 
                         name="model" 
@@ -1404,8 +1433,32 @@
                         disabled={isDownloading}
                       />
                       <div class="radio-content">
-                        <span class="radio-title">Optimal Model</span>
+                        <div class="radio-header">
+                          <span class="radio-title">Optimal Model</span>
+                          {#if setupStatus.models_installed.includes('small')}
+                            <span class="installed-badge">✓ Installed</span>
+                          {/if}
+                        </div>
                         <span class="radio-desc">466 MB • Balanced • Very good accuracy</span>
+                      </div>
+                    </label>
+                    
+                    <label class="model-radio" class:installed={setupStatus.models_installed.includes('large-v3-turbo')}>
+                      <input 
+                        type="radio" 
+                        name="model" 
+                        value="large-v3-turbo" 
+                        bind:group={selectedModelForSetup}
+                        disabled={isDownloading}
+                      />
+                      <div class="radio-content">
+                        <div class="radio-header">
+                          <span class="radio-title">Most Optimal Model</span>
+                          {#if setupStatus.models_installed.includes('large-v3-turbo')}
+                            <span class="installed-badge">✓ Installed</span>
+                          {/if}
+                        </div>
+                        <span class="radio-desc">574 MB • Multilingual • Best accuracy</span>
                       </div>
                     </label>
                   </div>
@@ -1441,6 +1494,8 @@
             >
               {#if isDownloading}
                 Downloading...
+              {:else if setupStatus.models_installed.includes(selectedModelForSetup)}
+                Enable
               {:else}
                 Download & Enable
               {/if}
@@ -2223,6 +2278,28 @@
     margin-bottom: 0.5rem;
   }
   
+  .subtitle-menu {
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    margin-bottom: 0.5rem;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.75rem 0;
+    min-width: 260px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 100;
+  }
+  
+  .subtitle-menu-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.05);
+    margin: 0.5rem 0;
+  }
+  
   .model-option {
     width: 100%;
     padding: 0.75rem 1rem;
@@ -2250,6 +2327,14 @@
   .model-desc {
     font-size: 0.75rem;
     color: rgba(255, 255, 255, 0.6);
+  }
+  
+  .no-models-message {
+    padding: 1rem;
+    font-size: 0.875rem;
+    color: rgba(255, 255, 255, 0.7);
+    text-align: center;
+    line-height: 1.5;
   }
   
   .generation-overlay {
@@ -2657,6 +2742,11 @@
     border-color: rgba(255, 255, 255, 0.2);
   }
   
+  .model-radio:has(input[type="radio"]:checked) {
+    background: rgba(192, 101, 182, 0.12);
+    border-color: rgba(192, 101, 182, 0.4);
+  }
+  
   .model-radio input[type="radio"] {
     margin-top: 2px;
     cursor: pointer;
@@ -2677,10 +2767,27 @@
     gap: 0.25rem;
   }
   
+  .radio-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+  }
+  
   .radio-title {
     font-size: 0.9375rem;
     font-weight: 600;
     color: rgba(255, 255, 255, 0.9);
+  }
+  
+  .installed-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #C065B6;
+    background: rgba(192, 101, 182, 0.15);
+    padding: 0.125rem 0.5rem;
+    border-radius: 4px;
+    border: 1px solid rgba(192, 101, 182, 0.3);
   }
   
   .radio-desc {

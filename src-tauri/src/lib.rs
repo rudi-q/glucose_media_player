@@ -226,6 +226,7 @@ fn check_installed_models() -> Result<Vec<String>, String> {
         ("ggml-small.bin", "small"),
         ("ggml-medium.bin", "medium"),
         ("ggml-large-v3.bin", "large"),
+        ("ggml-large-v3-turbo-q5_0.bin", "large-v3-turbo"),
     ];
     
     for (filename, model_name) in model_files {
@@ -320,6 +321,7 @@ async fn download_whisper_model(
     let model_name = match model_size.as_str() {
         "tiny" => "ggml-tiny.bin",
         "small" => "ggml-small.bin",
+        "large-v3-turbo" => "ggml-large-v3-turbo-q5_0.bin",
         _ => return Err("Invalid model size".to_string()),
     };
     
