@@ -1195,16 +1195,6 @@
             {/if}
           </div>
           
-          <button class="control-button" onclick={openSubtitleDialog} title="Load subtitles">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="2" y="7" width="20" height="10" rx="2" ry="2"></rect>
-              <line x1="6" y1="11" x2="6.01" y2="11"></line>
-              <line x1="10" y1="11" x2="14" y2="11"></line>
-              <line x1="6" y1="15" x2="10" y2="15"></line>
-              <line x1="14" y1="15" x2="18" y2="15"></line>
-            </svg>
-          </button>
-          
           <!-- Consolidated Subtitles Menu (additive) -->
           <div 
             class="subtitle-control"
@@ -1247,82 +1237,53 @@
               </div>
             {/if}
           </div>
-
-          <!-- AI Subtitle Generation Button -->
-          <div class="ai-subtitle-generator">
-            <button 
-              class="control-button" 
-              class:generating={isGeneratingSubtitles}
-              onclick={toggleModelSelector} 
-              disabled={isGeneratingSubtitles}
-              title="Generate AI Subtitles"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 014 12.93V21a1 1 0 01-1 1H7a1 1 0 01-1-1v-1.07A7 7 0 0110 7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 012-2z"></path>
-                <circle cx="12" cy="12" r="3"></circle>
-              </svg>
-            </button>
-            {#if showModelSelector && !isGeneratingSubtitles}
-              <div class="model-selector">
-                <div class="model-header">Select AI Model</div>
-                {#if setupStatus && setupStatus.models_installed.length > 0}
-                  {#each setupStatus.models_installed as model}
-                    {#if model === 'tiny'}
-                      <button class="model-option" onclick={() => startSubtitleGeneration('tiny')}>
-                        <span class="model-name">Tiny</span>
-                        <span class="model-desc">75MB • Fastest</span>
-                      </button>
-                    {:else if model === 'base'}
-                      <button class="model-option" onclick={() => startSubtitleGeneration('base')}>
-                        <span class="model-name">Base</span>
-                        <span class="model-desc">142MB • Fast</span>
-                      </button>
-                    {:else if model === 'small'}
-                      <button class="model-option" onclick={() => startSubtitleGeneration('small')}>
-                        <span class="model-name">Small</span>
-                        <span class="model-desc">466MB • Balanced</span>
-                      </button>
-                    {:else if model === 'medium'}
-                      <button class="model-option" onclick={() => startSubtitleGeneration('medium')}>
-                        <span class="model-name">Medium</span>
-                        <span class="model-desc">1.5GB • Accurate</span>
-                      </button>
-                    {:else if model === 'large'}
-                      <button class="model-option" onclick={() => startSubtitleGeneration('large')}>
-                        <span class="model-name">Large</span>
-                        <span class="model-desc">3GB • Best</span>
-                      </button>
-                    {:else if model === 'large-v3-turbo'}
-                      <button class="model-option" onclick={() => startSubtitleGeneration('large-v3-turbo')}>
-                        <span class="model-name">Large V3 Turbo</span>
-                        <span class="model-desc">574MB • Multilingual</span>
-                      </button>
-                    {/if}
-                  {/each}
-                {:else}
-                  <div class="no-models-message">
-                    No AI models installed. Open Settings to download models.
-                  </div>
-                {/if}
-              </div>
-            {/if}
-          </div>
           
-          {#if subtitleSrc}
-            <button 
-              class="control-button" 
-              class:subtitle-active={subtitlesEnabled}
-              onclick={toggleSubtitles} 
-              title="Toggle subtitles (C/S)"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"></path>
-                {#if !subtitlesEnabled}
-                  <line x1="3" y1="3" x2="21" y2="21"></line>
-                {/if}
-              </svg>
-            </button>
+          <!-- Model selector anchored to unified subtitle control -->
+          {#if showModelSelector && !isGeneratingSubtitles}
+            <div class="model-selector">
+              <div class="model-header">Select AI Model</div>
+              {#if setupStatus && setupStatus.models_installed.length > 0}
+                {#each setupStatus.models_installed as model}
+                  {#if model === 'tiny'}
+                    <button class="model-option" onclick={() => startSubtitleGeneration('tiny')}>
+                      <span class="model-name">Tiny</span>
+                      <span class="model-desc">75MB • Fastest</span>
+                    </button>
+                  {:else if model === 'base'}
+                    <button class="model-option" onclick={() => startSubtitleGeneration('base')}>
+                      <span class="model-name">Base</span>
+                      <span class="model-desc">142MB • Fast</span>
+                    </button>
+                  {:else if model === 'small'}
+                    <button class="model-option" onclick={() => startSubtitleGeneration('small')}>
+                      <span class="model-name">Small</span>
+                      <span class="model-desc">466MB • Balanced</span>
+                    </button>
+                  {:else if model === 'medium'}
+                    <button class="model-option" onclick={() => startSubtitleGeneration('medium')}>
+                      <span class="model-name">Medium</span>
+                      <span class="model-desc">1.5GB • Accurate</span>
+                    </button>
+                  {:else if model === 'large'}
+                    <button class="model-option" onclick={() => startSubtitleGeneration('large')}>
+                      <span class="model-name">Large</span>
+                      <span class="model-desc">3GB • Best</span>
+                    </button>
+                  {:else if model === 'large-v3-turbo'}
+                    <button class="model-option" onclick={() => startSubtitleGeneration('large-v3-turbo')}>
+                      <span class="model-name">Large V3 Turbo</span>
+                      <span class="model-desc">574MB • Multilingual</span>
+                    </button>
+                  {/if}
+                {/each}
+              {:else}
+                <div class="no-models-message">
+                  No AI models installed. Open Settings to download models.
+                </div>
+              {/if}
+            </div>
           {/if}
+          
           <button class="control-button" onclick={toggleCinematicMode} title="Toggle view mode (F)">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"></path>
