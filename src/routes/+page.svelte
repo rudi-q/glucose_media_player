@@ -52,6 +52,7 @@
   let showModelSelector = $state(false);
   let showSubtitleMenu = $state(false);
   let currentVideoPath = $state<string | null>(null);
+  let subtitleFileName = $state<string | null>(null);
   
   // Setup state
   interface SetupStatus {
@@ -282,6 +283,8 @@
         console.log('=== LOADING SUBTITLE ===');
         console.log('Path:', path);
       }
+      // Record subtitle file name for UI display
+      subtitleFileName = (path.split(/[/\\\\]/).pop() || 'Subtitles');
       
       // Read the subtitle file content
       const { readTextFile } = await import('@tauri-apps/plugin-fs');
@@ -315,6 +318,7 @@
           URL.revokeObjectURL(subtitleSrc);
         }
         subtitleSrc = null;
+        subtitleFileName = null;
         subtitlesEnabled = false;
         return;
       } else {
@@ -335,6 +339,7 @@
           URL.revokeObjectURL(subtitleSrc);
         }
         subtitleSrc = null;
+        subtitleFileName = null;
         subtitlesEnabled = false;
         return;
       }
@@ -589,15 +594,15 @@
     if (showVolumeMenu && !target.closest('.volume-control')) {
       showVolumeMenu = false;
     }
-    if (showSubtitleMenu && !target.closest('.subtitle-menu-container')) {
+    // Close unified subtitle menu only when clicking outside its container
+    if (showSubtitleMenu && !target.closest('.subtitle-control')) {
       showSubtitleMenu = false;
     }
-    // Keep model selector open when clicking the AI button or inside the selector
-    if (showModelSelector && !target.closest('.ai-subtitle-generator')) {
+    // Keep model selector open when interaction happens on either AI button, unified subtitle control, or inside selector
+    if (showModelSelector && !(target.closest('.ai-subtitle-generator') || target.closest('.subtitle-control') || target.closest('.model-selector'))) {
       showModelSelector = false;
     }
   }
-
   function handleTimeUpdate() {
     if (!videoElement) return;
     currentTime = videoElement.currentTime;
@@ -790,6 +795,14 @@
     showSubtitleMenu = false;
     showModelSelector = true;
     console.log('showModelSelector set to:', showModelSelector);
+  }
+  
+  function openAIFromUnifiedMenu() {
+    // Close the unified menu first, then open the model selector on next tick
+    showSubtitleMenu = false;
+    setTimeout(() => {
+      showModelSelector = true;
+    }, 0);
   }
   
   async function startSubtitleGeneration(modelSize: string) {
@@ -1192,6 +1205,49 @@
             </svg>
           </button>
           
+          <!-- Consolidated Subtitles Menu (additive) -->
+          <div 
+            class="subtitle-control"
+          >
+            <button 
+              class="control-button" 
+              class:subtitle-active={subtitleSrc && subtitlesEnabled}
+              class:generating={isGeneratingSubtitles}
+              title="Subtitles"
+              onclick={() => showSubtitleMenu = !showSubtitleMenu}
+              disabled={isGeneratingSubtitles}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="7" width="20" height="10" rx="2" ry="2"></rect>
+                <line x1="6" y1="11" x2="6.01" y2="11"></line>
+                <line x1="10" y1="11" x2="14" y2="11"></line>
+                <line x1="6" y1="15" x2="10" y2="15"></line>
+                <line x1="14" y1="15" x2="18" y2="15"></line>
+              </svg>
+            </button>
+
+            {#if showSubtitleMenu && !isGeneratingSubtitles}
+              <div class="subtitle-menu">
+                <div class="model-header">Subtitles</div>
+                <button class="model-option" onclick={() => { showSubtitleMenu = false; openSubtitleDialog(); }}>
+                  <span class="model-name">Import subtitle from device</span>
+                  <span class="model-desc">Open .srt, .vtt or compatible file</span>
+                </button>
+                <button class="model-option" onclick={openAIFromUnifiedMenu}>
+                  <span class="model-name">Generate with AI</span>
+                  <span class="model-desc">Auto-generate using Whisper AI</span>
+                </button>
+                {#if subtitleFileName}
+                  <div class="subtitle-menu-divider"></div>
+                  <button class="model-option" onclick={toggleSubtitles}>
+                    <span class="model-name">{subtitleFileName}</span>
+                    <span class="model-desc">{subtitlesEnabled ? 'Hide' : 'Show'} subtitles</span>
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          </div>
+
           <!-- AI Subtitle Generation Button -->
           <div class="ai-subtitle-generator">
             <button 
@@ -2238,6 +2294,33 @@
   /* AI Subtitle Generation Styles */
   .ai-subtitle-generator {
     position: relative;
+  }
+  
+  /* Unified subtitles control */
+  .subtitle-control {
+    position: relative;
+  }
+  
+  .subtitle-menu {
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    margin-bottom: 0.5rem;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.75rem 0;
+    min-width: 260px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 100;
+  }
+  
+  .subtitle-menu-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.05);
+    margin: 0.5rem 0;
   }
   
   .control-button.generating {
