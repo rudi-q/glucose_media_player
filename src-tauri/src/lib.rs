@@ -418,10 +418,12 @@ fn extract_audio_from_video(video_path: &str, output_audio_path: &str) -> Result
 
 // Helper function to format time for SRT subtitles (HH:MM:SS,mmm)
 fn format_srt_time(seconds: f64) -> String {
-    let hours = (seconds / 3600.0).floor() as u32;
-    let minutes = ((seconds % 3600.0) / 60.0).floor() as u32;
-    let secs = (seconds % 60.0).floor() as u32;
-    let millis = ((seconds % 1.0) * 1000.0).round() as u32;
+    // Round to total milliseconds first to avoid cases like millis == 1000
+    let total_millis = (seconds * 1000.0).round() as u64;
+    let hours = total_millis / 3_600_000;
+    let minutes = (total_millis % 3_600_000) / 60_000;
+    let secs = (total_millis % 60_000) / 1000;
+    let millis = total_millis % 1000;
     format!("{:02}:{:02}:{:02},{:03}", hours, minutes, secs, millis)
 }
 
