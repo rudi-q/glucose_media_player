@@ -2030,9 +2030,7 @@ onMount(() => {
     justify-content: space-between;
     margin-bottom: 3rem;
     padding: 1.5rem 0;
-    background: rgba(0, 0, 0, 0.8);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    background: transparent;
     z-index: 10;
     margin-top: -1.5rem;
     margin-left: -5rem;
