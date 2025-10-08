@@ -81,6 +81,17 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   let subtitleFileName = $state<string | null>(null);
   let showContextMenu = $state(false);
   let contextMenuPosition = $state({ x: 0, y: 0 });
+  let showConvertSubmenu = $state(false);
+  let isConverting = $state(false);
+  let conversionProgress = $state(0);
+  let conversionMessage = $state("");
+  
+  interface VideoInfo {
+    format: string;
+    size_mb: number;
+  }
+  
+  let currentVideoInfo = $state<VideoInfo | null>(null);
   
   // Setup state
   interface SetupStatus {
@@ -134,6 +145,21 @@ onMount(() => {
         listen<{downloaded: number, total: number, percentage: number, message: string}>("download-progress", (event) => {
           downloadProgress = event.payload.percentage;
           downloadMessage = event.payload.message;
+        }),
+        // Listen for conversion progress
+        listen<{stage: string, progress: number, message: string}>("conversion-progress", (event) => {
+          conversionProgress = event.payload.progress;
+          conversionMessage = event.payload.message;
+          
+          if (event.payload.stage === "complete") {
+            setTimeout(() => {
+              isConverting = false;
+              conversionProgress = 0;
+              conversionMessage = "";
+            }, 2000);
+          } else if (event.payload.stage === "error") {
+            isConverting = false;
+          }
         }),
       ]);
 
@@ -743,11 +769,59 @@ onMount(() => {
     }
   }
   
-  function handleContextMenu(e: MouseEvent) {
+  async function handleContextMenu(e: MouseEvent) {
     if (!videoSrc) return; // Only show context menu when video is playing
     e.preventDefault();
     contextMenuPosition = { x: e.clientX, y: e.clientY };
     showContextMenu = true;
+    showConvertSubmenu = false;
+    
+    // Load video info for conversion estimates
+    if (currentVideoPath) {
+      try {
+        currentVideoInfo = await invoke<VideoInfo>('get_video_info', { videoPath: currentVideoPath });
+      } catch (err) {
+        console.error('Failed to get video info:', err);
+      }
+    }
+  }
+  
+  function estimateConvertedSize(format: string): string {
+    if (!currentVideoInfo) return "~? MB";
+    
+    let ratio = 1.0;
+    switch (format) {
+      case 'mp4': ratio = 0.85; break;
+      case 'webm': ratio = 0.70; break;
+      case 'mkv': ratio = 0.90; break;
+    }
+    
+    const estimatedSize = currentVideoInfo.size_mb * ratio;
+    return `~${estimatedSize.toFixed(0)} MB`;
+  }
+  
+  async function startConversion(format: string) {
+    if (!currentVideoPath) return;
+    
+    showContextMenu = false;
+    isConverting = true;
+    conversionProgress = 0;
+    conversionMessage = `Starting conversion to ${format.toUpperCase()}...`;
+    
+    try {
+      const outputPath = await invoke<string>('convert_video', {
+        videoPath: currentVideoPath,
+        targetFormat: format
+      });
+      
+      console.log('Video converted successfully:', outputPath);
+    } catch (err) {
+      console.error('Failed to convert video:', err);
+      alert(`Conversion failed: ${err}`);
+      isConverting = false;
+      conversionProgress = 0;
+      conversionMessage = '';
+    }
   }
   function handleTimeUpdate() {
     if (!videoElement) return;
@@ -1489,12 +1563,67 @@ onMount(() => {
           </button>
         {/if}
         <div class="context-menu-divider"></div>
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <!-- svelte-ignore a11y_interactive_supports_focus -->
+        <div 
+          class="context-menu-item-wrapper" 
+          onmouseenter={() => showConvertSubmenu = true}
+          onmouseleave={() => showConvertSubmenu = false}
+          role="menuitem"
+          tabindex="0"
+        >
+          <div class="context-menu-item">
+            <Settings size={16} />
+            <span>Convert Video To</span>
+            <span style="margin-left: auto; font-size: 0.75rem;">›</span>
+          </div>
+          
+          {#if showConvertSubmenu}
+            <div class="context-submenu">
+              {#if currentVideoInfo && currentVideoInfo.format !== 'MP4'}
+                <button class="context-menu-item" onclick={() => startConversion('mp4')}>
+                  <span>MP4 {estimateConvertedSize('mp4')}</span>
+                </button>
+              {/if}
+              {#if currentVideoInfo && currentVideoInfo.format !== 'WEBM'}
+                <button class="context-menu-item" onclick={() => startConversion('webm')}>
+                  <span>WebM {estimateConvertedSize('webm')}</span>
+                </button>
+              {/if}
+              {#if currentVideoInfo && currentVideoInfo.format !== 'MKV'}
+                <button class="context-menu-item" onclick={() => startConversion('mkv')}>
+                  <span>MKV {estimateConvertedSize('mkv')}</span>
+                </button>
+              {/if}
+            </div>
+          {/if}
+        </div>
+        <div class="context-menu-divider"></div>
         <button class="context-menu-item" onclick={() => { goHome(); showContextMenu = false; }}>
           <Home size={16} />
           <span>Back to Home</span>
         </button>
       </div>
     {/if}
+  {/if}
+  
+  <!-- Video Conversion Progress Overlay -->
+  {#if isConverting}
+    <div class="generation-overlay">
+      <div class="generation-modal">
+        <div class="generation-icon">
+          <Loader2 size={48} strokeWidth={2} class="spinner" />
+        </div>
+        <h3>Converting Video</h3>
+        <div class="progress-container">
+          <div class="progress-track">
+            <div class="progress-fill" style="width: {conversionProgress}%"></div>
+          </div>
+          <div class="progress-percentage">{Math.round(conversionProgress)}%</div>
+        </div>
+        <p class="generation-message">{conversionMessage}</p>
+      </div>
+    </div>
   {/if}
   
   <!-- Settings Overlay -->
@@ -3083,5 +3212,25 @@ onMount(() => {
     height: 1px;
     background: rgba(255, 255, 255, 0.1);
     margin: 0.5rem 0;
+  }
+  
+  .context-menu-item-wrapper {
+    position: relative;
+  }
+  
+  .context-submenu {
+    position: absolute;
+    left: 100%;
+    top: 0;
+    margin-left: 0.5rem;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.5rem 0;
+    min-width: 180px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    animation: fadeIn 0.15s ease;
   }
 </style>

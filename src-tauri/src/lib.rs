@@ -207,6 +207,19 @@ struct WatchProgress {
     last_watched: u64,
 }
 
+#[derive(Serialize, Clone)]
+struct ConversionProgress {
+    stage: String,
+    progress: f32,
+    message: String,
+}
+
+#[derive(Serialize, Clone)]
+struct VideoInfo {
+    format: String,
+    size_mb: f64,
+}
+
 // Check if FFmpeg is installed
 #[tauri::command]
 fn check_ffmpeg_installed() -> Result<bool, String> {
@@ -797,6 +810,134 @@ fn get_watch_progress(video_path: String) -> Result<Option<WatchProgress>, Strin
     Ok(progress_map.get(&video_path).cloned())
 }
 
+// Get video file info
+#[tauri::command]
+fn get_video_info(video_path: String) -> Result<VideoInfo, String> {
+    let path = Path::new(&video_path);
+    
+    // Get file size
+    let metadata = fs::metadata(path)
+        .map_err(|e| format!("Failed to get file metadata: {}", e))?;
+    let size_bytes = metadata.len();
+    let size_mb = size_bytes as f64 / (1024.0 * 1024.0);
+    
+    // Get format from extension
+    let format = path.extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("unknown")
+        .to_uppercase();
+    
+    Ok(VideoInfo {
+        format,
+        size_mb,
+    })
+}
+
+// Estimate converted file size (rough estimation)
+#[allow(dead_code)]
+fn estimate_converted_size(original_size_mb: f64, target_format: &str) -> f64 {
+    // Simple compression ratio estimates
+    match target_format {
+        "mp4" => original_size_mb * 0.85,  // H.264 usually ~85% of original
+        "webm" => original_size_mb * 0.70, // VP9 usually ~70% of original
+        "mkv" => original_size_mb * 0.90,  // MKV container, minimal change
+        _ => original_size_mb,
+    }
+}
+
+// Convert video to different format
+#[tauri::command]
+async fn convert_video(
+    app_handle: tauri::AppHandle,
+    video_path: String,
+    target_format: String,
+) -> Result<String, String> {
+    let video_path_obj = Path::new(&video_path);
+    let video_dir = video_path_obj.parent()
+        .ok_or("Could not get video directory")?;
+    let video_stem = video_path_obj.file_stem()
+        .ok_or("Could not get video filename")?;
+    
+    // Output path
+    let output_path = video_dir.join(format!("{}_converted.{}", video_stem.to_string_lossy(), target_format));
+    let output_path_str = output_path.to_string_lossy().to_string();
+    
+    // Emit initial progress
+    let _ = app_handle.emit("conversion-progress", ConversionProgress {
+        stage: "starting".to_string(),
+        progress: 0.0,
+        message: format!("Starting conversion to {}...", target_format.to_uppercase()),
+    });
+    
+    // Run conversion in blocking task
+    let video_path_clone = video_path.clone();
+    let output_path_clone = output_path_str.clone();
+    let target_format_clone = target_format.clone();
+    let app_handle_clone = app_handle.clone();
+    
+    tokio::task::spawn_blocking(move || {
+        convert_video_with_ffmpeg(
+            &video_path_clone,
+            &output_path_clone,
+            &target_format_clone,
+            &app_handle_clone,
+        )
+    }).await
+    .map_err(|e| format!("Conversion task failed: {}", e))??;
+    
+    // Emit completion
+    let _ = app_handle.emit("conversion-progress", ConversionProgress {
+        stage: "complete".to_string(),
+        progress: 100.0,
+        message: "Conversion complete!".to_string(),
+    });
+    
+    Ok(output_path_str)
+}
+
+// Convert video using FFmpeg
+fn convert_video_with_ffmpeg(
+    input_path: &str,
+    output_path: &str,
+    target_format: &str,
+    app_handle: &tauri::AppHandle,
+) -> Result<(), String> {
+    let _ = app_handle.emit("conversion-progress", ConversionProgress {
+        stage: "converting".to_string(),
+        progress: 50.0,
+        message: format!("Converting to {}...", target_format.to_uppercase()),
+    });
+    
+    // Build FFmpeg command based on target format
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-i").arg(input_path);
+    
+    match target_format {
+        "mp4" => {
+            cmd.args(["-c:v", "libx264", "-preset", "medium", "-crf", "23", "-c:a", "aac", "-b:a", "192k"]);
+        }
+        "webm" => {
+            cmd.args(["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0", "-c:a", "libopus"]);
+        }
+        "mkv" => {
+            cmd.args(["-c:v", "copy", "-c:a", "copy"]); // Just remux, no re-encoding
+        }
+        _ => return Err(format!("Unsupported format: {}", target_format)),
+    }
+    
+    cmd.arg("-y").arg(output_path);
+    
+    let output = cmd.output()
+        .map_err(|e| format!("Failed to execute ffmpeg: {}. Make sure FFmpeg is installed.", e))?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("FFmpeg conversion failed: {}", stderr));
+    }
+    
+    Ok(())
+}
+
 // Get all watch progress data
 #[tauri::command]
 fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchProgress>, String> {
@@ -1004,7 +1145,9 @@ pub fn run() {
             download_whisper_model,
             save_watch_progress,
             get_watch_progress,
-            get_all_watch_progress
+            get_all_watch_progress,
+            get_video_info,
+            convert_video
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
