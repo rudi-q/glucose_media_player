@@ -1007,7 +1007,9 @@ onMount(() => {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const outputDevices = devices.filter(device => device.kind === 'audiooutput');
       audioDevices = outputDevices;
-      console.log('Audio output devices found:', outputDevices);
+      if (import.meta.env.DEV) {
+        console.log('Audio output devices found:', outputDevices);
+      }
     } catch (err) {
       console.error('Failed to load audio devices:', err);
     }
@@ -1022,7 +1024,9 @@ onMount(() => {
         await videoElement.setSinkId(deviceId);
         selectedAudioDevice = deviceId;
         showAudioMenu = false;
-        console.log('Audio output changed to:', deviceId);
+        if (import.meta.env.DEV) {
+          console.log('Audio output changed to:', deviceId);
+        }
       }
     } catch (err) {
       console.error('Failed to change audio output:', err);
@@ -1091,10 +1095,7 @@ onMount(() => {
   }
   
   function toggleModelSelector() {
-    console.log('toggleModelSelector called, current value:', showModelSelector);
-    console.log('setupStatus:', setupStatus);
     showModelSelector = !showModelSelector;
-    console.log('showModelSelector now:', showModelSelector);
   }
   
   function toggleSubtitleMenu() {
@@ -1105,11 +1106,8 @@ onMount(() => {
   }
   
   function openAISubtitleSelector() {
-    console.log('Opening AI subtitle selector');
-    console.log('Setup status:', setupStatus);
     showSubtitleMenu = false;
     showModelSelector = true;
-    console.log('showModelSelector set to:', showModelSelector);
   }
   
   function openAIFromUnifiedMenu() {
