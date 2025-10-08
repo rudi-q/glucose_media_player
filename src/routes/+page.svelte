@@ -1270,6 +1270,8 @@
   
   <!-- Settings Overlay -->
   {#if showSettings}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="settings-overlay" onclick={(e) => { if (e.target === e.currentTarget) showSettings = false; }}>
       <div class="settings-modal">
         <div class="settings-header">
@@ -1316,7 +1318,9 @@
                   </div>
                 </div>
                 
-                <div class="settings-item" onclick={() => { showSettings = false; showSetupDialog = true; }} style="cursor: pointer;">
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="settings-item" onclick={() => { showSettings = false; showSetupDialog = true; }} style="cursor: pointer;" role="button" tabindex="0">
                   <div class="settings-item-label">
                     <div class="settings-item-title">AI Models</div>
                     <div class="settings-item-desc">
@@ -1556,39 +1560,6 @@
     transform: scale(1.1);
   }
   
-  .settings-button {
-    position: fixed;
-    top: 1.5rem;
-    right: 6rem;
-    width: 36px;
-    height: 36px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.5);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 50%;
-    color: rgba(255, 255, 255, 0.7);
-    cursor: pointer;
-    transition: all 0.2s ease;
-    z-index: 100;
-    opacity: 0;
-    pointer-events: none;
-  }
-  
-  .settings-button.visible {
-    opacity: 1;
-    pointer-events: all;
-  }
-  
-  .settings-button:hover {
-    background: rgba(192, 101, 182, 0.8);
-    border-color: rgba(255, 255, 255, 0.3);
-    color: #fff;
-    transform: scale(1.1);
-  }
 
   .player-container:has(.empty-state) {
     /* Gallery screen - more opaque */
@@ -1662,10 +1633,6 @@
     padding: 4rem 0;
   }
 
-  .empty-content svg {
-    margin: 0 auto 1.5rem;
-    opacity: 0.6;
-  }
 
   .empty-content p {
     font-size: 0.95rem;
@@ -1725,9 +1692,6 @@
     overflow: hidden;
   }
 
-  .video-thumbnail svg {
-    opacity: 0.3;
-  }
 
   .thumbnail-img {
     width: 100%;
@@ -2139,48 +2103,6 @@
     color: #ff5555;
   }
 
-  .audio-device-selector {
-    position: relative;
-  }
-
-  .audio-menu {
-    position: absolute;
-    bottom: 100%;
-    right: 0;
-    margin-bottom: 0.5rem;
-    background: rgba(0, 0, 0, 0.95);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
-    padding: 0.5rem 0;
-    min-width: 200px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-    z-index: 100;
-  }
-
-  .audio-option {
-    width: 100%;
-    padding: 0.625rem 1rem;
-    background: none;
-    border: none;
-    color: rgba(255, 255, 255, 0.9);
-    text-align: left;
-    cursor: pointer;
-    font-size: 0.875rem;
-    transition: background 0.15s ease;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .audio-option:hover {
-    background: rgba(255, 255, 255, 0.1);
-  }
-
-  .audio-option.selected {
-    background: rgba(255, 255, 255, 0.15);
-    color: #fff;
-    font-weight: 500;
-  }
 
   /* Subtitle styling */
   /* !important required to override browser default subtitle styles */
@@ -2223,10 +2145,6 @@
     right: 0 !important;
   }
   
-  /* AI Subtitle Generation Styles */
-  .ai-subtitle-generator {
-    position: relative;
-  }
   
   /* Unified subtitles control */
   .subtitle-control {
@@ -2402,9 +2320,8 @@
     justify-content: center;
   }
   
-  .spinner {
+  :global(.spinner) {
     animation: spin 2s linear infinite;
-    color: #C065B6;
   }
   
   @keyframes spin {
@@ -2604,46 +2521,7 @@
     border: 1px solid rgba(255, 255, 255, 0.1);
   }
 
-  .status-badge-button {
-    padding: 0.375rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    white-space: nowrap;
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.9);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .status-badge-button:hover {
-    background: rgba(255, 255, 255, 0.15);
-    border-color: rgba(255, 255, 255, 0.3);
-  }
   
-  .settings-actions {
-    display: flex;
-    gap: 1rem;
-    justify-content: flex-end;
-  }
-  
-  .settings-action-button {
-    padding: 0.75rem 1.5rem;
-    background: linear-gradient(135deg, #C065B6, #8C77FF);
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    font-size: 0.9375rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-  
-  .settings-action-button:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(192, 101, 182, 0.4);
-  }
   
   /* Setup Dialog Styles */
   .setup-overlay {
@@ -2870,13 +2748,14 @@
   }
   
   .setup-button.primary {
-    background: linear-gradient(135deg, #C065B6, #8C77FF);
-    color: #fff;
+    background: #fff;
+    color: #000;
+    border: 1px solid rgba(255, 255, 255, 0.2);
   }
   
   .setup-button.primary:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.9);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(192, 101, 182, 0.4);
   }
   
   .setup-button:disabled {
