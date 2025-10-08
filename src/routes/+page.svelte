@@ -1798,7 +1798,7 @@ onMount(() => {
                 <div class="settings-item-label">
                   <div class="settings-item-title">Check for Updates</div>
                   <div class="settings-item-desc">
-                    Manually check for the latest version of Glucose
+                    Keep Glucose up to date with the latest features and improvements
                   </div>
                 </div>
                 <div class="settings-item-action">

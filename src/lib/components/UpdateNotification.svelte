@@ -8,17 +8,34 @@
     ? Math.round((updateState.downloaded / updateState.contentLength) * 100) 
     : 0;
 
-  // Auto-hide completed state after 5 seconds
-  let hideTimeout: ReturnType<typeof setTimeout>;
+  // Auto-hide completed state after 5 seconds, up-to-date after 3 seconds
+  let hideTimeout: ReturnType<typeof setTimeout> | undefined;
   $: if (updateState.completed) {
+    // Clear any existing timeout before creating a new one
+    if (hideTimeout !== undefined) {
+      clearTimeout(hideTimeout);
+      hideTimeout = undefined;
+    }
     hideTimeout = setTimeout(() => {
       updateStore.reset();
+      hideTimeout = undefined;
     }, 5000);
+  } else if (updateState.upToDate) {
+    // Clear any existing timeout before creating a new one
+    if (hideTimeout !== undefined) {
+      clearTimeout(hideTimeout);
+      hideTimeout = undefined;
+    }
+    hideTimeout = setTimeout(() => {
+      updateStore.reset();
+      hideTimeout = undefined;
+    }, 3000);
   }
 
   onDestroy(() => {
-    if (hideTimeout) {
+    if (hideTimeout !== undefined) {
       clearTimeout(hideTimeout);
+      hideTimeout = undefined;
     }
   });
 
@@ -32,7 +49,7 @@
 </script>
 
 <!-- Update Notification Panel -->
-{#if updateState.checking || updateState.available || updateState.downloading || updateState.completed || updateState.error}
+{#if updateState.checking || updateState.available || updateState.downloading || updateState.completed || updateState.error || updateState.upToDate}
   <div class="update-notification">
     <div class="update-card">
       {#if updateState.checking}
@@ -105,6 +122,20 @@
           <div class="update-text">
             <h3 class="update-title">Update Complete</h3>
             <p class="update-desc">Restarting application...</p>
+          </div>
+        </div>
+      {/if}
+
+      {#if updateState.upToDate && !updateState.checking && !updateState.available && !updateState.downloading && !updateState.completed && !updateState.error}
+        <div class="update-content">
+          <div class="update-icon success">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          </div>
+          <div class="update-text">
+            <h3 class="update-title">You're up to date</h3>
+            <p class="update-desc">You're running the latest version of Glucose</p>
           </div>
         </div>
       {/if}

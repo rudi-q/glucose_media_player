@@ -11,6 +11,7 @@ export interface UpdateState {
 	body?: string;
 	error?: string;
 	completed: boolean;
+	upToDate: boolean;
 }
 
 const initialState: UpdateState = {
@@ -19,7 +20,8 @@ const initialState: UpdateState = {
 	downloading: false,
 	downloaded: 0,
 	contentLength: 0,
-	completed: false
+	completed: false,
+	upToDate: false
 };
 
 function createUpdateStore() {
@@ -28,15 +30,16 @@ function createUpdateStore() {
 	return {
 		subscribe,
 		reset: () => set(initialState),
-		setChecking: (checking: boolean) => update((state) => ({ ...state, checking })),
+		setChecking: (checking: boolean) => update((state) => ({ ...state, checking, upToDate: false })),
 		setAvailable: (available: boolean, version?: string, date?: string, body?: string) =>
-			update((state) => ({ ...state, available, version, date, body })),
+			update((state) => ({ ...state, available, version, date, body, upToDate: false })),
 		setDownloading: (downloading: boolean) => update((state) => ({ ...state, downloading })),
 		setProgress: (downloaded: number, contentLength: number) =>
 			update((state) => ({ ...state, downloaded, contentLength })),
 		setCompleted: (completed: boolean) => update((state) => ({ ...state, completed })),
 		setError: (error: string) =>
-			update((state) => ({ ...state, error, checking: false, downloading: false }))
+			update((state) => ({ ...state, error, checking: false, downloading: false, upToDate: false })),
+		setUpToDate: (upToDate: boolean) => update((state) => ({ ...state, upToDate }))
 	};
 }
 

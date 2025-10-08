@@ -13,6 +13,7 @@
   const enableUpdater = !dev && isTauri;
 
   let checkPromise: Promise<void> | null = null;
+  let isManualCheck = false;
   
   async function checkForUpdates() {
     if (!enableUpdater) {
@@ -40,6 +41,12 @@
         await downloadAndInstallUpdate(update, relaunch);
       } else {
         console.log('No updates available');
+        // Clear any previous update state to avoid showing stale data
+        updateStore.setAvailable(false);
+        // Only show "up to date" message for manual checks
+        if (isManualCheck) {
+          updateStore.setUpToDate(true);
+        }
         updateStore.setChecking(false);
       }
     } catch (error) {
@@ -112,9 +119,9 @@
 
   onMount(() => {
     if (browser && enableUpdater && !disableAutoCheck) {
-      // Check for updates on app start
+      // Check for updates on app start (automatic, not manual)
       console.log('Auto-checking for updates on app start');
-      manualCheckForUpdates();
+      manualCheckForUpdates(false);
     } else if (disableAutoCheck) {
       console.log('Auto-check disabled - updates will only be checked manually');
     }
@@ -125,11 +132,13 @@
   });
 
   // Expose manual check function for external use
-  export function manualCheckForUpdates() {
+  export function manualCheckForUpdates(manual: boolean = true) {
     if (!checkPromise) {
+      isManualCheck = manual;
       // Create new promise and attach finalizer to clear it when settled
       checkPromise = checkForUpdates().finally(() => {
         checkPromise = null;
+        isManualCheck = false;
       });
     }
     return checkPromise;
