@@ -524,6 +524,11 @@ onMount(() => {
     const newVolume = Math.max(0, Math.min(1, volume + delta));
     volume = newVolume;
     videoElement.volume = newVolume;
+    // Unmute if currently muted and adjusting volume
+    if (isMuted) {
+      isMuted = false;
+      videoElement.muted = false;
+    }
   }
 
   function handleTrackLoad() {
@@ -1216,6 +1221,8 @@ onMount(() => {
             <button class="control-button" onclick={toggleVolumeMenu} title="Volume">
               {#if isMuted}
                 <VolumeX size={20} />
+              {:else if volume < 0.5}
+                <Volume1 size={20} />
               {:else}
                 <Volume2 size={20} />
               {/if}
