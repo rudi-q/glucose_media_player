@@ -79,6 +79,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   let showSubtitleMenu = $state(false);
   let currentVideoPath = $state<string | null>(null);
   let subtitleFileName = $state<string | null>(null);
+  let showContextMenu = $state(false);
+  let contextMenuPosition = $state({ x: 0, y: 0 });
   
   // Setup state
   interface SetupStatus {
@@ -735,6 +737,17 @@ onMount(() => {
     if (showModelSelector && !(target.closest('.ai-subtitle-generator') || target.closest('.subtitle-control') || target.closest('.model-selector'))) {
       showModelSelector = false;
     }
+    // Close context menu when clicking outside
+    if (showContextMenu && !target.closest('.context-menu')) {
+      showContextMenu = false;
+    }
+  }
+  
+  function handleContextMenu(e: MouseEvent) {
+    if (!videoSrc) return; // Only show context menu when video is playing
+    e.preventDefault();
+    contextMenuPosition = { x: e.clientX, y: e.clientY };
+    showContextMenu = true;
   }
   function handleTimeUpdate() {
     if (!videoElement) return;
@@ -1217,6 +1230,7 @@ onMount(() => {
         ontimeupdate={handleTimeUpdate}
         onloadedmetadata={handleLoadedMetadata}
         onclick={togglePlay}
+        oncontextmenu={handleContextMenu}
         crossorigin="anonymous"
       >
         {#if subtitleSrc}
@@ -1433,6 +1447,54 @@ onMount(() => {
       </div>
     </div>
     </div>
+    
+    <!-- Custom Context Menu -->
+    {#if showContextMenu}
+      <div 
+        class="context-menu" 
+        style="left: {contextMenuPosition.x}px; top: {contextMenuPosition.y}px;"
+      >
+        <button class="context-menu-item" onclick={() => { togglePlay(); showContextMenu = false; }}>
+          {#if isPlaying}
+            <Pause size={16} />
+            <span>Pause</span>
+          {:else}
+            <Play size={16} />
+            <span>Play</span>
+          {/if}
+        </button>
+        <button class="context-menu-item" onclick={() => { toggleMute(); showContextMenu = false; }}>
+          {#if isMuted}
+            <Volume2 size={16} />
+            <span>Unmute</span>
+          {:else}
+            <VolumeX size={16} />
+            <span>Mute</span>
+          {/if}
+        </button>
+        <div class="context-menu-divider"></div>
+        <button class="context-menu-item" onclick={() => { toggleCinematicMode(); showContextMenu = false; }}>
+          <Maximize size={16} />
+          <span>{isCinematicMode ? 'Fullscreen Mode' : 'Cinematic Mode'}</span>
+        </button>
+        {#if subtitleSrc}
+          <button class="context-menu-item" onclick={() => { toggleSubtitles(); showContextMenu = false; }}>
+            {#if subtitlesEnabled}
+              <CaptionsOff size={16} />
+              <span>Hide Subtitles</span>
+            {:else}
+              <Captions size={16} />
+              <span>Show Subtitles</span>
+            {/if}
+          </button>
+        {/if}
+        <div class="context-menu-divider"></div>
+        <button class="context-menu-item" onclick={() => { goHome(); showContextMenu = false; }}>
+          <Home size={16} />
+          <span>Back to Home</span>
+        </button>
+      </div>
+    {/if}
   {/if}
   
   <!-- Settings Overlay -->
@@ -2977,5 +3039,49 @@ onMount(() => {
   
   .setup-warning a:hover {
     color: #FF6362;
+  }
+  
+  /* Custom Context Menu */
+  .context-menu {
+    position: fixed;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.5rem 0;
+    min-width: 200px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    animation: fadeIn 0.15s ease;
+  }
+  
+  .context-menu-item {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.9);
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: background 0.15s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  
+  .context-menu-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+  
+  .context-menu-item span {
+    flex: 1;
+  }
+  
+  .context-menu-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.1);
+    margin: 0.5rem 0;
   }
 </style>
