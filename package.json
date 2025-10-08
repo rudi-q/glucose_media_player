@@ -1,6 +1,6 @@
 {
   "name": "glucose",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "A minimalist video player",
   "type": "module",
   "scripts": {
@@ -14,7 +14,7 @@
     "tauri:build": "tauri build",
     "tauri:check": "cargo check --manifest-path=src-tauri/Cargo.toml"
   },
-  "license": "EUPL",
+  "license": "MPL",
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-fs": "^2.4.0",
