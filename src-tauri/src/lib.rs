@@ -222,10 +222,7 @@ fn check_installed_models() -> Result<Vec<String>, String> {
     let mut models = Vec::new();
     let model_files = vec![
         ("ggml-tiny.bin", "tiny"),
-        ("ggml-base.bin", "base"),
         ("ggml-small.bin", "small"),
-        ("ggml-medium.bin", "medium"),
-        ("ggml-large-v3.bin", "large"),
         ("ggml-large-v3-turbo-q5_0.bin", "large-v3-turbo"),
     ];
     
@@ -493,11 +490,9 @@ async fn generate_subtitles(
     // Get model path from user's home directory or use default location
     let model_name = match model_size.as_str() {
         "tiny" => "ggml-tiny.bin",
-        "base" => "ggml-base.bin",
         "small" => "ggml-small.bin",
-        "medium" => "ggml-medium.bin",
-        "large" => "ggml-large-v3.bin",
-        _ => "ggml-base.bin",
+        "large-v3-turbo" => "ggml-large-v3-turbo-q5_0.bin",
+        _ => "ggml-tiny.bin",
     };
     
     let model_path = dirs::home_dir()
