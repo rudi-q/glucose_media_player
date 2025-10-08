@@ -272,20 +272,24 @@ onMount(() => {
         case "ArrowLeft":
           e.preventDefault();
           selectedVideoIndex = Math.max(0, selectedVideoIndex - 1);
+          scrollSelectedVideoIntoView();
           break;
         case "ArrowRight":
           e.preventDefault();
           selectedVideoIndex = Math.min(recentVideos.length - 1, selectedVideoIndex + 1);
+          scrollSelectedVideoIntoView();
           break;
         case "ArrowUp":
           e.preventDefault();
           // Move up one row (assuming 4 columns grid)
           selectedVideoIndex = Math.max(0, selectedVideoIndex - 4);
+          scrollSelectedVideoIntoView();
           break;
         case "ArrowDown":
           e.preventDefault();
           // Move down one row
           selectedVideoIndex = Math.min(recentVideos.length - 1, selectedVideoIndex + 4);
+          scrollSelectedVideoIntoView();
           break;
         case "Enter":
         case " ":
@@ -296,6 +300,20 @@ onMount(() => {
           break;
       }
     }
+  }
+
+  function scrollSelectedVideoIntoView() {
+    // Wait a tick for the DOM to update
+    setTimeout(() => {
+      const selectedCard = document.querySelector('.video-card.selected');
+      if (selectedCard) {
+        selectedCard.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+          inline: 'nearest'
+        });
+      }
+    }, 0);
   }
 
   async function openFileDialog() {
@@ -1747,14 +1765,26 @@ onMount(() => {
     width: 100%;
     max-width: 1400px;
     margin: 0 auto;
-    padding: 3rem 2rem;
+    padding: 3rem 5rem 3rem 2rem;
   }
 
   .library-header {
+    position: sticky;
+    top: 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
     margin-bottom: 3rem;
+    padding: 1.5rem 0;
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    z-index: 10;
+    margin-top: -1.5rem;
+    margin-left: -5rem;
+    margin-right: -5rem;
+    padding-left: 5rem;
+    padding-right: 5rem;
   }
 
   .library-header .logo {
