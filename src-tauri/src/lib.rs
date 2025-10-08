@@ -175,6 +175,7 @@ struct VideoFile {
     name: String,
     size: u64,
     modified: u64,
+    duration: Option<f64>,
 }
 
 #[derive(Serialize, Clone)]
@@ -218,6 +219,26 @@ struct ConversionProgress {
 struct VideoInfo {
     format: String,
     size_mb: f64,
+}
+
+// Get video duration using FFmpeg
+fn get_video_duration(video_path: &str) -> Option<f64> {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            video_path
+        ])
+        .output()
+        .ok()?;
+    
+    if output.status.success() {
+        let duration_str = String::from_utf8_lossy(&output.stdout);
+        duration_str.trim().parse::<f64>().ok()
+    } else {
+        None
+    }
 }
 
 // Check if FFmpeg is installed
@@ -985,19 +1006,23 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
                         if metadata.is_file() {
                             if let Some(ext) = entry.path().extension() {
                                 if let Some(ext_str) = ext.to_str() {
-                                    if video_extensions.contains(&ext_str.to_lowercase().as_str()) {
-                                        if let Ok(modified) = metadata.modified() {
-                                            if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
-                                                videos.push(VideoFile {
-                                                    path: entry.path().to_string_lossy().to_string(),
-                                                    name: entry.file_name().to_string_lossy().to_string(),
-                                                    size: metadata.len(),
-                                                    modified: duration.as_secs(),
-                                                });
-                                                dir_video_count += 1;
+                                        if video_extensions.contains(&ext_str.to_lowercase().as_str()) {
+                                            if let Ok(modified) = metadata.modified() {
+                                                if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+                                                    let video_path = entry.path().to_string_lossy().to_string();
+                                                    let video_duration = get_video_duration(&video_path);
+                                                    
+                                                    videos.push(VideoFile {
+                                                        path: video_path,
+                                                        name: entry.file_name().to_string_lossy().to_string(),
+                                                        size: metadata.len(),
+                                                        modified: duration.as_secs(),
+                                                        duration: video_duration,
+                                                    });
+                                                    dir_video_count += 1;
+                                                }
                                             }
                                         }
-                                    }
                                 }
                             }
                         }

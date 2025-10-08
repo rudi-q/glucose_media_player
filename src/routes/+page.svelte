@@ -47,6 +47,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
     name: string;
     size: number;
     modified: number;
+    duration?: number;
   }
   
   interface WatchProgress {
@@ -889,6 +890,11 @@ onMount(() => {
     return `${m}:${s.toString().padStart(2, '0')}`;
   }
   
+  function formatDuration(seconds?: number): string {
+    if (!seconds) return '';
+    return formatTime(seconds);
+  }
+  
   function formatEstimatedTime(seconds: number): string {
     if (seconds < 60) {
       return `~${Math.round(seconds)}s`;
@@ -1269,7 +1275,11 @@ onMount(() => {
                   <div class="video-info">
                     <div class="video-name" title={video.name}>{video.name}</div>
                     <div class="video-meta">
-                      {(video.size / (1024 * 1024)).toFixed(1)} MB
+                      {#if video.duration}
+                        <span class="video-duration">{formatDuration(video.duration)}</span>
+                        <span class="video-separator">•</span>
+                      {/if}
+                      <span>{(video.size / (1024 * 1024)).toFixed(1)} MB</span>
                     </div>
                   </div>
                 </button>
@@ -2125,6 +2135,17 @@ onMount(() => {
   .video-meta {
     font-size: 0.75rem;
     color: rgba(255, 255, 255, 0.5);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  
+  .video-duration {
+    font-variant-numeric: tabular-nums;
+  }
+  
+  .video-separator {
+    opacity: 0.5;
   }
 
   .open-button {
