@@ -364,12 +364,26 @@ onMount(() => {
   async function saveWatchProgress() {
     if (!currentVideoPath || !videoElement || duration <= 0) return;
     
+    const currentTime = videoElement.currentTime;
+    const videoDuration = duration;
+    
     try {
       await invoke('save_watch_progress', {
         videoPath: currentVideoPath,
-        currentTime: videoElement.currentTime,
-        duration: duration
+        currentTime: currentTime,
+        duration: videoDuration
       });
+      
+      // Update local state immediately to reflect changes in UI
+      const timestamp = Date.now() / 1000;
+      watchProgressMap.set(currentVideoPath, {
+        path: currentVideoPath,
+        current_time: currentTime,
+        duration: videoDuration,
+        last_watched: timestamp
+      });
+      // Trigger reactivity by reassigning the map
+      watchProgressMap = watchProgressMap;
     } catch (err) {
       console.error('Failed to save watch progress:', err);
     }

@@ -11,6 +11,20 @@ use serde::Serialize;
 use std::path::Path;
 use std::process::Command;
 
+// Helper to create a Command with hidden console window on Windows
+fn create_hidden_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    
+    cmd
+}
+
 // Global state to store pending file paths
 static PENDING_FILES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static FILE_PROCESSED: Mutex<bool> = Mutex::new(false);
@@ -98,6 +112,7 @@ fn mark_file_processed() {
 
 #[tauri::command]
 fn frontend_ready(app_handle: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(debug_assertions)]
     println!("Frontend is ready to receive events");
     
     // Check if there are any pending files and emit them now
@@ -107,6 +122,7 @@ fn frontend_ready(app_handle: tauri::AppHandle) -> Result<(), String> {
     };
     
     if !pending_files.is_empty() {
+        #[cfg(debug_assertions)]
         println!("Frontend ready - processing {} pending files", pending_files.len());
         process_video_files(&app_handle, pending_files);
     }
@@ -116,6 +132,7 @@ fn frontend_ready(app_handle: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn exit_app(app_handle: tauri::AppHandle) {
+    #[cfg(debug_assertions)]
     println!("Exit app command called");
     app_handle.exit(0);
 }
@@ -137,6 +154,7 @@ fn find_subtitle_for_video(video_path: String) -> Result<Option<String>, String>
     for ext in &subtitle_exts {
         let subtitle_path = video_dir.join(format!("{}.{}", video_stem_str, ext));
         if subtitle_path.exists() {
+            #[cfg(debug_assertions)]
             println!("Found subtitle file (exact match): {:?}", subtitle_path);
             return Ok(Some(subtitle_path.to_string_lossy().to_string()));
         }
@@ -158,6 +176,7 @@ fn find_subtitle_for_video(video_path: String) -> Result<Option<String>, String>
                 
                 // Check if stem matches (case-insensitive) and extension is a subtitle format
                 if file_stem_lower == video_stem_lower && subtitle_exts.contains(&file_ext_lower.as_str()) {
+                    #[cfg(debug_assertions)]
                     println!("Found subtitle file (case-insensitive match): {:?}", entry_path);
                     return Ok(Some(entry_path.to_string_lossy().to_string()));
                 }
@@ -165,6 +184,7 @@ fn find_subtitle_for_video(video_path: String) -> Result<Option<String>, String>
         }
     }
     
+    #[cfg(debug_assertions)]
     println!("No subtitle file found for video: {}", video_path);
     Ok(None)
 }
@@ -222,8 +242,9 @@ struct VideoInfo {
 }
 
 // Get video duration using FFmpeg
+// Note: Caller should verify ffprobe is available before calling this
 fn get_video_duration(video_path: &str) -> Option<f64> {
-    let output = Command::new("ffprobe")
+    let output = create_hidden_command("ffprobe")
         .args([
             "-v", "error",
             "-show_entries", "format=duration",
@@ -244,7 +265,7 @@ fn get_video_duration(video_path: &str) -> Option<f64> {
 // Check if FFmpeg is installed
 #[tauri::command]
 fn check_ffmpeg_installed() -> Result<bool, String> {
-    Command::new("ffmpeg")
+    create_hidden_command("ffmpeg")
         .arg("-version")
         .output()
         .map(|output| output.status.success())
@@ -458,9 +479,10 @@ async fn download_file_with_progress(
 
 // Helper function to extract audio from video using FFmpeg
 fn extract_audio_from_video(video_path: &str, output_audio_path: &str) -> Result<(), String> {
+    #[cfg(debug_assertions)]
     println!("Extracting audio from video: {}", video_path);
     
-    let output = Command::new("ffmpeg")
+    let output = create_hidden_command("ffmpeg")
         .args([
             "-i", video_path,
             "-vn",  // No video
@@ -478,6 +500,7 @@ fn extract_audio_from_video(video_path: &str, output_audio_path: &str) -> Result
         return Err(format!("FFmpeg failed: {}", stderr));
     }
     
+    #[cfg(debug_assertions)]
     println!("Audio extracted successfully to: {}", output_audio_path);
     Ok(())
 }
@@ -506,6 +529,7 @@ fn generate_srt_from_segments(segments: Vec<(f64, f64, String)>, output_path: &s
     fs::write(output_path, srt_content)
         .map_err(|e| format!("Failed to write SRT file: {}", e))?;
     
+    #[cfg(debug_assertions)]
     println!("SRT file generated: {}", output_path);
     Ok(())
 }
@@ -516,8 +540,10 @@ async fn generate_subtitles(
     video_path: String,
     model_size: String,
 ) -> Result<String, String> {
-    println!("Starting subtitle generation for: {}", video_path);
-    println!("Model size: {}", model_size);
+    #[cfg(debug_assertions)] {
+        println!("Starting subtitle generation for: {}", video_path);
+        println!("Model size: {}", model_size);
+    }
     
     // Emit initial progress
     let _ = app_handle.emit("subtitle-generation-progress", SubtitleGenerationProgress {
@@ -632,6 +658,7 @@ fn transcribe_audio_with_whisper(
 ) -> Result<(), String> {
     use whisper_rs::{WhisperContext, WhisperContextParameters, FullParams, SamplingStrategy};
     
+    #[cfg(debug_assertions)]
     println!("Loading Whisper model from: {}", model_path);
     
     let ctx = WhisperContext::new_with_params(
@@ -639,11 +666,13 @@ fn transcribe_audio_with_whisper(
         WhisperContextParameters::default(),
     ).map_err(|e| format!("Failed to load Whisper model: {}", e))?;
     
+    #[cfg(debug_assertions)]
     println!("Reading audio file: {}", audio_path);
     
     // Read audio file as samples
     let audio_data = read_wav_file(audio_path)?;
     
+    #[cfg(debug_assertions)]
     println!("Starting transcription... ({} samples)", audio_data.len());
     
     // Create transcription parameters
@@ -666,12 +695,14 @@ fn transcribe_audio_with_whisper(
     state.full(params, &audio_data)
         .map_err(|e| format!("Transcription failed: {}", e))?;
     
+    #[cfg(debug_assertions)]
     println!("Transcription complete, extracting segments...");
     
     // Extract segments with timestamps
     let num_segments = state.full_n_segments()
         .map_err(|e| format!("Failed to get segment count: {}", e))?;
     
+    #[cfg(debug_assertions)]
     println!("Found {} segments", num_segments);
     
     let mut segments = Vec::new();
@@ -703,6 +734,7 @@ fn transcribe_audio_with_whisper(
         }
     }
     
+    #[cfg(debug_assertions)]
     println!("Generating SRT file with {} segments...", segments.len());
     
     // Generate SRT file
@@ -930,7 +962,7 @@ fn convert_video_with_ffmpeg(
     });
     
     // Build FFmpeg command based on target format
-    let mut cmd = Command::new("ffmpeg");
+    let mut cmd = create_hidden_command("ffmpeg");
     cmd.arg("-i").arg(input_path);
     
     match target_format {
@@ -984,10 +1016,22 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
     let video_extensions = vec!["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv"];
     let mut videos = Vec::new();
     
+    // Check if ffprobe is available once at the start
+    let ffprobe_available = create_hidden_command("ffprobe")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    
+    if !ffprobe_available {
+        eprintln!("Warning: ffprobe not found in PATH. Video durations will not be extracted.");
+    }
+    
     // Get common video directories
     let mut search_dirs = Vec::new();
     
     if let Some(home) = dirs::home_dir() {
+        #[cfg(debug_assertions)]
         println!("Home directory: {:?}", home);
         search_dirs.push(home.join("Videos"));
         search_dirs.push(home.join("Downloads"));
@@ -997,8 +1041,10 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
     
     // Scan directories
     for dir in &search_dirs {
+        #[cfg(debug_assertions)]
         println!("Checking directory: {:?} (exists: {})", dir, dir.exists());
         if dir.exists() {
+            #[cfg(debug_assertions)]
             let mut dir_video_count = 0;
             if let Ok(entries) = fs::read_dir(&dir) {
                 for entry in entries.flatten() {
@@ -1010,7 +1056,12 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
                                             if let Ok(modified) = metadata.modified() {
                                                 if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
                                                     let video_path = entry.path().to_string_lossy().to_string();
-                                                    let video_duration = get_video_duration(&video_path);
+                                                    // Only try to get duration if ffprobe is available
+                                                    let video_duration = if ffprobe_available {
+                                                        get_video_duration(&video_path)
+                                                    } else {
+                                                        None
+                                                    };
                                                     
                                                     videos.push(VideoFile {
                                                         path: video_path,
@@ -1019,7 +1070,10 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
                                                         modified: duration.as_secs(),
                                                         duration: video_duration,
                                                     });
-                                                    dir_video_count += 1;
+                                                    #[cfg(debug_assertions)]
+                                                    {
+                                                        dir_video_count += 1;
+                                                    }
                                                 }
                                             }
                                         }
@@ -1029,6 +1083,7 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
                     }
                 }
             }
+            #[cfg(debug_assertions)]
             println!("Found {} videos in {:?}", dir_video_count, dir);
         }
     }
@@ -1061,6 +1116,7 @@ fn process_video_files(app_handle: &tauri::AppHandle, video_files: Vec<String>) 
                 {
                     let processed = FILE_PROCESSED.lock().unwrap();
                     if *processed {
+                        #[cfg(debug_assertions)]
                         println!("File already processed, stopping attempts");
                         break;
                     }
@@ -1068,6 +1124,7 @@ fn process_video_files(app_handle: &tauri::AppHandle, video_files: Vec<String>) 
 
                 // Try to emit event for first video file immediately on first attempt
                 if let Some(video_file) = video_files.first() {
+                    #[cfg(debug_assertions)]
                     match app_handle_clone.emit("open-file", video_file) {
                         Ok(_) => {
                             println!(
@@ -1082,6 +1139,8 @@ fn process_video_files(app_handle: &tauri::AppHandle, video_files: Vec<String>) 
                             );
                         }
                     }
+                    #[cfg(not(debug_assertions))]
+                    let _ = app_handle_clone.emit("open-file", video_file);
                 }
 
                 // Wait before next attempt (no delay before first attempt)
@@ -1101,6 +1160,7 @@ fn process_video_files(app_handle: &tauri::AppHandle, video_files: Vec<String>) 
                 }
             }
 
+            #[cfg(debug_assertions)]
             println!("File loading attempts completed");
         });
     }
@@ -1117,11 +1177,14 @@ pub fn run() {
             // Handle command line arguments for file associations
             let args: Vec<String> = std::env::args().collect();
             
-            println!("=== GLUCOSE STARTUP ===");
-            println!("Command line arguments: {:?}", args);
+            #[cfg(debug_assertions)] {
+                println!("=== GLUCOSE STARTUP ===");
+                println!("Command line arguments: {:?}", args);
+            }
             
             // Check if we're being launched via file association
             if args.len() > 1 {
+                #[cfg(debug_assertions)]
                 println!("*** LAUNCHED WITH ARGUMENTS - POTENTIAL FILE ASSOCIATION ***");
                 
                 let video_extensions = vec!["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv"];
@@ -1130,12 +1193,14 @@ pub fn run() {
                 for arg in &args[1..] {
                     // Sanitize the path
                     let clean_arg = sanitize_path(arg);
+                    #[cfg(debug_assertions)]
                     println!("Processing argument: {} -> {}", arg, clean_arg);
 
                     let lower = clean_arg.to_lowercase();
                     for ext in &video_extensions {
                         if lower.ends_with(&format!(".{}", ext)) {
                             video_files.push(clean_arg.clone());
+                            #[cfg(debug_assertions)]
                             println!("Found video file: {}", clean_arg);
                             break;
                         }
@@ -1143,10 +1208,12 @@ pub fn run() {
                 }
 
                 if !video_files.is_empty() {
+                    #[cfg(debug_assertions)]
                     println!("Queued {} video files", video_files.len());
                     process_video_files(&app.handle(), video_files);
                 }
             } else {
+                #[cfg(debug_assertions)]
                 println!("*** LAUNCHED WITHOUT ARGUMENTS - NORMAL APP LAUNCH ***");
             }
             
@@ -1186,26 +1253,31 @@ pub fn run() {
             match event {
                 // Handle macOS file association events
                 RunEvent::Opened { urls } => {
-                    println!("*** FILE ASSOCIATION EVENT RECEIVED ***");
-                    println!("Received opened event with URLs: {:?}", urls);
+                    #[cfg(debug_assertions)] {
+                        println!("*** FILE ASSOCIATION EVENT RECEIVED ***");
+                        println!("Received opened event with URLs: {:?}", urls);
+                    }
                     
                     let video_extensions = vec!["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv"];
                     let mut video_files: Vec<String> = Vec::new();
                     
                     for url in urls {
                         let url_str = url.to_string();
+                        #[cfg(debug_assertions)]
                         println!("Processing URL: {}", url_str);
                         
                         if url_str.starts_with("file://") {
                             let path = url_str.replace("file://", "");
                             let decoded_path = urlencoding::decode(&path).unwrap_or_default();
                             
+                            #[cfg(debug_assertions)]
                             println!("Decoded path: {}", decoded_path);
                             
                             let lower = decoded_path.to_lowercase();
                             for ext in &video_extensions {
                                 if lower.ends_with(&format!(".{}", ext)) {
                                     video_files.push(decoded_path.to_string());
+                                    #[cfg(debug_assertions)]
                                     println!("Found video file from opened event: {}", decoded_path);
                                     break;
                                 }
@@ -1214,6 +1286,7 @@ pub fn run() {
                     }
                     
                     if !video_files.is_empty() {
+                        #[cfg(debug_assertions)]
                         println!("Processing {} video files from file association event", video_files.len());
                         process_video_files(&_app_handle, video_files);
                     }
