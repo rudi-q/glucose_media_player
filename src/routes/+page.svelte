@@ -948,18 +948,21 @@
     <X size={16} />
   </button>
   
-  <button class="settings-button" class:visible={showCloseButton} onclick={() => showSettings = true} title="Settings">
-    <Settings size={16} />
-  </button>
   {#if !videoSrc}
     <div class="empty-state" class:dragging={isDragging}>
       <div class="library-container">
         <div class="library-header">
           <img src="/logo-dark.svg" alt="glucose" class="logo" />
-          <button class="open-button" onclick={openFileDialog}>
-            <FolderOpen size={18} />
-            Open Video
-          </button>
+          <div class="header-buttons">
+            <button class="open-button" onclick={openFileDialog}>
+              <FolderOpen size={18} />
+              Open Video
+            </button>
+            <button class="open-button" onclick={() => showSettings = true}>
+              <Settings size={18} />
+              Settings
+            </button>
+          </div>
         </div>
         
         {#if loadingRecent}
@@ -1313,31 +1316,29 @@
                   </div>
                 </div>
                 
-                <div class="settings-item">
+                <div class="settings-item" onclick={() => { showSettings = false; showSetupDialog = true; }} style="cursor: pointer;">
                   <div class="settings-item-label">
                     <div class="settings-item-title">AI Models</div>
                     <div class="settings-item-desc">
                       {#if setupStatus.models_installed.length > 0}
-                        Installed: {setupStatus.models_installed.join(', ')}
+                        {@const totalModels = 3}
+                        {@const installedCount = setupStatus.models_installed.length}
+                        {@const availableCount = totalModels - installedCount}
+                        {@const recommendedModel = setupStatus.models_installed.includes('tiny') ? 'Tiny' : setupStatus.models_installed.includes('small') ? 'Small' : setupStatus.models_installed.includes('large-v3-turbo') ? 'Large V3 Turbo' : setupStatus.models_installed[0]}
+                        {recommendedModel} model recommended{#if installedCount > 1}, {installedCount - 1} more installed{/if}{#if availableCount > 0}, {availableCount} more available{/if}
                       {:else}
-                        No models installed
+                        No models installed, 3 available
                       {/if}
                     </div>
                   </div>
+                  <div class="settings-item-status">
+                    {#if setupStatus.models_installed.length > 0}
+                      <span class="status-badge active">Installed {setupStatus.models_installed.length} {setupStatus.models_installed.length === 1 ? 'model' : 'models'}</span>
+                    {:else}
+                      <span class="status-badge inactive">Not Set Up</span>
+                    {/if}
+                  </div>
                 </div>
-              </div>
-              
-              <div class="settings-actions">
-                <button 
-                  class="settings-action-button"
-                  onclick={() => { showSettings = false; showSetupDialog = true; }}
-                >
-                  {#if setupStatus.models_installed.length > 0}
-                    Download More Models
-                  {:else}
-                    Run Setup Wizard
-                  {/if}
-                </button>
               </div>
             {/if}
           </div>
@@ -1640,6 +1641,12 @@
     height: 48px;
     width: auto;
     opacity: 0.95;
+  }
+
+  .header-buttons {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
   }
 
   .loading {
@@ -2595,6 +2602,24 @@
     background: rgba(255, 255, 255, 0.05);
     color: rgba(255, 255, 255, 0.5);
     border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .status-badge-button {
+    padding: 0.375rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    white-space: nowrap;
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .status-badge-button:hover {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.3);
   }
   
   .settings-actions {
