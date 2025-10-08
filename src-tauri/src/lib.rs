@@ -352,27 +352,54 @@ async fn download_file_with_progress(
     let client = reqwest::Client::new();
     let response = client.get(url).send().await
         .map_err(|e| format!("Failed to start download: {}", e))?;
-    
+
+    // Abort early on non-2xx statuses; avoid writing error pages to disk
+    if !response.status().is_success() {
+        let status = response.status();
+        let ct = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+
+        // For textual responses, include a short snippet to help debugging
+        let snippet = if ct.contains("text") || ct.contains("json") || ct.contains("xml") || ct.contains("html") {
+            match response.text().await {
+                Ok(t) => t.chars().take(512).collect::<String>(),
+                Err(_) => String::new(),
+            }
+        } else {
+            String::new()
+        };
+
+        return if snippet.is_empty() {
+            Err(format!("HTTP error {} {}", status.as_u16(), status))
+        } else {
+            Err(format!("HTTP error {} {}: {}", status.as_u16(), status, snippet))
+        };
+    }
+
+    // Success: only now inspect content length, create the file, and stream bytes
     let total_size = response.content_length().unwrap_or(0);
-    
+
     let mut file = fs::File::create(output_path)
         .map_err(|e| format!("Failed to create file: {}", e))?;
-    
+
     let mut downloaded: u64 = 0;
     let mut stream = response.bytes_stream();
-    
+
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("Download error: {}", e))?;
         file.write_all(&chunk)
             .map_err(|e| format!("Failed to write to file: {}", e))?;
-        
+
         downloaded += chunk.len() as u64;
         let percentage = if total_size > 0 {
             (downloaded as f32 / total_size as f32) * 100.0
         } else {
             0.0
         };
-        
+
         // Emit progress every 1MB or so
         if downloaded % (1024 * 1024) < chunk.len() as u64 || downloaded == total_size {
             let _ = app_handle.emit("download-progress", DownloadProgress {
@@ -383,7 +410,7 @@ async fn download_file_with_progress(
             });
         }
     }
-    
+
     Ok(())
 }
 
@@ -587,7 +614,7 @@ fn transcribe_audio_with_whisper(
     params.set_print_timestamps(true);
     params.set_translate(false);  // Don't translate, keep original language
     params.set_language(Some("auto"));  // Auto-detect language
-    params.set_max_len(1);  // Max length per segment
+    params.set_max_len(0);  // Disable max length limit per segment
     params.set_split_on_word(true);  // Split on word boundaries
     
     // Run transcription
