@@ -3,6 +3,22 @@
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
+  import { 
+    X, 
+    Settings, 
+    FolderOpen, 
+    Play, 
+    Pause, 
+    Home, 
+    VolumeX, 
+    Volume1, 
+    Volume2, 
+    Captions, 
+    CaptionsOff, 
+    Maximize, 
+    Check,
+    Loader2
+  } from "lucide-svelte";
 
   let videoElement = $state<HTMLVideoElement>();
   let backgroundVideo = $state<HTMLVideoElement>();
@@ -929,17 +945,11 @@
   onmousemove={handleMainContainerMouseMove}
 >
   <button class="close-button" class:visible={showCloseButton} onclick={closeApp} title="Close (Esc)">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <line x1="18" y1="6" x2="6" y2="18"></line>
-      <line x1="6" y1="6" x2="18" y2="18"></line>
-    </svg>
+    <X size={16} />
   </button>
   
   <button class="settings-button" class:visible={showCloseButton} onclick={() => showSettings = true} title="Settings">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <circle cx="12" cy="12" r="3"></circle>
-      <path d="M12 1v6m0 6v10M1 12h6m6 0h10M4.22 4.22l4.24 4.24m5.08 5.08l4.24 4.24M4.22 19.78l4.24-4.24m5.08-5.08l4.24-4.24"></path>
-    </svg>
+    <Settings size={16} />
   </button>
   {#if !videoSrc}
     <div class="empty-state" class:dragging={isDragging}>
@@ -947,9 +957,7 @@
         <div class="library-header">
           <img src="/logo-dark.svg" alt="glucose" class="logo" />
           <button class="open-button" onclick={openFileDialog}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
-            </svg>
+            <FolderOpen size={18} />
             Open Video
           </button>
         </div>
@@ -958,9 +966,7 @@
           <div class="loading">Scanning for videos...</div>
         {:else if recentVideos.length === 0}
           <div class="empty-content">
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <polygon points="5 3 19 12 5 21 5 3"></polygon>
-            </svg>
+            <Play size={64} strokeWidth={1.5} />
             <p>No recent videos found</p>
             <p class="hint">Drop a video file or click Open Video above</p>
           </div>
@@ -976,22 +982,16 @@
                 >
                   <div class="video-thumbnail">
                     {#await generateThumbnail(video.path)}
-                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                      </svg>
+                      <Play size={48} strokeWidth={1.5} />
                     {:then thumbnail}
                       {#if thumbnail}
                         <img src={thumbnail} alt={video.name} class="thumbnail-img" />
                       {:else}
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                          <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                        </svg>
+                        <Play size={48} strokeWidth={1.5} />
                       {/if}
                     {/await}
                     <div class="play-overlay">
-                      <svg width="32" height="32" viewBox="0 0 24 24" fill="white" stroke="none">
-                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                      </svg>
+                      <Play size={32} fill="white" stroke="none" />
                     </div>
                   </div>
                   <div class="video-info">
@@ -1053,9 +1053,7 @@
       <div class="generation-overlay">
         <div class="generation-modal">
           <div class="generation-icon">
-            <svg class="spinner" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"></circle>
-            </svg>
+            <Loader2 size={48} strokeWidth={2} class="spinner" />
           </div>
           <h3>Generating AI Subtitles</h3>
           <div class="progress-container">
@@ -1119,10 +1117,7 @@
       <div class="controls-row">
         <div class="controls-left">
           <button class="control-button" onclick={goHome} title="Home">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"></path>
-              <polyline points="9 22 9 12 15 12 15 22"></polyline>
-            </svg>
+            <Home size={20} />
           </button>
           <div class="time">
             {formatTime(currentTime)} / {formatTime(duration)}
@@ -1132,14 +1127,9 @@
         <div class="controls-center">
           <button class="control-button" onclick={togglePlay}>
             {#if isPlaying}
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="6" y="4" width="4" height="16"></rect>
-                <rect x="14" y="4" width="4" height="16"></rect>
-              </svg>
+              <Pause size={24} fill="currentColor" />
             {:else}
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                <polygon points="5 3 19 12 5 21 5 3"></polygon>
-              </svg>
+              <Play size={24} fill="currentColor" />
             {/if}
           </button>
         </div>
@@ -1148,21 +1138,11 @@
           <div class="volume-control">
             <button class="control-button" onclick={toggleVolumeMenu} title="Volume">
               {#if videoElement?.muted || volume === 0}
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                  <line x1="23" y1="9" x2="17" y2="15"></line>
-                  <line x1="17" y1="9" x2="23" y2="15"></line>
-                </svg>
+                <VolumeX size={20} />
               {:else if volume < 0.5}
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                  <path d="M15.54 8.46a5 5 0 010 7.07"></path>
-                </svg>
+                <Volume1 size={20} />
               {:else}
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                  <path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"></path>
-                </svg>
+                <Volume2 size={20} />
               {/if}
             </button>
             {#if showVolumeMenu}
@@ -1180,15 +1160,9 @@
                 />
                 <button class="mute-toggle" onclick={toggleMute} class:muted={videoElement?.muted}>
                   {#if videoElement?.muted}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                      <line x1="23" y1="9" x2="17" y2="15"></line>
-                      <line x1="17" y1="9" x2="23" y2="15"></line>
-                    </svg>
+                    <VolumeX size={16} />
                   {:else}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                    </svg>
+                    <Volume1 size={16} />
                   {/if}
                 </button>
               </div>
@@ -1207,13 +1181,11 @@
               onclick={() => showSubtitleMenu = !showSubtitleMenu}
               disabled={isGeneratingSubtitles}
             >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="2" y="7" width="20" height="10" rx="2" ry="2"></rect>
-                <line x1="6" y1="11" x2="6.01" y2="11"></line>
-                <line x1="10" y1="11" x2="14" y2="11"></line>
-                <line x1="6" y1="15" x2="10" y2="15"></line>
-                <line x1="14" y1="15" x2="18" y2="15"></line>
-              </svg>
+              {#if subtitleSrc && subtitlesEnabled}
+                <Captions size={20} />
+              {:else}
+                <CaptionsOff size={20} />
+              {/if}
             </button>
 
             {#if showSubtitleMenu && !isGeneratingSubtitles}
@@ -1285,9 +1257,7 @@
           {/if}
           
           <button class="control-button" onclick={toggleCinematicMode} title="Toggle view mode (F)">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"></path>
-            </svg>
+            <Maximize size={20} />
           </button>
         </div>
       </div>
@@ -1302,10 +1272,7 @@
         <div class="settings-header">
           <h2>Settings</h2>
           <button class="settings-close" onclick={() => showSettings = false} title="Close">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"></line>
-              <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
+            <X size={20} />
           </button>
         </div>
         
@@ -1398,9 +1365,7 @@
               <div class="setup-item-header">
                 <div class="checkbox" class:checked={setupStatus.ffmpeg_installed}>
                   {#if setupStatus.ffmpeg_installed}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                      <polyline points="20 6 9 17 4 12"></polyline>
-                    </svg>
+                    <Check size={16} strokeWidth={3} />
                   {/if}
                 </div>
                 <div class="setup-item-info">
@@ -2065,7 +2030,6 @@
 
   .control-button.subtitle-active {
     opacity: 1;
-    color: #C065B6;
   }
 
   .time {
