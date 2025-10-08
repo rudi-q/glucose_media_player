@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { 
@@ -85,44 +85,60 @@
   let downloadMessage = $state("");
   let showSettings = $state(false);
 
-  onMount(() => {
-    // Listen for file open events from Rust
-    listen<string>("open-file", (event) => {
-      loadVideo(event.payload);
-      shouldLoadGallery = false; // Skip gallery when file is opened via association
-      // Mark file as processed
-      invoke("mark_file_processed").catch(console.error);
-    });
+onMount(() => {
+    let disposed = false;
+    const unsubs: UnlistenFn[] = [];
 
-    // Listen for drag and drop events
-    listen<string[]>("tauri://drag-drop", (event) => {
-      if (event.payload && event.payload.length > 0) {
-        loadVideo(event.payload[0]);
+    // Register Tauri event listeners and store unlisten fns
+    (async () => {
+      const results = await Promise.allSettled([
+        listen<string>("open-file", (event) => {
+          loadVideo(event.payload);
+          shouldLoadGallery = false; // Skip gallery when file is opened via association
+          // Mark file as processed
+          invoke("mark_file_processed").catch(console.error);
+        }),
+        listen<string[]>("tauri://drag-drop", (event) => {
+          if (event.payload && event.payload.length > 0) {
+            loadVideo(event.payload[0]);
+          }
+        }),
+        // Listen for subtitle generation progress
+        listen<{stage: string, progress: number, message: string}>("subtitle-generation-progress", (event) => {
+          generationProgress = event.payload.progress;
+          generationMessage = event.payload.message;
+
+          if (event.payload.stage === "complete") {
+            setTimeout(() => {
+              isGeneratingSubtitles = false;
+              generationProgress = 0;
+              generationMessage = "";
+            }, 2000);
+          } else if (event.payload.stage === "error") {
+            isGeneratingSubtitles = false;
+          }
+        }),
+        // Listen for download progress
+        listen<{downloaded: number, total: number, percentage: number, message: string}>("download-progress", (event) => {
+          downloadProgress = event.payload.percentage;
+          downloadMessage = event.payload.message;
+        }),
+      ]);
+
+      for (const r of results) {
+        if (r.status === "fulfilled") {
+          const un = r.value;
+          if (disposed) {
+            try { un(); } catch (e) { console.error("Unlisten failed", e); }
+          } else {
+            unsubs.push(un);
+          }
+        } else {
+          console.error("Failed to register Tauri listener:", r.reason);
+        }
       }
-    });
-    
-    // Listen for subtitle generation progress
-    listen<{stage: string, progress: number, message: string}>("subtitle-generation-progress", (event) => {
-      generationProgress = event.payload.progress;
-      generationMessage = event.payload.message;
-      
-      if (event.payload.stage === "complete") {
-        setTimeout(() => {
-          isGeneratingSubtitles = false;
-          generationProgress = 0;
-          generationMessage = "";
-        }, 2000);
-      } else if (event.payload.stage === "error") {
-        isGeneratingSubtitles = false;
-      }
-    });
-    
-    // Listen for download progress
-    listen<{downloaded: number, total: number, percentage: number, message: string}>("download-progress", (event) => {
-      downloadProgress = event.payload.percentage;
-      downloadMessage = event.payload.message;
-    });
-    
+    })();
+
     // Check setup status on first launch
     checkSetupStatus();
 
@@ -156,6 +172,11 @@
     invoke("frontend_ready").catch(console.error);
 
     return () => {
+      disposed = true;
+      // Unregister Tauri event listeners
+      for (const un of unsubs) {
+        try { un(); } catch (e) { console.error("Unlisten failed", e); }
+      }
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
     };
