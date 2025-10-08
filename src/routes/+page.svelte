@@ -83,6 +83,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   let showContextMenu = $state(false);
   let contextMenuPosition = $state({ x: 0, y: 0 });
   let showConvertSubmenu = $state(false);
+  let showGalleryContextMenu = $state(false);
+  let galleryContextMenuPosition = $state({ x: 0, y: 0 });
   let isConverting = $state(false);
   let conversionProgress = $state(0);
   let conversionMessage = $state("");
@@ -768,8 +770,22 @@ onMount(() => {
     if (showContextMenu && !target.closest('.context-menu')) {
       showContextMenu = false;
     }
+    // Close gallery context menu when clicking outside
+    if (showGalleryContextMenu && !target.closest('.context-menu')) {
+      showGalleryContextMenu = false;
+    }
   }
   
+  function handleGalleryContextMenu(e: MouseEvent) {
+    // Only show if clicking on gallery background, not on cards
+    const target = e.target as HTMLElement;
+    if (target.closest('.video-card')) return;
+    
+    e.preventDefault();
+    galleryContextMenuPosition = { x: e.clientX, y: e.clientY };
+    showGalleryContextMenu = true;
+  }
+
   async function handleContextMenu(e: MouseEvent) {
     if (!videoSrc) return; // Only show context menu when video is playing
     e.preventDefault();
@@ -893,6 +909,23 @@ onMount(() => {
   function formatDuration(seconds?: number): string {
     if (!seconds) return '';
     return formatTime(seconds);
+  }
+  
+  function getRemainingTime(videoPath: string, videoDuration?: number): string {
+    if (!videoDuration) return '';
+    
+    const progress = watchProgressMap.get(videoPath);
+    if (!progress || !progress.duration) {
+      // Not started yet, show full duration as "remaining"
+      const mins = Math.ceil(videoDuration / 60);
+      return `${mins} min${mins !== 1 ? 's' : ''} remaining`;
+    }
+    
+    const remaining = videoDuration - progress.current_time;
+    if (remaining <= 0) return 'Finished';
+    
+    const mins = Math.ceil(remaining / 60);
+    return `${mins} min${mins !== 1 ? 's' : ''} remaining`;
   }
   
   function formatEstimatedTime(seconds: number): string {
@@ -1215,7 +1248,8 @@ onMount(() => {
   </button>
   
   {#if !videoSrc}
-    <div class="empty-state" class:dragging={isDragging}>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="empty-state" class:dragging={isDragging} oncontextmenu={handleGalleryContextMenu}>
       <div class="library-container">
         <div class="library-header">
           <img src="/logo-dark.svg" alt="glucose" class="logo" />
@@ -1278,8 +1312,10 @@ onMount(() => {
                       {#if video.duration}
                         <span class="video-duration">{formatDuration(video.duration)}</span>
                         <span class="video-separator">•</span>
+                        <span class="video-remaining">{getRemainingTime(video.path, video.duration)}</span>
+                      {:else}
+                        <span>{(video.size / (1024 * 1024)).toFixed(1)} MB</span>
                       {/if}
-                      <span>{(video.size / (1024 * 1024)).toFixed(1)} MB</span>
                     </div>
                   </div>
                 </button>
@@ -1612,6 +1648,23 @@ onMount(() => {
         <button class="context-menu-item" onclick={() => { goHome(); showContextMenu = false; }}>
           <Home size={16} />
           <span>Back to Home</span>
+        </button>
+      </div>
+    {/if}
+    
+    <!-- Gallery Context Menu -->
+    {#if showGalleryContextMenu}
+      <div 
+        class="context-menu" 
+        style="left: {galleryContextMenuPosition.x}px; top: {galleryContextMenuPosition.y}px;"
+      >
+        <button class="context-menu-item" onclick={() => { openFileDialog(); showGalleryContextMenu = false; }}>
+          <FolderOpen size={16} />
+          <span>Open Video</span>
+        </button>
+        <button class="context-menu-item" onclick={() => { showSettings = true; showGalleryContextMenu = false; }}>
+          <Settings size={16} />
+          <span>Settings</span>
         </button>
       </div>
     {/if}
@@ -3224,6 +3277,7 @@ onMount(() => {
   .context-menu-item:hover {
     background: rgba(255, 255, 255, 0.1);
   }
+  
   
   .context-menu-item span {
     flex: 1;
