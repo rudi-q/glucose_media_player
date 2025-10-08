@@ -65,6 +65,7 @@
   let isDownloading = $state(false);
   let downloadProgress = $state(0);
   let downloadMessage = $state("");
+  let showSettings = $state(false);
 
   onMount(() => {
     // Listen for file open events from Rust
@@ -887,6 +888,13 @@
       <line x1="6" y1="6" x2="18" y2="18"></line>
     </svg>
   </button>
+  
+  <button class="settings-button" class:visible={showCloseButton} onclick={() => showSettings = true} title="Settings">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M12 1v6m0 6v10M1 12h6m6 0h10M4.22 4.22l4.24 4.24m5.08 5.08l4.24 4.24M4.22 19.78l4.24-4.24m5.08-5.08l4.24-4.24"></path>
+    </svg>
+  </button>
   {#if !videoSrc}
     <div class="empty-state" class:dragging={isDragging}>
       <div class="library-container">
@@ -1245,6 +1253,210 @@
     </div>
     </div>
   {/if}
+  
+  <!-- Settings Overlay -->
+  {#if showSettings}
+    <div class="settings-overlay" onclick={(e) => { if (e.target === e.currentTarget) showSettings = false; }}>
+      <div class="settings-modal">
+        <div class="settings-header">
+          <h2>Settings</h2>
+          <button class="settings-close" onclick={() => showSettings = false} title="Close">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="settings-content">
+          <!-- AI Settings Section -->
+          <div class="settings-section">
+            <h3>AI Settings</h3>
+            
+            {#if setupStatus}
+              <div class="settings-group">
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">AI Subtitle Generation</div>
+                    <div class="settings-item-desc">
+                      Automatically generate subtitles from video audio using Whisper AI
+                    </div>
+                  </div>
+                  <div class="settings-item-status">
+                    {#if setupStatus.models_installed.length > 0}
+                      <span class="status-badge active">Enabled</span>
+                    {:else}
+                      <span class="status-badge inactive">Not Set Up</span>
+                    {/if}
+                  </div>
+                </div>
+                
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">FFmpeg</div>
+                    <div class="settings-item-desc">Required for audio extraction from videos</div>
+                  </div>
+                  <div class="settings-item-status">
+                    {#if setupStatus.ffmpeg_installed}
+                      <span class="status-badge active">✓ Installed</span>
+                    {:else}
+                      <span class="status-badge inactive">✗ Not Installed</span>
+                    {/if}
+                  </div>
+                </div>
+                
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">AI Models</div>
+                    <div class="settings-item-desc">
+                      {#if setupStatus.models_installed.length > 0}
+                        Installed: {setupStatus.models_installed.join(', ')}
+                      {:else}
+                        No models installed
+                      {/if}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="settings-actions">
+                <button 
+                  class="settings-action-button"
+                  onclick={() => { showSettings = false; showSetupDialog = true; }}
+                >
+                  {#if setupStatus.models_installed.length > 0}
+                    Download More Models
+                  {:else}
+                    Run Setup Wizard
+                  {/if}
+                </button>
+              </div>
+            {/if}
+          </div>
+        </div>
+      </div>
+    </div>
+  {/if}
+  
+  <!-- First-Run Setup Dialog -->
+  {#if showSetupDialog}
+    <div class="setup-overlay">
+      <div class="setup-modal">
+        <h2>Enable AI Subtitle Generation?</h2>
+        <p class="setup-description">
+          Automatically generate subtitles from video audio using AI.
+          This feature requires downloading additional components.
+        </p>
+        
+        {#if setupStatus}
+          <div class="setup-checklist">
+            <h3>Requirements</h3>
+            
+            <!-- FFmpeg -->
+            <div class="setup-item">
+              <div class="setup-item-header">
+                <div class="checkbox" class:checked={setupStatus.ffmpeg_installed}>
+                  {#if setupStatus.ffmpeg_installed}
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                  {/if}
+                </div>
+                <div class="setup-item-info">
+                  <div class="setup-item-title">FFmpeg (Required)</div>
+                  <div class="setup-item-desc">
+                    {#if setupStatus.ffmpeg_installed}
+                      ✓ Already installed
+                    {:else}
+                      ❌ Not installed - Please install FFmpeg manually
+                    {/if}
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- AI Model Selection -->
+            <div class="setup-item">
+              <div class="setup-item-header">
+                <div class="setup-item-info full-width">
+                  <div class="setup-item-title">AI Model (Choose one)</div>
+                  <div class="model-choices">
+                    <label class="model-radio">
+                      <input 
+                        type="radio" 
+                        name="model" 
+                        value="tiny" 
+                        bind:group={selectedModelForSetup}
+                        disabled={isDownloading}
+                      />
+                      <div class="radio-content">
+                        <span class="radio-title">Lite Model</span>
+                        <span class="radio-desc">75 MB • Fastest • Good accuracy</span>
+                      </div>
+                    </label>
+                    
+                    <label class="model-radio">
+                      <input 
+                        type="radio" 
+                        name="model" 
+                        value="small" 
+                        bind:group={selectedModelForSetup}
+                        disabled={isDownloading}
+                      />
+                      <div class="radio-content">
+                        <span class="radio-title">Optimal Model</span>
+                        <span class="radio-desc">466 MB • Balanced • Very good accuracy</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          {#if isDownloading}
+            <div class="download-progress">
+              <div class="progress-track">
+                <div class="progress-fill" style="width: {downloadProgress}%"></div>
+              </div>
+              <div class="download-status">
+                <span>{downloadMessage}</span>
+                <span>{Math.round(downloadProgress)}%</span>
+              </div>
+            </div>
+          {/if}
+          
+          <div class="setup-actions">
+            <button 
+              class="setup-button secondary" 
+              onclick={skipSetup}
+              disabled={isDownloading}
+            >
+              Maybe Later
+            </button>
+            <button 
+              class="setup-button primary" 
+              onclick={runSetup}
+              disabled={isDownloading || !setupStatus.ffmpeg_installed}
+            >
+              {#if isDownloading}
+                Downloading...
+              {:else}
+                Download & Enable
+              {/if}
+            </button>
+          </div>
+          
+          {#if !setupStatus.ffmpeg_installed}
+            <div class="setup-warning">
+              ⚠️ FFmpeg must be installed first. 
+              <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener">Download FFmpeg</a>
+            </div>
+          {/if}
+        {/if}
+      </div>
+    </div>
+  {/if}
 </main>
 
 <style>
@@ -1301,6 +1513,40 @@
 
   .close-button:hover {
     background: rgba(255, 0, 0, 0.8);
+    border-color: rgba(255, 255, 255, 0.3);
+    color: #fff;
+    transform: scale(1.1);
+  }
+  
+  .settings-button {
+    position: fixed;
+    top: 1.5rem;
+    right: 6rem;
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 50%;
+    color: rgba(255, 255, 255, 0.7);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    z-index: 100;
+    opacity: 0;
+    pointer-events: none;
+  }
+  
+  .settings-button.visible {
+    opacity: 1;
+    pointer-events: all;
+  }
+  
+  .settings-button:hover {
+    background: rgba(192, 101, 182, 0.8);
     border-color: rgba(255, 255, 255, 0.3);
     color: #fff;
     transform: scale(1.1);
@@ -2106,5 +2352,415 @@
     color: rgba(255, 255, 255, 0.7);
     line-height: 1.5;
     margin: 0;
+  }
+  
+  /* Settings Overlay Styles */
+  .settings-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.9);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1500;
+    animation: fadeIn 0.3s ease;
+  }
+  
+  .settings-modal {
+    background: rgba(20, 20, 20, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    width: 90%;
+    max-width: 700px;
+    max-height: 80vh;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+    animation: slideUp 0.3s ease;
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2rem 2.5rem 1.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  
+  .settings-header h2 {
+    font-size: 1.75rem;
+    font-weight: 600;
+    margin: 0;
+    color: #fff;
+  }
+  
+  .settings-close {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 50%;
+    color: rgba(255, 255, 255, 0.7);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  
+  .settings-close:hover {
+    background: rgba(255, 0, 0, 0.2);
+    border-color: rgba(255, 0, 0, 0.3);
+    color: #ff5555;
+    transform: scale(1.1);
+  }
+  
+  .settings-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 2rem 2.5rem;
+  }
+  
+  .settings-section {
+    margin-bottom: 2rem;
+  }
+  
+  .settings-section:last-child {
+    margin-bottom: 0;
+  }
+  
+  .settings-section h3 {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: #fff;
+    margin: 0 0 1.5rem 0;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  
+  .settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  
+  .settings-item {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    gap: 1rem;
+  }
+  
+  .settings-item-label {
+    flex: 1;
+  }
+  
+  .settings-item-title {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 0.25rem;
+  }
+  
+  .settings-item-desc {
+    font-size: 0.8125rem;
+    color: rgba(255, 255, 255, 0.6);
+    line-height: 1.4;
+  }
+  
+  .settings-item-status {
+    display: flex;
+    align-items: center;
+  }
+  
+  .status-badge {
+    padding: 0.375rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  
+  .status-badge.active {
+    background: rgba(192, 101, 182, 0.2);
+    color: #C065B6;
+    border: 1px solid rgba(192, 101, 182, 0.3);
+  }
+  
+  .status-badge.inactive {
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .settings-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+  }
+  
+  .settings-action-button {
+    padding: 0.75rem 1.5rem;
+    background: linear-gradient(135deg, #C065B6, #8C77FF);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  
+  .settings-action-button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(192, 101, 182, 0.4);
+  }
+  
+  /* Setup Dialog Styles */
+  .setup-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.9);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    animation: fadeIn 0.3s ease;
+  }
+  
+  .setup-modal {
+    background: rgba(20, 20, 20, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 2.5rem;
+    min-width: 500px;
+    max-width: 600px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+    animation: slideUp 0.3s ease;
+  }
+  
+  .setup-modal h2 {
+    font-size: 1.75rem;
+    font-weight: 600;
+    margin: 0 0 1rem 0;
+    color: #fff;
+  }
+  
+  .setup-description {
+    font-size: 0.9375rem;
+    color: rgba(255, 255, 255, 0.7);
+    line-height: 1.6;
+    margin: 0 0 2rem 0;
+  }
+  
+  .setup-checklist {
+    margin-bottom: 2rem;
+  }
+  
+  .setup-checklist h3 {
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.6);
+    margin: 0 0 1rem 0;
+  }
+  
+  .setup-item {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+  }
+  
+  .setup-item-header {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+  
+  .checkbox {
+    width: 24px;
+    height: 24px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  
+  .checkbox.checked {
+    background: #C065B6;
+    border-color: #C065B6;
+  }
+  
+  .setup-item-info {
+    flex: 1;
+  }
+  
+  .setup-item-info.full-width {
+    width: 100%;
+  }
+  
+  .setup-item-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 0.25rem;
+  }
+  
+  .setup-item-desc {
+    font-size: 0.875rem;
+    color: rgba(255, 255, 255, 0.6);
+  }
+  
+  .model-choices {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+  
+  .model-radio {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    background: rgba(255, 255, 255, 0.02);
+  }
+  
+  .model-radio:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  
+  .model-radio input[type="radio"] {
+    margin-top: 2px;
+    cursor: pointer;
+  }
+  
+  .model-radio input[type="radio"]:checked + .radio-content {
+    color: #fff;
+  }
+  
+  .model-radio input[type="radio"]:checked + .radio-content .radio-title {
+    color: #C065B6;
+  }
+  
+  .radio-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  
+  .radio-title {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+  }
+  
+  .radio-desc {
+    font-size: 0.8125rem;
+    color: rgba(255, 255, 255, 0.6);
+  }
+  
+  .download-progress {
+    margin: 1.5rem 0;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+  }
+  
+  .download-status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.875rem;
+    color: rgba(255, 255, 255, 0.8);
+    margin-top: 0.5rem;
+  }
+  
+  .setup-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+  }
+  
+  .setup-button {
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border: none;
+  }
+  
+  .setup-button.secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.9);
+  }
+  
+  .setup-button.secondary:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.15);
+  }
+  
+  .setup-button.primary {
+    background: linear-gradient(135deg, #C065B6, #8C77FF);
+    color: #fff;
+  }
+  
+  .setup-button.primary:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(192, 101, 182, 0.4);
+  }
+  
+  .setup-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  
+  .setup-warning {
+    margin-top: 1rem;
+    padding: 0.75rem 1rem;
+    background: rgba(255, 171, 151, 0.1);
+    border: 1px solid rgba(255, 171, 151, 0.3);
+    border-radius: 6px;
+    font-size: 0.875rem;
+    color: rgba(255, 255, 255, 0.9);
+    text-align: center;
+  }
+  
+  .setup-warning a {
+    color: #FFAB97;
+    text-decoration: underline;
+  }
+  
+  .setup-warning a:hover {
+    color: #FF6362;
   }
 </style>
