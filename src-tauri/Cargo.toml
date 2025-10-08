@@ -1,6 +1,6 @@
 [package]
 name = "glucose"
-version = "0.3.1"
+version = "2.2.0"
 description = "A minimalist video player"
 edition = "2021"
 
@@ -26,4 +26,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
 urlencoding = "2"
+whisper-rs = "0.12"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["stream"] }
+futures-util = "0.3"
 

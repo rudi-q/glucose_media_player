@@ -1,8 +1,24 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
+  import { 
+    X, 
+    Settings, 
+    FolderOpen, 
+    Play, 
+    Pause, 
+    Home, 
+    VolumeX, 
+    Volume1, 
+    Volume2, 
+    Captions, 
+    CaptionsOff, 
+    Maximize, 
+    Check,
+    Loader2
+  } from "lucide-svelte";
 
   let videoElement = $state<HTMLVideoElement>();
   let backgroundVideo = $state<HTMLVideoElement>();
@@ -13,6 +29,7 @@
   let currentTime = $state(0);
   let duration = $state(0);
   let volume = $state(1);
+  let isMuted = $state(false);
   let showControls = $state(false);
   let hideControlsTimeout: number;
   let isDragging = $state(false);
@@ -30,11 +47,21 @@
     name: string;
     size: number;
     modified: number;
+    duration?: number;
+  }
+  
+  interface WatchProgress {
+    path: string;
+    current_time: number;
+    duration: number;
+    last_watched: number;
   }
   
   let recentVideos = $state<VideoFile[]>([]);
   let loadingRecent = $state(true);
   let thumbnailCache = $state<Map<string, string>>(new Map());
+  let watchProgressMap = $state<Map<string, WatchProgress>>(new Map());
+  let progressSaveInterval: number;
   
   let audioDevices = $state<MediaDeviceInfo[]>([]);
   let selectedAudioDevice = $state<string>('default');
@@ -46,22 +73,115 @@
   let subtitleSrc = $state<string | null>(null);
   let subtitlesEnabled = $state(true);
   let trackElement = $state<HTMLTrackElement>();
+  let isGeneratingSubtitles = $state(false);
+  let generationProgress = $state(0);
+  let generationMessage = $state("");
+  let showModelSelector = $state(false);
+  let showSubtitleMenu = $state(false);
+  let currentVideoPath = $state<string | null>(null);
+  let subtitleFileName = $state<string | null>(null);
+  let showContextMenu = $state(false);
+  let contextMenuPosition = $state({ x: 0, y: 0 });
+  let showConvertSubmenu = $state(false);
+  let showGalleryContextMenu = $state(false);
+  let galleryContextMenuPosition = $state({ x: 0, y: 0 });
+  let isConverting = $state(false);
+  let conversionProgress = $state(0);
+  let conversionMessage = $state("");
+  
+  interface VideoInfo {
+    format: string;
+    size_mb: number;
+  }
+  
+  let currentVideoInfo = $state<VideoInfo | null>(null);
+  
+  // Setup state
+  interface SetupStatus {
+    ffmpeg_installed: boolean;
+    models_installed: string[];
+    setup_completed: boolean;
+  }
+  
+  let showSetupDialog = $state(false);
+  let setupStatus = $state<SetupStatus | null>(null);
+  let selectedModelForSetup = $state<string>("tiny"); // "tiny" or "small"
+  let isDownloading = $state(false);
+  let downloadProgress = $state(0);
+  let downloadMessage = $state("");
+  let showSettings = $state(false);
 
-  onMount(() => {
-    // Listen for file open events from Rust
-    listen<string>("open-file", (event) => {
-      loadVideo(event.payload);
-      shouldLoadGallery = false; // Skip gallery when file is opened via association
-      // Mark file as processed
-      invoke("mark_file_processed").catch(console.error);
-    });
+onMount(() => {
+    let disposed = false;
+    const unsubs: UnlistenFn[] = [];
 
-    // Listen for drag and drop events
-    listen<string[]>("tauri://drag-drop", (event) => {
-      if (event.payload && event.payload.length > 0) {
-        loadVideo(event.payload[0]);
+    // Register Tauri event listeners and store unlisten fns
+    (async () => {
+      const results = await Promise.allSettled([
+        listen<string>("open-file", (event) => {
+          loadVideo(event.payload);
+          shouldLoadGallery = false; // Skip gallery when file is opened via association
+          // Mark file as processed
+          invoke("mark_file_processed").catch(console.error);
+        }),
+        listen<string[]>("tauri://drag-drop", (event) => {
+          if (event.payload && event.payload.length > 0) {
+            loadVideo(event.payload[0]);
+          }
+        }),
+        // Listen for subtitle generation progress
+        listen<{stage: string, progress: number, message: string}>("subtitle-generation-progress", (event) => {
+          generationProgress = event.payload.progress;
+          generationMessage = event.payload.message;
+
+          if (event.payload.stage === "complete") {
+            setTimeout(() => {
+              isGeneratingSubtitles = false;
+              generationProgress = 0;
+              generationMessage = "";
+            }, 2000);
+          } else if (event.payload.stage === "error") {
+            isGeneratingSubtitles = false;
+          }
+        }),
+        // Listen for download progress
+        listen<{downloaded: number, total: number, percentage: number, message: string}>("download-progress", (event) => {
+          downloadProgress = event.payload.percentage;
+          downloadMessage = event.payload.message;
+        }),
+        // Listen for conversion progress
+        listen<{stage: string, progress: number, message: string}>("conversion-progress", (event) => {
+          conversionProgress = event.payload.progress;
+          conversionMessage = event.payload.message;
+          
+          if (event.payload.stage === "complete") {
+            setTimeout(() => {
+              isConverting = false;
+              conversionProgress = 0;
+              conversionMessage = "";
+            }, 2000);
+          } else if (event.payload.stage === "error") {
+            isConverting = false;
+          }
+        }),
+      ]);
+
+      for (const r of results) {
+        if (r.status === "fulfilled") {
+          const un = r.value;
+          if (disposed) {
+            try { un(); } catch (e) { console.error("Unlisten failed", e); }
+          } else {
+            unsubs.push(un);
+          }
+        } else {
+          console.error("Failed to register Tauri listener:", r.reason);
+        }
       }
-    });
+    })();
+
+    // Check setup status on first launch
+    checkSetupStatus();
 
     // Keyboard shortcuts
     document.addEventListener("keydown", handleKeyPress);
@@ -79,6 +199,10 @@
         try {
           const videos = await invoke<VideoFile[]>("get_recent_videos");
           recentVideos = videos;
+          
+          // Load watch progress for all videos
+          const progressData = await invoke<Record<string, WatchProgress>>("get_all_watch_progress");
+          watchProgressMap = new Map(Object.entries(progressData));
         } catch (err) {
           console.error("Failed to load recent videos:", err);
         } finally {
@@ -93,6 +217,19 @@
     invoke("frontend_ready").catch(console.error);
 
     return () => {
+      disposed = true;
+      // Clear progress save interval
+      if (progressSaveInterval) {
+        clearInterval(progressSaveInterval);
+      }
+      // Save progress one last time before unmount
+      if (videoElement && currentVideoPath && duration > 0) {
+        saveWatchProgress();
+      }
+      // Unregister Tauri event listeners
+      for (const un of unsubs) {
+        try { un(); } catch (e) { console.error("Unlisten failed", e); }
+      }
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
     };
@@ -115,6 +252,14 @@
 
     // Video playback controls
     if (videoSrc) {
+      // Number keys 0-9 for scrubbing to specific percentages
+      if (e.key >= '0' && e.key <= '9') {
+        e.preventDefault();
+        const percentage = parseInt(e.key) * 0.1; // 0 = 0%, 1 = 10%, 2 = 20%, etc.
+        scrubToPercentage(percentage);
+        return;
+      }
+      
       switch (e.key) {
         case " ":
         case "k":
@@ -158,20 +303,24 @@
         case "ArrowLeft":
           e.preventDefault();
           selectedVideoIndex = Math.max(0, selectedVideoIndex - 1);
+          scrollSelectedVideoIntoView();
           break;
         case "ArrowRight":
           e.preventDefault();
           selectedVideoIndex = Math.min(recentVideos.length - 1, selectedVideoIndex + 1);
+          scrollSelectedVideoIntoView();
           break;
         case "ArrowUp":
           e.preventDefault();
           // Move up one row (assuming 4 columns grid)
           selectedVideoIndex = Math.max(0, selectedVideoIndex - 4);
+          scrollSelectedVideoIntoView();
           break;
         case "ArrowDown":
           e.preventDefault();
           // Move down one row
           selectedVideoIndex = Math.min(recentVideos.length - 1, selectedVideoIndex + 4);
+          scrollSelectedVideoIntoView();
           break;
         case "Enter":
         case " ":
@@ -182,6 +331,20 @@
           break;
       }
     }
+  }
+
+  function scrollSelectedVideoIntoView() {
+    // Wait a tick for the DOM to update
+    setTimeout(() => {
+      const selectedCard = document.querySelector('.video-card.selected');
+      if (selectedCard) {
+        selectedCard.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+          inline: 'nearest'
+        });
+      }
+    }, 0);
   }
 
   async function openFileDialog() {
@@ -198,9 +361,43 @@
     }
   }
 
+  async function saveWatchProgress() {
+    if (!currentVideoPath || !videoElement || duration <= 0) return;
+    
+    const currentTime = videoElement.currentTime;
+    const videoDuration = duration;
+    
+    try {
+      await invoke('save_watch_progress', {
+        videoPath: currentVideoPath,
+        currentTime: currentTime,
+        duration: videoDuration
+      });
+      
+      // Update local state immediately to reflect changes in UI
+      const timestamp = Date.now() / 1000;
+      watchProgressMap.set(currentVideoPath, {
+        path: currentVideoPath,
+        current_time: currentTime,
+        duration: videoDuration,
+        last_watched: timestamp
+      });
+      // Trigger reactivity by reassigning the map
+      watchProgressMap = watchProgressMap;
+    } catch (err) {
+      console.error('Failed to save watch progress:', err);
+    }
+  }
+
   async function loadVideo(path: string) {
+    // Save progress of previous video before loading new one
+    if (currentVideoPath && videoElement && duration > 0) {
+      await saveWatchProgress();
+    }
+    
     const src = convertFileSrc(path);
     videoSrc = src;
+    currentVideoPath = path;  // Store original path for subtitle generation
     
     // Reset subtitles when loading new video
     // Revoke blob URL to prevent memory leak
@@ -235,6 +432,8 @@
         console.log('=== LOADING SUBTITLE ===');
         console.log('Path:', path);
       }
+      // Record subtitle file name for UI display
+      subtitleFileName = (path.split(/[/\\\\]/).pop() || 'Subtitles');
       
       // Read the subtitle file content
       const { readTextFile } = await import('@tauri-apps/plugin-fs');
@@ -268,6 +467,7 @@
           URL.revokeObjectURL(subtitleSrc);
         }
         subtitleSrc = null;
+        subtitleFileName = null;
         subtitlesEnabled = false;
         return;
       } else {
@@ -288,6 +488,7 @@
           URL.revokeObjectURL(subtitleSrc);
         }
         subtitleSrc = null;
+        subtitleFileName = null;
         subtitlesEnabled = false;
         return;
       }
@@ -343,7 +544,17 @@
     }
   }
 
-  function goHome() {
+  async function goHome() {
+    // Save progress before going home
+    if (currentVideoPath && videoElement && duration > 0) {
+      await saveWatchProgress();
+    }
+    
+    // Clear progress save interval
+    if (progressSaveInterval) {
+      clearInterval(progressSaveInterval);
+    }
+    
     videoSrc = null;
     if (videoElement) {
       videoElement.pause();
@@ -352,6 +563,7 @@
       backgroundVideo.pause();
     }
     isPlaying = false;
+    currentVideoPath = null;
   }
 
   async function closeApp() {
@@ -403,9 +615,22 @@
     videoElement.currentTime += seconds;
   }
 
+  function scrubToPercentage(percentage: number) {
+    if (!videoElement || !duration) return;
+    const targetTime = duration * percentage;
+    
+    // Use fastSeek for instant frame updates if available
+    if ('fastSeek' in videoElement && typeof (videoElement as any).fastSeek === 'function') {
+      (videoElement as any).fastSeek(targetTime);
+    } else if (videoElement) {
+      videoElement.currentTime = targetTime;
+    }
+  }
+
   function toggleMute() {
     if (!videoElement) return;
-    videoElement.muted = !videoElement.muted;
+    isMuted = !isMuted;
+    videoElement.muted = isMuted;
   }
 
   function adjustVolume(delta: number) {
@@ -413,6 +638,11 @@
     const newVolume = Math.max(0, Math.min(1, volume + delta));
     volume = newVolume;
     videoElement.volume = newVolume;
+    // Unmute if currently muted and adjusting volume
+    if (isMuted) {
+      isMuted = false;
+      videoElement.muted = false;
+    }
   }
 
   function handleTrackLoad() {
@@ -539,14 +769,91 @@
 
   function handleClickOutside(e: MouseEvent) {
     const target = e.target as HTMLElement;
-    if (showAudioMenu && !target.closest('.audio-device-selector')) {
-      showAudioMenu = false;
-    }
     if (showVolumeMenu && !target.closest('.volume-control')) {
       showVolumeMenu = false;
     }
+    // Close unified subtitle menu only when clicking outside its container
+    if (showSubtitleMenu && !target.closest('.subtitle-control')) {
+      showSubtitleMenu = false;
+    }
+    // Keep model selector open when interaction happens on either AI button, unified subtitle control, or inside selector
+    if (showModelSelector && !(target.closest('.ai-subtitle-generator') || target.closest('.subtitle-control') || target.closest('.model-selector'))) {
+      showModelSelector = false;
+    }
+    // Close context menu when clicking outside
+    if (showContextMenu && !target.closest('.context-menu')) {
+      showContextMenu = false;
+    }
+    // Close gallery context menu when clicking outside
+    if (showGalleryContextMenu && !target.closest('.context-menu')) {
+      showGalleryContextMenu = false;
+    }
+  }
+  
+  function handleGalleryContextMenu(e: MouseEvent) {
+    // Only show if clicking on gallery background, not on cards
+    const target = e.target as HTMLElement;
+    if (target.closest('.video-card')) return;
+    
+    e.preventDefault();
+    galleryContextMenuPosition = { x: e.clientX, y: e.clientY };
+    showGalleryContextMenu = true;
   }
 
+  async function handleContextMenu(e: MouseEvent) {
+    if (!videoSrc) return; // Only show context menu when video is playing
+    e.preventDefault();
+    contextMenuPosition = { x: e.clientX, y: e.clientY };
+    showContextMenu = true;
+    showConvertSubmenu = false;
+    
+    // Load video info for conversion estimates
+    if (currentVideoPath) {
+      try {
+        currentVideoInfo = await invoke<VideoInfo>('get_video_info', { videoPath: currentVideoPath });
+      } catch (err) {
+        console.error('Failed to get video info:', err);
+      }
+    }
+  }
+  
+  function estimateConvertedSize(format: string): string {
+    if (!currentVideoInfo) return "~? MB";
+    
+    let ratio = 1.0;
+    switch (format) {
+      case 'mp4': ratio = 0.85; break;
+      case 'webm': ratio = 0.70; break;
+      case 'mkv': ratio = 0.90; break;
+    }
+    
+    const estimatedSize = currentVideoInfo.size_mb * ratio;
+    return `~${estimatedSize.toFixed(0)} MB`;
+  }
+  
+  async function startConversion(format: string) {
+    if (!currentVideoPath) return;
+    
+    showContextMenu = false;
+    isConverting = true;
+    conversionProgress = 0;
+    conversionMessage = `Starting conversion to ${format.toUpperCase()}...`;
+    
+    try {
+      const outputPath = await invoke<string>('convert_video', {
+        videoPath: currentVideoPath,
+        targetFormat: format
+      });
+      
+      console.log('Video converted successfully:', outputPath);
+    } catch (err) {
+      console.error('Failed to convert video:', err);
+      alert(`Conversion failed: ${err}`);
+      isConverting = false;
+      conversionProgress = 0;
+      conversionMessage = '';
+    }
+  }
   function handleTimeUpdate() {
     if (!videoElement) return;
     currentTime = videoElement.currentTime;
@@ -559,6 +866,31 @@
   function handleLoadedMetadata() {
     if (!videoElement) return;
     duration = videoElement.duration;
+    
+    // Try to restore watch progress
+    if (currentVideoPath) {
+      invoke<WatchProgress | null>('get_watch_progress', { videoPath: currentVideoPath })
+        .then(progress => {
+          if (progress && videoElement && progress.duration > 0) {
+            // Only restore if video was watched for more than 5% and less than 95%
+            const progressPercent = progress.current_time / progress.duration;
+            if (progressPercent > 0.05 && progressPercent < 0.95) {
+              videoElement.currentTime = progress.current_time;
+            }
+          }
+        })
+        .catch(err => console.error('Failed to load watch progress:', err));
+    }
+    
+    // Set up interval to save progress every 5 seconds
+    if (progressSaveInterval) {
+      clearInterval(progressSaveInterval);
+    }
+    progressSaveInterval = setInterval(() => {
+      if (videoElement && currentVideoPath && duration > 0) {
+        saveWatchProgress();
+      }
+    }, 5000);
     
     // Auto-play when video loads
     videoElement.play().catch(err => {
@@ -586,6 +918,59 @@
       return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     }
     return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+  
+  function formatDuration(seconds?: number): string {
+    if (!seconds) return '';
+    return formatTime(seconds);
+  }
+  
+  function getRemainingTime(videoPath: string, videoDuration?: number): string {
+    if (!videoDuration) return '';
+    
+    const progress = watchProgressMap.get(videoPath);
+    if (!progress || !progress.duration) {
+      // Not started yet, show full duration as "remaining"
+      const mins = Math.ceil(videoDuration / 60);
+      return `${mins} min${mins !== 1 ? 's' : ''} remaining`;
+    }
+    
+    const remaining = videoDuration - progress.current_time;
+    if (remaining <= 0) return 'Finished';
+    
+    const mins = Math.ceil(remaining / 60);
+    return `${mins} min${mins !== 1 ? 's' : ''} remaining`;
+  }
+  
+  function formatEstimatedTime(seconds: number): string {
+    if (seconds < 60) {
+      return `~${Math.round(seconds)}s`;
+    } else if (seconds < 3600) {
+      const mins = Math.round(seconds / 60);
+      return `~${mins}m`;
+    } else {
+      const hours = Math.floor(seconds / 3600);
+      const mins = Math.round((seconds % 3600) / 60);
+      return mins > 0 ? `~${hours}h ${mins}m` : `~${hours}h`;
+    }
+  }
+  
+  function getEstimatedTranscriptionTime(modelKey: string): string {
+    if (!duration) return 'Unknown';
+    
+    const coefficients: Record<string, { min: number; max: number }> = {
+      'tiny': { min: 0.15, max: 0.25 },
+      'small': { min: 0.6, max: 0.8 },
+      'large-v3-turbo': { min: 0.9, max: 1.2 }
+    };
+    
+    const coef = coefficients[modelKey];
+    if (!coef) return 'Unknown';
+    
+    const avgCoef = (coef.min + coef.max) / 2;
+    const estimatedSeconds = duration * avgCoef;
+    
+    return formatEstimatedTime(estimatedSeconds);
   }
 
   function handleDragOver(e: DragEvent) {
@@ -636,7 +1021,9 @@
       const devices = await navigator.mediaDevices.enumerateDevices();
       const outputDevices = devices.filter(device => device.kind === 'audiooutput');
       audioDevices = outputDevices;
-      console.log('Audio output devices found:', outputDevices);
+      if (import.meta.env.DEV) {
+        console.log('Audio output devices found:', outputDevices);
+      }
     } catch (err) {
       console.error('Failed to load audio devices:', err);
     }
@@ -651,7 +1038,9 @@
         await videoElement.setSinkId(deviceId);
         selectedAudioDevice = deviceId;
         showAudioMenu = false;
-        console.log('Audio output changed to:', deviceId);
+        if (import.meta.env.DEV) {
+          console.log('Audio output changed to:', deviceId);
+        }
       }
     } catch (err) {
       console.error('Failed to change audio output:', err);
@@ -718,6 +1107,145 @@
       video.src = convertFileSrc(videoPath);
     });
   }
+  
+  function toggleModelSelector() {
+    showModelSelector = !showModelSelector;
+  }
+  
+  function toggleSubtitleMenu() {
+    showSubtitleMenu = !showSubtitleMenu;
+    if (showSubtitleMenu) {
+      showModelSelector = false;
+    }
+  }
+  
+  function openAISubtitleSelector() {
+    showSubtitleMenu = false;
+    showModelSelector = true;
+  }
+  
+  function openAIFromUnifiedMenu() {
+    // Close the unified menu first, then open the model selector on next tick
+    showSubtitleMenu = false;
+    setTimeout(() => {
+      showModelSelector = true;
+    }, 0);
+  }
+  
+  async function startSubtitleGeneration(modelSize: string) {
+    if (!currentVideoPath) {
+      alert('No video loaded');
+      return;
+    }
+    
+    // Check if setup is complete
+    const status = await invoke<SetupStatus>('get_setup_status');
+    if (!status.setup_completed || status.models_installed.length === 0) {
+      // Show setup dialog
+      showSetupDialog = true;
+      return;
+    }
+    
+    showModelSelector = false;
+    isGeneratingSubtitles = true;
+    generationProgress = 0;
+    generationMessage = 'Starting subtitle generation...';
+    
+    try {
+      const subtitlePath = await invoke<string>('generate_subtitles', {
+        videoPath: currentVideoPath,
+        modelSize: modelSize
+      });
+      
+      // Auto-load the generated subtitle
+      await loadSubtitle(subtitlePath);
+    } catch (err) {
+      console.error('Failed to generate subtitles:', err);
+      alert(`Subtitle generation failed: ${err}`);
+      isGeneratingSubtitles = false;
+      generationProgress = 0;
+      generationMessage = '';
+    }
+  }
+  
+  async function checkSetupStatus() {
+    try {
+      const status = await invoke<SetupStatus>('get_setup_status');
+      setupStatus = status;
+      
+      // Show setup dialog on first launch if not completed
+      if (!status.setup_completed && status.models_installed.length === 0) {
+        // Small delay to not interrupt app startup
+        setTimeout(() => {
+          showSetupDialog = true;
+        }, 1500);
+      }
+    } catch (err) {
+      console.error('Failed to check setup status:', err);
+    }
+  }
+  
+  function toggleSetupDialog() {
+    showSetupDialog = !showSetupDialog;
+  }
+  
+  async function runSetup() {
+    if (!setupStatus) return;
+    
+    // Check if the selected model is already installed
+    const isModelInstalled = setupStatus.models_installed.includes(selectedModelForSetup);
+    
+    if (isModelInstalled) {
+      // Model already installed, just mark setup as complete
+      try {
+        await invoke('mark_setup_completed');
+        await checkSetupStatus();
+        showSetupDialog = false;
+      } catch (err) {
+        console.error('Failed to mark setup complete:', err);
+      }
+      return;
+    }
+    
+    isDownloading = true;
+    downloadProgress = 0;
+    downloadMessage = "Starting download...";
+    
+    try {
+      // Download the selected model
+      await invoke('download_whisper_model', {
+        modelSize: selectedModelForSetup
+      });
+      
+      // Mark setup as completed
+      await invoke('mark_setup_completed');
+      
+      // Refresh setup status
+      await checkSetupStatus();
+      
+      isDownloading = false;
+      downloadProgress = 100;
+      downloadMessage = "Download complete!";
+      
+      setTimeout(() => {
+        showSetupDialog = false;
+        downloadProgress = 0;
+        downloadMessage = "";
+      }, 2000);
+    } catch (err) {
+      console.error('Setup failed:', err);
+      alert(`Setup failed: ${err}`);
+      isDownloading = false;
+      downloadProgress = 0;
+      downloadMessage = "";
+    }
+  }
+  
+  function skipSetup() {
+    showSetupDialog = false;
+    // Mark setup as "completed" so we don't show the dialog again
+    invoke('mark_setup_completed').catch(console.error);
+  }
 </script>
 
 <main 
@@ -728,31 +1256,32 @@
   onmousemove={handleMainContainerMouseMove}
 >
   <button class="close-button" class:visible={showCloseButton} onclick={closeApp} title="Close (Esc)">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <line x1="18" y1="6" x2="6" y2="18"></line>
-      <line x1="6" y1="6" x2="18" y2="18"></line>
-    </svg>
+    <X size={16} />
   </button>
+  
   {#if !videoSrc}
-    <div class="empty-state" class:dragging={isDragging}>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="empty-state" class:dragging={isDragging} oncontextmenu={handleGalleryContextMenu}>
       <div class="library-container">
         <div class="library-header">
           <img src="/logo-dark.svg" alt="glucose" class="logo" />
-          <button class="open-button" onclick={openFileDialog}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
-            </svg>
-            Open Video
-          </button>
+          <div class="header-buttons">
+            <button class="open-button" onclick={openFileDialog}>
+              <FolderOpen size={18} />
+              Open Video
+            </button>
+            <button class="open-button" onclick={() => showSettings = true}>
+              <Settings size={18} />
+              Settings
+            </button>
+          </div>
         </div>
         
         {#if loadingRecent}
           <div class="loading">Scanning for videos...</div>
         {:else if recentVideos.length === 0}
           <div class="empty-content">
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <polygon points="5 3 19 12 5 21 5 3"></polygon>
-            </svg>
+            <Play size={64} strokeWidth={1.5} />
             <p>No recent videos found</p>
             <p class="hint">Drop a video file or click Open Video above</p>
           </div>
@@ -768,28 +1297,37 @@
                 >
                   <div class="video-thumbnail">
                     {#await generateThumbnail(video.path)}
-                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                      </svg>
+                      <Play size={48} strokeWidth={1.5} />
                     {:then thumbnail}
                       {#if thumbnail}
                         <img src={thumbnail} alt={video.name} class="thumbnail-img" />
                       {:else}
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                          <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                        </svg>
+                        <Play size={48} strokeWidth={1.5} />
                       {/if}
                     {/await}
                     <div class="play-overlay">
-                      <svg width="32" height="32" viewBox="0 0 24 24" fill="white" stroke="none">
-                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                      </svg>
+                      <Play size={32} fill="white" stroke="none" />
                     </div>
+                    {#if watchProgressMap.has(video.path)}
+                      {@const progress = watchProgressMap.get(video.path)}
+                      {@const progressPercent = progress && progress.duration > 0 ? (progress.current_time / progress.duration) * 100 : 0}
+                      {#if progressPercent > 0 && progressPercent < 100}
+                        <div class="video-progress-bar">
+                          <div class="video-progress-fill" style="width: {progressPercent}%"></div>
+                        </div>
+                      {/if}
+                    {/if}
                   </div>
                   <div class="video-info">
                     <div class="video-name" title={video.name}>{video.name}</div>
                     <div class="video-meta">
-                      {(video.size / (1024 * 1024)).toFixed(1)} MB
+                      {#if video.duration}
+                        <span class="video-duration">{formatDuration(video.duration)}</span>
+                        <span class="video-separator">•</span>
+                        <span class="video-remaining">{getRemainingTime(video.path, video.duration)}</span>
+                      {:else}
+                        <span>{(video.size / (1024 * 1024)).toFixed(1)} MB</span>
+                      {/if}
                     </div>
                   </div>
                 </button>
@@ -824,6 +1362,7 @@
         ontimeupdate={handleTimeUpdate}
         onloadedmetadata={handleLoadedMetadata}
         onclick={togglePlay}
+        oncontextmenu={handleContextMenu}
         crossorigin="anonymous"
       >
         {#if subtitleSrc}
@@ -839,6 +1378,25 @@
         {/if}
       </video>
     </div>
+    
+    <!-- AI Subtitle Generation Progress Overlay -->
+    {#if isGeneratingSubtitles}
+      <div class="generation-overlay">
+        <div class="generation-modal">
+          <div class="generation-icon">
+            <Loader2 size={48} strokeWidth={2} class="spinner" />
+          </div>
+          <h3>Generating AI Subtitles</h3>
+          <div class="progress-container">
+            <div class="progress-track">
+              <div class="progress-fill" style="width: {generationProgress}%"></div>
+            </div>
+            <div class="progress-percentage">{Math.round(generationProgress)}%</div>
+          </div>
+          <p class="generation-message">{generationMessage}</p>
+        </div>
+      </div>
+    {/if}
 
     <!-- Hidden preview video for generating thumbnails -->
     <!-- svelte-ignore a11y_media_has_caption -->
@@ -890,10 +1448,7 @@
       <div class="controls-row">
         <div class="controls-left">
           <button class="control-button" onclick={goHome} title="Home">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"></path>
-              <polyline points="9 22 9 12 15 12 15 22"></polyline>
-            </svg>
+            <Home size={20} />
           </button>
           <div class="time">
             {formatTime(currentTime)} / {formatTime(duration)}
@@ -903,14 +1458,9 @@
         <div class="controls-center">
           <button class="control-button" onclick={togglePlay}>
             {#if isPlaying}
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="6" y="4" width="4" height="16"></rect>
-                <rect x="14" y="4" width="4" height="16"></rect>
-              </svg>
+              <Pause size={24} fill="currentColor" />
             {:else}
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                <polygon points="5 3 19 12 5 21 5 3"></polygon>
-              </svg>
+              <Play size={24} fill="currentColor" />
             {/if}
           </button>
         </div>
@@ -918,22 +1468,12 @@
         <div class="controls-right">
           <div class="volume-control">
             <button class="control-button" onclick={toggleVolumeMenu} title="Volume">
-              {#if videoElement?.muted || volume === 0}
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                  <line x1="23" y1="9" x2="17" y2="15"></line>
-                  <line x1="17" y1="9" x2="23" y2="15"></line>
-                </svg>
+              {#if isMuted}
+                <VolumeX size={20} />
               {:else if volume < 0.5}
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                  <path d="M15.54 8.46a5 5 0 010 7.07"></path>
-                </svg>
+                <Volume1 size={20} />
               {:else}
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                  <path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"></path>
-                </svg>
+                <Volume2 size={20} />
               {/if}
             </button>
             {#if showVolumeMenu}
@@ -947,85 +1487,449 @@
                   aria-label="Volume"
                   aria-orientation="vertical"
                   bind:value={volume}
-                  oninput={(e) => { if (videoElement) { videoElement.volume = (e.target as HTMLInputElement).valueAsNumber; if (videoElement.muted) videoElement.muted = false; } }}
+                  oninput={(e) => { if (videoElement) { videoElement.volume = (e.target as HTMLInputElement).valueAsNumber; if (isMuted) { isMuted = false; videoElement.muted = false; } } }}
                 />
-                <button class="mute-toggle" onclick={toggleMute} class:muted={videoElement?.muted}>
-                  {#if videoElement?.muted}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                      <line x1="23" y1="9" x2="17" y2="15"></line>
-                      <line x1="17" y1="9" x2="23" y2="15"></line>
-                    </svg>
+                <button class="mute-toggle" onclick={toggleMute} class:muted={isMuted}>
+                  {#if isMuted}
+                    <VolumeX size={16} />
                   {:else}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                    </svg>
+                    <Volume2 size={16} />
                   {/if}
                 </button>
               </div>
             {/if}
           </div>
           
-          {#if audioDevices.length > 0}
-            <div class="audio-device-selector">
-              <button class="control-button" onclick={toggleAudioMenu} title="Audio output device">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="2"></circle>
-                  <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"></path>
-                </svg>
-              </button>
-              {#if showAudioMenu}
-                <div class="audio-menu">
-                  {#each audioDevices as device}
-                    <button 
-                      class="audio-option" 
-                      class:selected={selectedAudioDevice === device.deviceId}
-                      onclick={() => changeAudioOutput(device.deviceId)}
-                    >
-                      {device.label || `Device ${device.deviceId.slice(0, 8)}`}
+          <!-- Consolidated Subtitles Menu (additive) -->
+          <div 
+            class="subtitle-control"
+          >
+            <button 
+              class="control-button" 
+              class:subtitle-active={subtitleSrc && subtitlesEnabled}
+              class:generating={isGeneratingSubtitles}
+              title="Subtitles"
+              onclick={() => showSubtitleMenu = !showSubtitleMenu}
+              disabled={isGeneratingSubtitles}
+            >
+              {#if subtitleSrc && subtitlesEnabled}
+                <Captions size={20} />
+              {:else}
+                <CaptionsOff size={20} />
+              {/if}
+            </button>
+
+            {#if showSubtitleMenu && !isGeneratingSubtitles}
+              <div class="subtitle-menu">
+                <div class="model-header">Subtitles</div>
+                <button class="model-option" onclick={() => { showSubtitleMenu = false; openSubtitleDialog(); }}>
+                  <span class="model-name">Import subtitle from device</span>
+                  <span class="model-desc">Open .srt, .vtt or compatible file</span>
+                </button>
+                <button class="model-option" onclick={openAIFromUnifiedMenu}>
+                  <span class="model-name">Generate with AI</span>
+                  <span class="model-desc">Auto-generate using Whisper AI</span>
+                </button>
+                {#if subtitleFileName}
+                  <div class="subtitle-menu-divider"></div>
+                  <button class="model-option" onclick={toggleSubtitles}>
+                    <span class="model-name">{subtitleFileName}</span>
+                    <span class="model-desc">{subtitlesEnabled ? 'Hide' : 'Show'} subtitles</span>
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          </div>
+          
+          <!-- Model selector anchored to unified subtitle control -->
+          {#if showModelSelector && !isGeneratingSubtitles}
+            <div class="model-selector">
+              <div class="model-header">Select AI Model</div>
+              {#if setupStatus && setupStatus.models_installed.length > 0}
+                {#each setupStatus.models_installed as model}
+                  {#if model === 'tiny'}
+                    <button class="model-option" onclick={() => startSubtitleGeneration('tiny')}>
+                      <span class="model-name">Tiny</span>
+                      <span class="model-desc">{getEstimatedTranscriptionTime('tiny')} • Fastest</span>
                     </button>
-                  {/each}
+                  {:else if model === 'small'}
+                    <button class="model-option" onclick={() => startSubtitleGeneration('small')}>
+                      <span class="model-name">Small</span>
+                      <span class="model-desc">{getEstimatedTranscriptionTime('small')} • Balanced</span>
+                    </button>
+                  {:else if model === 'large-v3-turbo'}
+                    <button class="model-option" onclick={() => startSubtitleGeneration('large-v3-turbo')}>
+                      <span class="model-name">Large V3 Turbo</span>
+                      <span class="model-desc">{getEstimatedTranscriptionTime('large-v3-turbo')} • Most Accurate</span>
+                    </button>
+                  {/if}
+                {/each}
+              {:else}
+                <div class="no-models-message">
+                  No AI models installed. Open Settings to download models.
                 </div>
               {/if}
             </div>
           {/if}
-          <button class="control-button" onclick={openSubtitleDialog} title="Load subtitles">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="2" y="7" width="20" height="10" rx="2" ry="2"></rect>
-              <line x1="6" y1="11" x2="6.01" y2="11"></line>
-              <line x1="10" y1="11" x2="14" y2="11"></line>
-              <line x1="6" y1="15" x2="10" y2="15"></line>
-              <line x1="14" y1="15" x2="18" y2="15"></line>
-            </svg>
-          </button>
-          {#if subtitleSrc}
-            <button 
-              class="control-button" 
-              class:subtitle-active={subtitlesEnabled}
-              onclick={toggleSubtitles} 
-              title="Toggle subtitles (C/S)"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"></path>
-                {#if !subtitlesEnabled}
-                  <line x1="3" y1="3" x2="21" y2="21"></line>
-                {/if}
-              </svg>
-            </button>
-          {/if}
-          <button class="control-button" onclick={openFileDialog} title="Open file (O)">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
-            </svg>
-          </button>
+          
           <button class="control-button" onclick={toggleCinematicMode} title="Toggle view mode (F)">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"></path>
-            </svg>
+            <Maximize size={20} />
           </button>
         </div>
       </div>
     </div>
+    </div>
+    
+    <!-- Custom Context Menu -->
+    {#if showContextMenu}
+      <div 
+        class="context-menu" 
+        style="left: {contextMenuPosition.x}px; top: {contextMenuPosition.y}px;"
+      >
+        <button class="context-menu-item" onclick={() => { togglePlay(); showContextMenu = false; }}>
+          {#if isPlaying}
+            <Pause size={16} />
+            <span>Pause</span>
+          {:else}
+            <Play size={16} />
+            <span>Play</span>
+          {/if}
+        </button>
+        <button class="context-menu-item" onclick={() => { toggleMute(); showContextMenu = false; }}>
+          {#if isMuted}
+            <Volume2 size={16} />
+            <span>Unmute</span>
+          {:else}
+            <VolumeX size={16} />
+            <span>Mute</span>
+          {/if}
+        </button>
+        <div class="context-menu-divider"></div>
+        <button class="context-menu-item" onclick={() => { toggleCinematicMode(); showContextMenu = false; }}>
+          <Maximize size={16} />
+          <span>{isCinematicMode ? 'Fullscreen Mode' : 'Cinematic Mode'}</span>
+        </button>
+        {#if subtitleSrc}
+          <button class="context-menu-item" onclick={() => { toggleSubtitles(); showContextMenu = false; }}>
+            {#if subtitlesEnabled}
+              <CaptionsOff size={16} />
+              <span>Hide Subtitles</span>
+            {:else}
+              <Captions size={16} />
+              <span>Show Subtitles</span>
+            {/if}
+          </button>
+        {/if}
+        <div class="context-menu-divider"></div>
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <!-- svelte-ignore a11y_interactive_supports_focus -->
+        <div 
+          class="context-menu-item-wrapper" 
+          onmouseenter={() => showConvertSubmenu = true}
+          onmouseleave={() => showConvertSubmenu = false}
+          role="menuitem"
+          tabindex="0"
+        >
+          <div class="context-menu-item">
+            <Settings size={16} />
+            <span>Convert Video To</span>
+            <span style="margin-left: auto; font-size: 0.75rem;">›</span>
+          </div>
+          
+          {#if showConvertSubmenu}
+            <div class="context-submenu">
+              {#if currentVideoInfo && currentVideoInfo.format !== 'MP4'}
+                <button class="context-menu-item" onclick={() => startConversion('mp4')}>
+                  <span>MP4 {estimateConvertedSize('mp4')}</span>
+                </button>
+              {/if}
+              {#if currentVideoInfo && currentVideoInfo.format !== 'WEBM'}
+                <button class="context-menu-item" onclick={() => startConversion('webm')}>
+                  <span>WebM {estimateConvertedSize('webm')}</span>
+                </button>
+              {/if}
+              {#if currentVideoInfo && currentVideoInfo.format !== 'MKV'}
+                <button class="context-menu-item" onclick={() => startConversion('mkv')}>
+                  <span>MKV {estimateConvertedSize('mkv')}</span>
+                </button>
+              {/if}
+            </div>
+          {/if}
+        </div>
+        <div class="context-menu-divider"></div>
+        <button class="context-menu-item" onclick={() => { goHome(); showContextMenu = false; }}>
+          <Home size={16} />
+          <span>Back to Home</span>
+        </button>
+      </div>
+    {/if}
+    
+    <!-- Gallery Context Menu -->
+    {#if showGalleryContextMenu}
+      <div 
+        class="context-menu" 
+        style="left: {galleryContextMenuPosition.x}px; top: {galleryContextMenuPosition.y}px;"
+      >
+        <button class="context-menu-item" onclick={() => { openFileDialog(); showGalleryContextMenu = false; }}>
+          <FolderOpen size={16} />
+          <span>Open Video</span>
+        </button>
+        <button class="context-menu-item" onclick={() => { showSettings = true; showGalleryContextMenu = false; }}>
+          <Settings size={16} />
+          <span>Settings</span>
+        </button>
+      </div>
+    {/if}
+  {/if}
+  
+  <!-- Video Conversion Progress Overlay -->
+  {#if isConverting}
+    <div class="generation-overlay">
+      <div class="generation-modal">
+        <div class="generation-icon">
+          <Loader2 size={48} strokeWidth={2} class="spinner" />
+        </div>
+        <h3>Converting Video</h3>
+        <div class="progress-container">
+          <div class="progress-track">
+            <div class="progress-fill" style="width: {conversionProgress}%"></div>
+          </div>
+          <div class="progress-percentage">{Math.round(conversionProgress)}%</div>
+        </div>
+        <p class="generation-message">{conversionMessage}</p>
+      </div>
+    </div>
+  {/if}
+  
+  <!-- Settings Overlay -->
+  {#if showSettings}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="settings-overlay" onclick={(e) => { if (e.target === e.currentTarget) showSettings = false; }}>
+      <div class="settings-modal">
+        <div class="settings-header">
+          <h2>Settings</h2>
+          <button class="settings-close" onclick={() => showSettings = false} title="Close">
+            <X size={20} />
+          </button>
+        </div>
+        
+        <div class="settings-content">
+          <!-- AI Settings Section -->
+          <div class="settings-section">
+            <h3>AI Settings</h3>
+            
+            {#if setupStatus}
+              <div class="settings-group">
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">AI Subtitle Generation</div>
+                    <div class="settings-item-desc">
+                      Automatically generate subtitles from video audio using Whisper AI
+                    </div>
+                  </div>
+                  <div class="settings-item-status">
+                    {#if setupStatus.models_installed.length > 0}
+                      <span class="status-badge active">Enabled</span>
+                    {:else}
+                      <span class="status-badge inactive">Not Set Up</span>
+                    {/if}
+                  </div>
+                </div>
+                
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">FFmpeg</div>
+                    <div class="settings-item-desc">Required for audio extraction from videos</div>
+                  </div>
+                  <div class="settings-item-status">
+                    {#if setupStatus.ffmpeg_installed}
+                      <span class="status-badge active">✓ Installed</span>
+                    {:else}
+                      <span class="status-badge inactive">✗ Not Installed</span>
+                    {/if}
+                  </div>
+                </div>
+                
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="settings-item" onclick={() => { showSettings = false; showSetupDialog = true; }} style="cursor: pointer;" role="button" tabindex="0">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">AI Models</div>
+                    <div class="settings-item-desc">
+                      {#if setupStatus.models_installed.length > 0}
+                        {@const totalModels = 3}
+                        {@const installedCount = setupStatus.models_installed.length}
+                        {@const availableCount = totalModels - installedCount}
+                        {@const recommendedModel = setupStatus.models_installed.includes('tiny') ? 'Tiny' : setupStatus.models_installed.includes('small') ? 'Small' : setupStatus.models_installed.includes('large-v3-turbo') ? 'Large V3 Turbo' : setupStatus.models_installed[0]}
+                        {recommendedModel} model recommended{#if installedCount > 1}, {installedCount - 1} more installed{/if}{#if availableCount > 0}, {availableCount} more available{/if}
+                      {:else}
+                        No models installed, 3 available
+                      {/if}
+                    </div>
+                  </div>
+                  <div class="settings-item-status">
+                    {#if setupStatus.models_installed.length > 0}
+                      <span class="status-badge active">Installed {setupStatus.models_installed.length} {setupStatus.models_installed.length === 1 ? 'model' : 'models'}</span>
+                    {:else}
+                      <span class="status-badge inactive">Not Set Up</span>
+                    {/if}
+                  </div>
+                </div>
+              </div>
+            {/if}
+          </div>
+        </div>
+      </div>
+    </div>
+  {/if}
+  
+  <!-- First-Run Setup Dialog -->
+  {#if showSetupDialog}
+    <div class="setup-overlay">
+      <div class="setup-modal">
+        <h2>Enable AI Subtitle Generation?</h2>
+        <p class="setup-description">
+          Automatically generate subtitles from video audio using AI.
+          This feature requires downloading additional components.
+        </p>
+        
+        {#if setupStatus}
+          <div class="setup-checklist">
+            <h3>Requirements</h3>
+            
+            <!-- FFmpeg -->
+            <div class="setup-item">
+              <div class="setup-item-header">
+                <div class="checkbox" class:checked={setupStatus.ffmpeg_installed}>
+                  {#if setupStatus.ffmpeg_installed}
+                    <Check size={16} strokeWidth={3} />
+                  {/if}
+                </div>
+                <div class="setup-item-info">
+                  <div class="setup-item-title">FFmpeg (Required)</div>
+                  <div class="setup-item-desc">
+                    {#if setupStatus.ffmpeg_installed}
+                      ✓ Already installed
+                    {:else}
+                      ❌ Not installed - Please install FFmpeg manually
+                    {/if}
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- AI Model Selection -->
+            <div class="setup-item">
+              <div class="setup-item-header">
+                <div class="setup-item-info full-width">
+                  <div class="setup-item-title">AI Model (Choose one)</div>
+                  <div class="model-choices">
+                    <label class="model-radio" class:installed={setupStatus.models_installed.includes('tiny')}>
+                      <input 
+                        type="radio" 
+                        name="model" 
+                        value="tiny" 
+                        bind:group={selectedModelForSetup}
+                        disabled={isDownloading}
+                      />
+                      <div class="radio-content">
+                        <div class="radio-header">
+                          <span class="radio-title">Lite Model</span>
+                          {#if setupStatus.models_installed.includes('tiny')}
+                            <span class="installed-badge">✓ Installed</span>
+                          {/if}
+                        </div>
+                        <span class="radio-desc">75 MB • Fastest • Good accuracy</span>
+                      </div>
+                    </label>
+                    
+                    <label class="model-radio" class:installed={setupStatus.models_installed.includes('small')}>
+                      <input 
+                        type="radio" 
+                        name="model" 
+                        value="small" 
+                        bind:group={selectedModelForSetup}
+                        disabled={isDownloading}
+                      />
+                      <div class="radio-content">
+                        <div class="radio-header">
+                          <span class="radio-title">Optimal Model</span>
+                          {#if setupStatus.models_installed.includes('small')}
+                            <span class="installed-badge">✓ Installed</span>
+                          {/if}
+                        </div>
+                        <span class="radio-desc">466 MB • Balanced • Very good accuracy</span>
+                      </div>
+                    </label>
+                    
+                    <label class="model-radio" class:installed={setupStatus.models_installed.includes('large-v3-turbo')}>
+                      <input 
+                        type="radio" 
+                        name="model" 
+                        value="large-v3-turbo" 
+                        bind:group={selectedModelForSetup}
+                        disabled={isDownloading}
+                      />
+                      <div class="radio-content">
+                        <div class="radio-header">
+                          <span class="radio-title">Most Optimal Model</span>
+                          {#if setupStatus.models_installed.includes('large-v3-turbo')}
+                            <span class="installed-badge">✓ Installed</span>
+                          {/if}
+                        </div>
+                        <span class="radio-desc">574 MB • Multilingual • Best accuracy</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          {#if isDownloading}
+            <div class="download-progress">
+              <div class="progress-track">
+                <div class="progress-fill" style="width: {downloadProgress}%"></div>
+              </div>
+              <div class="download-status">
+                <span>{downloadMessage}</span>
+                <span>{Math.round(downloadProgress)}%</span>
+              </div>
+            </div>
+          {/if}
+          
+          <div class="setup-actions">
+            <button 
+              class="setup-button secondary" 
+              onclick={skipSetup}
+              disabled={isDownloading}
+            >
+              Maybe Later
+            </button>
+            <button 
+              class="setup-button primary" 
+              onclick={runSetup}
+              disabled={isDownloading || !setupStatus.ffmpeg_installed}
+            >
+              {#if isDownloading}
+                Downloading...
+              {:else if setupStatus.models_installed.includes(selectedModelForSetup)}
+                Enable
+              {:else}
+                Download & Enable
+              {/if}
+            </button>
+          </div>
+          
+          {#if !setupStatus.ffmpeg_installed}
+            <div class="setup-warning">
+              ⚠️ FFmpeg must be installed first. 
+              <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener">Download FFmpeg</a>
+            </div>
+          {/if}
+        {/if}
+      </div>
     </div>
   {/if}
 </main>
@@ -1068,7 +1972,7 @@
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 50%;
+    border-radius: 6px;
     color: rgba(255, 255, 255, 0.7);
     cursor: pointer;
     transition: all 0.2s ease;
@@ -1083,11 +1987,12 @@
   }
 
   .close-button:hover {
-    background: rgba(255, 0, 0, 0.8);
+    background: rgba(255, 255, 255, 0.15);
     border-color: rgba(255, 255, 255, 0.3);
     color: #fff;
     transform: scale(1.1);
   }
+  
 
   .player-container:has(.empty-state) {
     /* Gallery screen - more opaque */
@@ -1126,20 +2031,36 @@
     width: 100%;
     max-width: 1400px;
     margin: 0 auto;
-    padding: 3rem 2rem;
+    padding: 3rem 5rem 3rem 2rem;
   }
 
   .library-header {
+    position: sticky;
+    top: 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
     margin-bottom: 3rem;
+    padding: 1.5rem 0;
+    background: transparent;
+    z-index: 10;
+    margin-top: -1.5rem;
+    margin-left: -5rem;
+    margin-right: -5rem;
+    padding-left: 5rem;
+    padding-right: 5rem;
   }
 
   .library-header .logo {
     height: 48px;
     width: auto;
     opacity: 0.95;
+  }
+
+  .header-buttons {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
   }
 
   .loading {
@@ -1155,10 +2076,6 @@
     padding: 4rem 0;
   }
 
-  .empty-content svg {
-    margin: 0 auto 1.5rem;
-    opacity: 0.6;
-  }
 
   .empty-content p {
     font-size: 0.95rem;
@@ -1217,10 +2134,24 @@
     position: relative;
     overflow: hidden;
   }
-
-  .video-thumbnail svg {
-    opacity: 0.3;
+  
+  .video-progress-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 2;
   }
+  
+  .video-progress-fill {
+    height: 100%;
+    background: rgba(255, 255, 255, 0.9);
+    transition: width 0.3s ease;
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+  }
+
 
   .thumbnail-img {
     width: 100%;
@@ -1267,6 +2198,17 @@
   .video-meta {
     font-size: 0.75rem;
     color: rgba(255, 255, 255, 0.5);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  
+  .video-duration {
+    font-variant-numeric: tabular-nums;
+  }
+  
+  .video-separator {
+    opacity: 0.5;
   }
 
   .open-button {
@@ -1530,7 +2472,6 @@
 
   .control-button.subtitle-active {
     opacity: 1;
-    color: #4CAF50;
   }
 
   .time {
@@ -1633,48 +2574,6 @@
     color: #ff5555;
   }
 
-  .audio-device-selector {
-    position: relative;
-  }
-
-  .audio-menu {
-    position: absolute;
-    bottom: 100%;
-    right: 0;
-    margin-bottom: 0.5rem;
-    background: rgba(0, 0, 0, 0.95);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
-    padding: 0.5rem 0;
-    min-width: 200px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-    z-index: 100;
-  }
-
-  .audio-option {
-    width: 100%;
-    padding: 0.625rem 1rem;
-    background: none;
-    border: none;
-    color: rgba(255, 255, 255, 0.9);
-    text-align: left;
-    cursor: pointer;
-    font-size: 0.875rem;
-    transition: background 0.15s ease;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .audio-option:hover {
-    background: rgba(255, 255, 255, 0.1);
-  }
-
-  .audio-option.selected {
-    background: rgba(255, 255, 255, 0.15);
-    color: #fff;
-    font-weight: 500;
-  }
 
   /* Subtitle styling */
   /* !important required to override browser default subtitle styles */
@@ -1715,5 +2614,708 @@
     bottom: 86vh !important;
     left: 0 !important;
     right: 0 !important;
+  }
+  
+  
+  /* Unified subtitles control */
+  .subtitle-control {
+    position: relative;
+  }
+  
+  .subtitle-menu {
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    margin-bottom: 0.5rem;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.75rem 0;
+    min-width: 260px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 100;
+  }
+  
+  .subtitle-menu-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.05);
+    margin: 0.5rem 0;
+  }
+  
+  .control-button.generating {
+    color: #C065B6;
+    opacity: 1;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  
+  .model-selector {
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    margin-bottom: 0.5rem;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.75rem 0;
+    min-width: 220px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 100;
+  }
+  
+  .model-header {
+    padding: 0.5rem 1rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.6);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    margin-bottom: 0.5rem;
+  }
+  
+  .subtitle-menu {
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    margin-bottom: 0.5rem;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.75rem 0;
+    min-width: 260px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 100;
+  }
+  
+  .subtitle-menu-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.05);
+    margin: 0.5rem 0;
+  }
+  
+  .model-option {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.9);
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: all 0.15s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  
+  .model-option:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+  
+  .model-name {
+    font-weight: 600;
+    color: #fff;
+  }
+  
+  .model-desc {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
+  }
+  
+  .no-models-message {
+    padding: 1rem;
+    font-size: 0.875rem;
+    color: rgba(255, 255, 255, 0.7);
+    text-align: center;
+    line-height: 1.5;
+  }
+  
+  .generation-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn 0.3s ease;
+  }
+  
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  
+  .generation-modal {
+    background: rgba(20, 20, 20, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 2.5rem;
+    min-width: 400px;
+    max-width: 500px;
+    text-align: center;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+    animation: slideUp 0.3s ease;
+  }
+  
+  @keyframes slideUp {
+    from {
+      transform: translateY(20px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+  
+  .generation-icon {
+    margin-bottom: 1.5rem;
+    display: flex;
+    justify-content: center;
+  }
+  
+  :global(.spinner) {
+    animation: spin 2s linear infinite;
+  }
+  
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  
+  .generation-modal h3 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: 1.5rem;
+    color: #fff;
+  }
+  
+  .progress-container {
+    margin-bottom: 1.5rem;
+  }
+  
+  .progress-track {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 0.75rem;
+  }
+  
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #C065B6, #8C77FF);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+    box-shadow: 0 0 10px rgba(192, 101, 182, 0.5);
+  }
+  
+  .progress-percentage {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #C065B6;
+    font-variant-numeric: tabular-nums;
+  }
+  
+  .generation-message {
+    font-size: 0.875rem;
+    color: rgba(255, 255, 255, 0.7);
+    line-height: 1.5;
+    margin: 0;
+  }
+  
+  /* Settings Overlay Styles */
+  .settings-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.9);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1500;
+    animation: fadeIn 0.3s ease;
+  }
+  
+  .settings-modal {
+    background: rgba(20, 20, 20, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    width: 90%;
+    max-width: 700px;
+    max-height: 80vh;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+    animation: slideUp 0.3s ease;
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2rem 2.5rem 1.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  
+  .settings-header h2 {
+    font-size: 1.75rem;
+    font-weight: 600;
+    margin: 0;
+    color: #fff;
+  }
+  
+  .settings-close {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 50%;
+    color: rgba(255, 255, 255, 0.7);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  
+  .settings-close:hover {
+    background: rgba(255, 0, 0, 0.2);
+    border-color: rgba(255, 0, 0, 0.3);
+    color: #ff5555;
+    transform: scale(1.1);
+  }
+  
+  .settings-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 2rem 2.5rem;
+  }
+  
+  .settings-section {
+    margin-bottom: 2rem;
+  }
+  
+  .settings-section:last-child {
+    margin-bottom: 0;
+  }
+  
+  .settings-section h3 {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: #fff;
+    margin: 0 0 1.5rem 0;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  
+  .settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  
+  .settings-item {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    gap: 1rem;
+  }
+  
+  .settings-item-label {
+    flex: 1;
+  }
+  
+  .settings-item-title {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 0.25rem;
+  }
+  
+  .settings-item-desc {
+    font-size: 0.8125rem;
+    color: rgba(255, 255, 255, 0.6);
+    line-height: 1.4;
+  }
+  
+  .settings-item-status {
+    display: flex;
+    align-items: center;
+  }
+  
+  .status-badge {
+    padding: 0.375rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  
+  .status-badge.active {
+    background: rgba(192, 101, 182, 0.2);
+    color: #C065B6;
+    border: 1px solid rgba(192, 101, 182, 0.3);
+  }
+  
+  .status-badge.inactive {
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  
+  
+  /* Setup Dialog Styles */
+  .setup-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.9);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    animation: fadeIn 0.3s ease;
+  }
+  
+  .setup-modal {
+    background: rgba(20, 20, 20, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 2.5rem;
+    min-width: 500px;
+    max-width: 600px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+    animation: slideUp 0.3s ease;
+  }
+  
+  .setup-modal h2 {
+    font-size: 1.75rem;
+    font-weight: 600;
+    margin: 0 0 1rem 0;
+    color: #fff;
+  }
+  
+  .setup-description {
+    font-size: 0.9375rem;
+    color: rgba(255, 255, 255, 0.7);
+    line-height: 1.6;
+    margin: 0 0 2rem 0;
+  }
+  
+  .setup-checklist {
+    margin-bottom: 2rem;
+  }
+  
+  .setup-checklist h3 {
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.6);
+    margin: 0 0 1rem 0;
+  }
+  
+  .setup-item {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+  }
+  
+  .setup-item-header {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+  
+  .checkbox {
+    width: 24px;
+    height: 24px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  
+  .checkbox.checked {
+    background: #C065B6;
+    border-color: #C065B6;
+  }
+  
+  .setup-item-info {
+    flex: 1;
+  }
+  
+  .setup-item-info.full-width {
+    width: 100%;
+  }
+  
+  .setup-item-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 0.25rem;
+  }
+  
+  .setup-item-desc {
+    font-size: 0.875rem;
+    color: rgba(255, 255, 255, 0.6);
+  }
+  
+  .model-choices {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+  
+  .model-radio {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    background: rgba(255, 255, 255, 0.02);
+  }
+  
+  .model-radio:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  
+  .model-radio:has(input[type="radio"]:checked) {
+    background: rgba(192, 101, 182, 0.12);
+    border-color: rgba(192, 101, 182, 0.4);
+  }
+  
+  .model-radio input[type="radio"] {
+    margin-top: 2px;
+    cursor: pointer;
+  }
+  
+  .model-radio input[type="radio"]:checked + .radio-content {
+    color: #fff;
+  }
+  
+  .model-radio input[type="radio"]:checked + .radio-content .radio-title {
+    color: #C065B6;
+  }
+  
+  .radio-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  
+  .radio-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+  }
+  
+  .radio-title {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+  }
+  
+  .installed-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #C065B6;
+    background: rgba(192, 101, 182, 0.15);
+    padding: 0.125rem 0.5rem;
+    border-radius: 4px;
+    border: 1px solid rgba(192, 101, 182, 0.3);
+  }
+  
+  .radio-desc {
+    font-size: 0.8125rem;
+    color: rgba(255, 255, 255, 0.6);
+  }
+  
+  .download-progress {
+    margin: 1.5rem 0;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+  }
+  
+  .download-status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.875rem;
+    color: rgba(255, 255, 255, 0.8);
+    margin-top: 0.5rem;
+  }
+  
+  .setup-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+  }
+  
+  .setup-button {
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border: none;
+  }
+  
+  .setup-button.secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.9);
+  }
+  
+  .setup-button.secondary:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.15);
+  }
+  
+  .setup-button.primary {
+    background: #fff;
+    color: #000;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+  
+  .setup-button.primary:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.9);
+    transform: translateY(-1px);
+  }
+  
+  .setup-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  
+  .setup-warning {
+    margin-top: 1rem;
+    padding: 0.75rem 1rem;
+    background: rgba(255, 171, 151, 0.1);
+    border: 1px solid rgba(255, 171, 151, 0.3);
+    border-radius: 6px;
+    font-size: 0.875rem;
+    color: rgba(255, 255, 255, 0.9);
+    text-align: center;
+  }
+  
+  .setup-warning a {
+    color: #FFAB97;
+    text-decoration: underline;
+  }
+  
+  .setup-warning a:hover {
+    color: #FF6362;
+  }
+  
+  /* Custom Context Menu */
+  .context-menu {
+    position: fixed;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.5rem 0;
+    min-width: 200px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    animation: fadeIn 0.15s ease;
+  }
+  
+  .context-menu-item {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.9);
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: background 0.15s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  
+  .context-menu-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+  
+  
+  .context-menu-item span {
+    flex: 1;
+  }
+  
+  .context-menu-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.1);
+    margin: 0.5rem 0;
+  }
+  
+  .context-menu-item-wrapper {
+    position: relative;
+  }
+  
+  .context-submenu {
+    position: absolute;
+    left: 100%;
+    top: 0;
+    margin-left: 0.5rem;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.5rem 0;
+    min-width: 180px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    animation: fadeIn 0.15s ease;
   }
 </style>
