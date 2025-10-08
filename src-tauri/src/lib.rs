@@ -681,8 +681,32 @@ fn read_wav_file(path: &str) -> Result<Vec<f32>, String> {
     file.read_to_end(&mut buffer)
         .map_err(|e| format!("Failed to read audio file: {}", e))?;
     
+    // Validate buffer has at least 44 bytes (standard WAV header size)
+    if buffer.len() < 44 {
+        return Err(format!(
+            "Invalid or truncated WAV file: expected at least 44 bytes for header, got {} bytes",
+            buffer.len()
+        ));
+    }
+    
     // Skip WAV header (44 bytes for standard WAV)
     let audio_data = &buffer[44..];
+    
+    // Validate audio data has at least 2 bytes for one sample
+    if audio_data.len() < 2 {
+        return Err(format!(
+            "Invalid or truncated WAV file: audio data is too short ({} bytes)",
+            audio_data.len()
+        ));
+    }
+    
+    // Validate audio data length is even (complete 16-bit samples)
+    if audio_data.len() % 2 != 0 {
+        return Err(format!(
+            "Invalid WAV file: audio data length ({} bytes) is not even, cannot parse complete 16-bit samples",
+            audio_data.len()
+        ));
+    }
     
     // Convert 16-bit PCM to f32 samples (-1.0 to 1.0)
     let samples: Vec<f32> = audio_data
