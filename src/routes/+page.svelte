@@ -1975,7 +1975,7 @@ onMount(() => {
   }
 
   .close-button:hover {
-    background: rgba(255, 0, 0, 0.8);
+    background: rgba(255, 255, 255, 0.15);
     border-color: rgba(255, 255, 255, 0.3);
     color: #fff;
     transform: scale(1.1);
