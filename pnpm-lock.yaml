@@ -20,6 +20,9 @@ importers:
       '@tauri-apps/plugin-process':
         specifier: ^2.3.0
         version: 2.3.0
+      '@tauri-apps/plugin-updater':
+        specifier: ~2
+        version: 2.9.0
       lucide-svelte:
         specifier: ^0.545.0
         version: 0.545.0(svelte@5.39.11)
@@ -459,6 +462,9 @@ packages:
 
   '@tauri-apps/plugin-process@2.3.0':
     resolution: {integrity: sha512-0DNj6u+9csODiV4seSxxRbnLpeGYdojlcctCuLOCgpH9X3+ckVZIEj6H7tRQ7zqWr7kSTEWnrxtAdBb0FbtrmQ==}
+
+  '@tauri-apps/plugin-updater@2.9.0':
+    resolution: {integrity: sha512-j++sgY8XpeDvzImTrzWA08OqqGqgkNyxczLD7FjNJJx/uXxMZFz5nDcfkyoI/rCjYuj2101Tci/r/HFmOmoxCg==}
 
   '@types/cookie@0.6.0':
     resolution: {integrity: sha512-4Kh9a6B2bQciAhf7FSuMRRkUWecJgJu9nPnx3yzpsfXX/c50REIqpHY4C82bXP90qrLtXtkDxTZosYO3UpOwlA==}
@@ -952,6 +958,10 @@ snapshots:
       '@tauri-apps/api': 2.8.0
 
   '@tauri-apps/plugin-process@2.3.0':
+    dependencies:
+      '@tauri-apps/api': 2.8.0
+
+  '@tauri-apps/plugin-updater@2.9.0':
     dependencies:
       '@tauri-apps/api': 2.8.0
 

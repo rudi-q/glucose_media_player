@@ -1168,11 +1168,19 @@ fn process_video_files(app_handle: &tauri::AppHandle, video_files: Vec<String>) 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_process::init());
+    
+    // Add updater plugin only on Windows
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+    
+    builder
         .setup(|app| {
             // Handle command line arguments for file associations
             let args: Vec<String> = std::env::args().collect();

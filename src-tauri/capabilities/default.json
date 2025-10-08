@@ -7,6 +7,12 @@
     "core:default",
     "opener:default",
     "dialog:default",
+    "process:default",
+    "updater:default",
+    "updater:allow-check",
+    "updater:allow-download",
+    "updater:allow-install",
+    "updater:allow-download-and-install",
     {
       "identifier": "fs:allow-read-text-file",
       "allow": [{ "path": "**" }]

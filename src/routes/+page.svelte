@@ -19,6 +19,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
     Check,
     Loader2
   } from "lucide-svelte";
+  import UpdateManager from "$lib/components/UpdateManager.svelte";
+  import UpdateNotification from "$lib/components/UpdateNotification.svelte";
 
   let videoElement = $state<HTMLVideoElement>();
   let backgroundVideo = $state<HTMLVideoElement>();
@@ -110,6 +112,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   let downloadProgress = $state(0);
   let downloadMessage = $state("");
   let showSettings = $state(false);
+  
+  // Update manager reference
+  let updateManager: UpdateManager;
 
 onMount(() => {
     let disposed = false;
@@ -1255,6 +1260,10 @@ onMount(() => {
   ondrop={handleDrop}
   onmousemove={handleMainContainerMouseMove}
 >
+  <!-- Update System -->
+  <UpdateManager bind:this={updateManager} disableAutoCheck={!shouldLoadGallery} />
+  <UpdateNotification />
+  
   <button class="close-button" class:visible={showCloseButton} onclick={closeApp} title="Close (Esc)">
     <X size={16} />
   </button>
@@ -1778,6 +1787,34 @@ onMount(() => {
                 </div>
               </div>
             {/if}
+          </div>
+          
+          <!-- App Updates Section -->
+          <div class="settings-section">
+            <h3>App Updates</h3>
+            
+            <div class="settings-group">
+              <div class="settings-item">
+                <div class="settings-item-label">
+                  <div class="settings-item-title">Check for Updates</div>
+                  <div class="settings-item-desc">
+                    Manually check for the latest version of Glucose
+                  </div>
+                </div>
+                <div class="settings-item-action">
+                  <button 
+                    class="check-update-button"
+                    onclick={() => {
+                      if (updateManager) {
+                        updateManager.manualCheckForUpdates();
+                      }
+                    }}
+                  >
+                    Check Now
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -2990,6 +3027,33 @@ onMount(() => {
     background: rgba(255, 255, 255, 0.05);
     color: rgba(255, 255, 255, 0.5);
     border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .settings-item-action {
+    display: flex;
+    align-items: center;
+  }
+  
+  .check-update-button {
+    background: #fff;
+    color: #000;
+    border: none;
+    padding: 0.625rem 1.25rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border-radius: 6px;
+    white-space: nowrap;
+  }
+  
+  .check-update-button:hover {
+    background: rgba(255, 255, 255, 0.9);
+    transform: translateY(-1px);
+  }
+  
+  .check-update-button:active {
+    transform: translateY(0);
   }
 
   
