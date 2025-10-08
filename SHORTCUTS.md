@@ -4,9 +4,10 @@
 - `Space` or `K` - Play/Pause
 - `←` (Left Arrow) - Skip backward 5 seconds
 - `→` (Right Arrow) - Skip forward 5 seconds
+- `0-9` - Jump to 0%, 10%, 20%, ..., 90% of the video
 
 ## Audio
-- `M` - Mute/Unmute
+- `M` - Toggle mute/unmute
 - `↑` (Up Arrow) - Increase volume by 10%
 - `↓` (Down Arrow) - Decrease volume by 10%
 

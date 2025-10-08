@@ -29,6 +29,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   let currentTime = $state(0);
   let duration = $state(0);
   let volume = $state(1);
+  let isMuted = $state(false);
   let showControls = $state(false);
   let hideControlsTimeout: number;
   let isDragging = $state(false);
@@ -199,6 +200,14 @@ onMount(() => {
 
     // Video playback controls
     if (videoSrc) {
+      // Number keys 0-9 for scrubbing to specific percentages
+      if (e.key >= '0' && e.key <= '9') {
+        e.preventDefault();
+        const percentage = parseInt(e.key) * 0.1; // 0 = 0%, 1 = 10%, 2 = 20%, etc.
+        scrubToPercentage(percentage);
+        return;
+      }
+      
       switch (e.key) {
         case " ":
         case "k":
@@ -492,9 +501,22 @@ onMount(() => {
     videoElement.currentTime += seconds;
   }
 
+  function scrubToPercentage(percentage: number) {
+    if (!videoElement || !duration) return;
+    const targetTime = duration * percentage;
+    
+    // Use fastSeek for instant frame updates if available
+    if ('fastSeek' in videoElement) {
+      (videoElement as any).fastSeek(targetTime);
+    } else {
+      videoElement.currentTime = targetTime;
+    }
+  }
+
   function toggleMute() {
     if (!videoElement) return;
-    videoElement.muted = !videoElement.muted;
+    isMuted = !isMuted;
+    videoElement.muted = isMuted;
   }
 
   function adjustVolume(delta: number) {
@@ -1192,10 +1214,8 @@ onMount(() => {
         <div class="controls-right">
           <div class="volume-control">
             <button class="control-button" onclick={toggleVolumeMenu} title="Volume">
-              {#if videoElement?.muted || volume === 0}
+              {#if isMuted}
                 <VolumeX size={20} />
-              {:else if volume < 0.5}
-                <Volume1 size={20} />
               {:else}
                 <Volume2 size={20} />
               {/if}
@@ -1211,13 +1231,13 @@ onMount(() => {
                   aria-label="Volume"
                   aria-orientation="vertical"
                   bind:value={volume}
-                  oninput={(e) => { if (videoElement) { videoElement.volume = (e.target as HTMLInputElement).valueAsNumber; if (videoElement.muted) videoElement.muted = false; } }}
+                  oninput={(e) => { if (videoElement) { videoElement.volume = (e.target as HTMLInputElement).valueAsNumber; if (isMuted) { isMuted = false; videoElement.muted = false; } } }}
                 />
-                <button class="mute-toggle" onclick={toggleMute} class:muted={videoElement?.muted}>
-                  {#if videoElement?.muted}
+                <button class="mute-toggle" onclick={toggleMute} class:muted={isMuted}>
+                  {#if isMuted}
                     <VolumeX size={16} />
                   {:else}
-                    <Volume1 size={16} />
+                    <Volume2 size={16} />
                   {/if}
                 </button>
               </div>
