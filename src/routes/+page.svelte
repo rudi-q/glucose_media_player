@@ -506,9 +506,9 @@ onMount(() => {
     const targetTime = duration * percentage;
     
     // Use fastSeek for instant frame updates if available
-    if ('fastSeek' in videoElement) {
+    if ('fastSeek' in videoElement && typeof (videoElement as any).fastSeek === 'function') {
       (videoElement as any).fastSeek(targetTime);
-    } else {
+    } else if (videoElement) {
       videoElement.currentTime = targetTime;
     }
   }
