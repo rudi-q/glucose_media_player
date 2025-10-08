@@ -680,6 +680,37 @@ onMount(() => {
     }
     return `${m}:${s.toString().padStart(2, '0')}`;
   }
+  
+  function formatEstimatedTime(seconds: number): string {
+    if (seconds < 60) {
+      return `~${Math.round(seconds)}s`;
+    } else if (seconds < 3600) {
+      const mins = Math.round(seconds / 60);
+      return `~${mins}m`;
+    } else {
+      const hours = Math.floor(seconds / 3600);
+      const mins = Math.round((seconds % 3600) / 60);
+      return mins > 0 ? `~${hours}h ${mins}m` : `~${hours}h`;
+    }
+  }
+  
+  function getEstimatedTranscriptionTime(modelKey: string): string {
+    if (!duration) return 'Unknown';
+    
+    const coefficients: Record<string, { min: number; max: number }> = {
+      'tiny': { min: 0.15, max: 0.25 },
+      'small': { min: 0.6, max: 0.8 },
+      'large-v3-turbo': { min: 0.9, max: 1.2 }
+    };
+    
+    const coef = coefficients[modelKey];
+    if (!coef) return 'Unknown';
+    
+    const avgCoef = (coef.min + coef.max) / 2;
+    const estimatedSeconds = duration * avgCoef;
+    
+    return formatEstimatedTime(estimatedSeconds);
+  }
 
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
@@ -1243,32 +1274,17 @@ onMount(() => {
                   {#if model === 'tiny'}
                     <button class="model-option" onclick={() => startSubtitleGeneration('tiny')}>
                       <span class="model-name">Tiny</span>
-                      <span class="model-desc">75MB • Fastest</span>
-                    </button>
-                  {:else if model === 'base'}
-                    <button class="model-option" onclick={() => startSubtitleGeneration('base')}>
-                      <span class="model-name">Base</span>
-                      <span class="model-desc">142MB • Fast</span>
+                      <span class="model-desc">{getEstimatedTranscriptionTime('tiny')} • Fastest</span>
                     </button>
                   {:else if model === 'small'}
                     <button class="model-option" onclick={() => startSubtitleGeneration('small')}>
                       <span class="model-name">Small</span>
-                      <span class="model-desc">466MB • Balanced</span>
-                    </button>
-                  {:else if model === 'medium'}
-                    <button class="model-option" onclick={() => startSubtitleGeneration('medium')}>
-                      <span class="model-name">Medium</span>
-                      <span class="model-desc">1.5GB • Accurate</span>
-                    </button>
-                  {:else if model === 'large'}
-                    <button class="model-option" onclick={() => startSubtitleGeneration('large')}>
-                      <span class="model-name">Large</span>
-                      <span class="model-desc">3GB • Best</span>
+                      <span class="model-desc">{getEstimatedTranscriptionTime('small')} • Balanced</span>
                     </button>
                   {:else if model === 'large-v3-turbo'}
                     <button class="model-option" onclick={() => startSubtitleGeneration('large-v3-turbo')}>
                       <span class="model-name">Large V3 Turbo</span>
-                      <span class="model-desc">574MB • Multilingual</span>
+                      <span class="model-desc">{getEstimatedTranscriptionTime('large-v3-turbo')} • Most Accurate</span>
                     </button>
                   {/if}
                 {/each}
