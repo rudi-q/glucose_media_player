@@ -28,5 +28,9 @@ export default defineConfig(async () => ({
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
+    fs: {
+      // Allow serving files from the project root (for package.json)
+      allow: ['..']
+    },
   },
 }));

@@ -21,6 +21,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   } from "lucide-svelte";
   import UpdateManager from "$lib/components/UpdateManager.svelte";
   import UpdateNotification from "$lib/components/UpdateNotification.svelte";
+  import { getFormattedVersion } from "$lib/utils/version";
 
   let videoElement = $state<HTMLVideoElement>();
   let backgroundVideo = $state<HTMLVideoElement>();
@@ -1717,7 +1718,10 @@ onMount(() => {
     <div class="settings-overlay" onclick={(e) => { if (e.target === e.currentTarget) showSettings = false; }}>
       <div class="settings-modal">
         <div class="settings-header">
-          <h2>Settings</h2>
+          <div class="settings-header-content">
+            <h2>Settings</h2>
+            <span class="settings-version">{getFormattedVersion()}</span>
+          </div>
           <button class="settings-close" onclick={() => showSettings = false} title="Close">
             <X size={20} />
           </button>
@@ -2914,8 +2918,14 @@ onMount(() => {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 2rem 2.5rem 1.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 2rem 2.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .settings-header-content {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
   }
   
   .settings-header h2 {
@@ -2923,6 +2933,16 @@ onMount(() => {
     font-weight: 600;
     margin: 0;
     color: #fff;
+  }
+  
+  .settings-version {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.5);
+    padding: 0.25rem 0.625rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
   }
   
   .settings-close {
