@@ -1,11 +1,14 @@
-import packageJson from '../../../package.json';
+/// <reference types="vite/client" />
+
+// Vite injects this at build time
+declare const __APP_VERSION__: string;
 
 /**
- * Get the current application version from package.json
+ * Get the current application version
  * @returns The semantic version string (e.g., "2.3.0")
  */
 export function getAppVersion(): string {
-  return packageJson.version;
+  return typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0';
 }
 
 /**
@@ -13,5 +16,5 @@ export function getAppVersion(): string {
  * @returns Formatted version string (e.g., "v2.3.0")
  */
 export function getFormattedVersion(): string {
-  return `v${packageJson.version}`;
+  return `v${getAppVersion()}`;
 }

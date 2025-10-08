@@ -116,6 +116,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   
   // Update manager reference
   let updateManager: UpdateManager;
+  let isCheckingForUpdates = $state(false);
 
 onMount(() => {
     let disposed = false;
@@ -1808,13 +1809,19 @@ onMount(() => {
                 <div class="settings-item-action">
                   <button 
                     class="check-update-button"
-                    onclick={() => {
-                      if (updateManager) {
-                        updateManager.manualCheckForUpdates();
+                    disabled={isCheckingForUpdates}
+                    onclick={async () => {
+                      if (updateManager && !isCheckingForUpdates) {
+                        try {
+                          isCheckingForUpdates = true;
+                          await updateManager.manualCheckForUpdates();
+                        } finally {
+                          isCheckingForUpdates = false;
+                        }
                       }
                     }}
                   >
-                    Check Now
+                    {isCheckingForUpdates ? 'Checking...' : 'Check Now'}
                   </button>
                 </div>
               </div>
@@ -3074,6 +3081,17 @@ onMount(() => {
   
   .check-update-button:active {
     transform: translateY(0);
+  }
+  
+  .check-update-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
+  
+  .check-update-button:disabled:hover {
+    background: #fff;
+    transform: none;
   }
 
   

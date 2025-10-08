@@ -52,6 +52,10 @@
     } catch (error) {
       console.error('Error checking for updates:', error);
       
+      // Clear any stale available state
+      updateStore.setAvailable(false);
+      updateStore.setDownloading(false);
+      
       // Check if this is a network connectivity issue
       const errorString = error?.toString() || '';
       const isNetworkError = errorString.includes('error sending request') || 

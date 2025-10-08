@@ -5,7 +5,7 @@
 
 	$: updateState = $updateStore;
   $: progressPercentage = updateState.contentLength > 0 
-    ? Math.round((updateState.downloaded / updateState.contentLength) * 100) 
+    ? Math.min(100, Math.max(0, Math.round((updateState.downloaded / updateState.contentLength) * 100)))
     : 0;
 
   // Auto-hide completed state after 5 seconds, up-to-date after 3 seconds
