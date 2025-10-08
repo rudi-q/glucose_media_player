@@ -51,6 +51,20 @@
   let generationMessage = $state("");
   let showModelSelector = $state(false);
   let currentVideoPath = $state<string | null>(null);
+  
+  // Setup state
+  interface SetupStatus {
+    ffmpeg_installed: boolean;
+    models_installed: string[];
+    setup_completed: boolean;
+  }
+  
+  let showSetupDialog = $state(false);
+  let setupStatus = $state<SetupStatus | null>(null);
+  let selectedModelForSetup = $state<string>("tiny"); // "tiny" or "small"
+  let isDownloading = $state(false);
+  let downloadProgress = $state(0);
+  let downloadMessage = $state("");
 
   onMount(() => {
     // Listen for file open events from Rust
@@ -83,6 +97,15 @@
         isGeneratingSubtitles = false;
       }
     });
+    
+    // Listen for download progress
+    listen<{downloaded: number, total: number, percentage: number, message: string}>("download-progress", (event) => {
+      downloadProgress = event.payload.percentage;
+      downloadMessage = event.payload.message;
+    });
+    
+    // Check setup status on first launch
+    checkSetupStatus();
 
     // Keyboard shortcuts
     document.addEventListener("keydown", handleKeyPress);
@@ -754,6 +777,14 @@
       return;
     }
     
+    // Check if setup is complete
+    const status = await invoke<SetupStatus>('get_setup_status');
+    if (!status.setup_completed || status.models_installed.length === 0) {
+      // Show setup dialog
+      showSetupDialog = true;
+      return;
+    }
+    
     showModelSelector = false;
     isGeneratingSubtitles = true;
     generationProgress = 0;
@@ -774,6 +805,72 @@
       generationProgress = 0;
       generationMessage = '';
     }
+  }
+  
+  async function checkSetupStatus() {
+    try {
+      const status = await invoke<SetupStatus>('get_setup_status');
+      setupStatus = status;
+      
+      // Show setup dialog on first launch if not completed
+      if (!status.setup_completed && status.models_installed.length === 0) {
+        // Small delay to not interrupt app startup
+        setTimeout(() => {
+          showSetupDialog = true;
+        }, 1500);
+      }
+    } catch (err) {
+      console.error('Failed to check setup status:', err);
+    }
+  }
+  
+  function toggleSetupDialog() {
+    showSetupDialog = !showSetupDialog;
+  }
+  
+  async function runSetup() {
+    if (!setupStatus) return;
+    
+    isDownloading = true;
+    downloadProgress = 0;
+    downloadMessage = "Starting setup...";
+    
+    try {
+      // Note: FFmpeg download would need platform-specific handling
+      // For now, we'll just download the selected model
+      
+      await invoke('download_whisper_model', {
+        modelSize: selectedModelForSetup
+      });
+      
+      // Mark setup as completed
+      await invoke('mark_setup_completed');
+      
+      // Refresh setup status
+      await checkSetupStatus();
+      
+      isDownloading = false;
+      downloadProgress = 100;
+      downloadMessage = "Setup complete!";
+      
+      setTimeout(() => {
+        showSetupDialog = false;
+        downloadProgress = 0;
+        downloadMessage = "";
+      }, 2000);
+    } catch (err) {
+      console.error('Setup failed:', err);
+      alert(`Setup failed: ${err}`);
+      isDownloading = false;
+      downloadProgress = 0;
+      downloadMessage = "";
+    }
+  }
+  
+  function skipSetup() {
+    showSetupDialog = false;
+    // Mark setup as "completed" so we don't show the dialog again
+    invoke('mark_setup_completed').catch(console.error);
   }
 </script>
 

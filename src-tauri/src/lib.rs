@@ -184,6 +184,210 @@ struct SubtitleGenerationProgress {
     message: String,
 }
 
+#[derive(Serialize, Clone)]
+struct SetupStatus {
+    ffmpeg_installed: bool,
+    models_installed: Vec<String>,
+    setup_completed: bool,
+}
+
+#[derive(Serialize, Clone)]
+struct DownloadProgress {
+    downloaded: u64,
+    total: u64,
+    percentage: f32,
+    message: String,
+}
+
+// Check if FFmpeg is installed
+#[tauri::command]
+fn check_ffmpeg_installed() -> Result<bool, String> {
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|output| output.status.success())
+        .or(Ok(false))
+}
+
+// Check which Whisper models are installed
+#[tauri::command]
+fn check_installed_models() -> Result<Vec<String>, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let models_dir = home.join(".whisper").join("models");
+    
+    if !models_dir.exists() {
+        return Ok(Vec::new());
+    }
+    
+    let mut models = Vec::new();
+    let model_files = vec![
+        ("ggml-tiny.bin", "tiny"),
+        ("ggml-base.bin", "base"),
+        ("ggml-small.bin", "small"),
+        ("ggml-medium.bin", "medium"),
+        ("ggml-large-v3.bin", "large"),
+    ];
+    
+    for (filename, model_name) in model_files {
+        if models_dir.join(filename).exists() {
+            models.push(model_name.to_string());
+        }
+    }
+    
+    Ok(models)
+}
+
+// Get setup status
+#[tauri::command]
+fn get_setup_status() -> Result<SetupStatus, String> {
+    let ffmpeg_installed = check_ffmpeg_installed()?;
+    let models_installed = check_installed_models()?;
+    
+    // Check if setup was completed (stored in config)
+    let setup_completed = load_setup_completed()?;
+    
+    Ok(SetupStatus {
+        ffmpeg_installed,
+        models_installed,
+        setup_completed,
+    })
+}
+
+// Save setup completion status
+#[tauri::command]
+fn mark_setup_completed() -> Result<(), String> {
+    save_setup_completed(true)
+}
+
+// Load setup completion status from config
+fn load_setup_completed() -> Result<bool, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let config_dir = home.join(".glucose");
+    let config_file = config_dir.join("config.json");
+    
+    if !config_file.exists() {
+        return Ok(false);
+    }
+    
+    let content = fs::read_to_string(config_file)
+        .map_err(|e| format!("Failed to read config: {}", e))?;
+    
+    let config: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse config: {}", e))?;
+    
+    Ok(config.get("setup_completed").and_then(|v| v.as_bool()).unwrap_or(false))
+}
+
+// Save setup completion status to config
+fn save_setup_completed(completed: bool) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let config_dir = home.join(".glucose");
+    let config_file = config_dir.join("config.json");
+    
+    // Create config directory if it doesn't exist
+    fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    
+    // Load existing config or create new
+    let mut config: serde_json::Value = if config_file.exists() {
+        let content = fs::read_to_string(&config_file)
+            .map_err(|e| format!("Failed to read config: {}", e))?;
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse config: {}", e))?
+    } else {
+        serde_json::json!({})
+    };
+    
+    // Update setup_completed field
+    config["setup_completed"] = serde_json::json!(completed);
+    
+    // Save config
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    
+    fs::write(config_file, content)
+        .map_err(|e| format!("Failed to write config: {}", e))?;
+    
+    Ok(())
+}
+
+// Download Whisper model
+#[tauri::command]
+async fn download_whisper_model(
+    app_handle: tauri::AppHandle,
+    model_size: String,
+) -> Result<String, String> {
+    let model_name = match model_size.as_str() {
+        "tiny" => "ggml-tiny.bin",
+        "small" => "ggml-small.bin",
+        _ => return Err("Invalid model size".to_string()),
+    };
+    
+    let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}", model_name);
+    
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let models_dir = home.join(".whisper").join("models");
+    
+    // Create models directory
+    fs::create_dir_all(&models_dir)
+        .map_err(|e| format!("Failed to create models directory: {}", e))?;
+    
+    let output_path = models_dir.join(model_name);
+    
+    // Download file with progress
+    download_file_with_progress(&app_handle, &url, &output_path, &format!("Downloading {} model", model_size)).await?;
+    
+    Ok(output_path.to_string_lossy().to_string())
+}
+
+// Download file with progress reporting
+async fn download_file_with_progress(
+    app_handle: &tauri::AppHandle,
+    url: &str,
+    output_path: &std::path::PathBuf,
+    message: &str,
+) -> Result<(), String> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+    
+    let client = reqwest::Client::new();
+    let response = client.get(url).send().await
+        .map_err(|e| format!("Failed to start download: {}", e))?;
+    
+    let total_size = response.content_length().unwrap_or(0);
+    
+    let mut file = fs::File::create(output_path)
+        .map_err(|e| format!("Failed to create file: {}", e))?;
+    
+    let mut downloaded: u64 = 0;
+    let mut stream = response.bytes_stream();
+    
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Download error: {}", e))?;
+        file.write_all(&chunk)
+            .map_err(|e| format!("Failed to write to file: {}", e))?;
+        
+        downloaded += chunk.len() as u64;
+        let percentage = if total_size > 0 {
+            (downloaded as f32 / total_size as f32) * 100.0
+        } else {
+            0.0
+        };
+        
+        // Emit progress every 1MB or so
+        if downloaded % (1024 * 1024) < chunk.len() as u64 || downloaded == total_size {
+            let _ = app_handle.emit("download-progress", DownloadProgress {
+                downloaded,
+                total: total_size,
+                percentage,
+                message: message.to_string(),
+            });
+        }
+    }
+    
+    Ok(())
+}
+
 // Helper function to extract audio from video using FFmpeg
 fn extract_audio_from_video(video_path: &str, output_audio_path: &str) -> Result<(), String> {
     println!("Extracting audio from video: {}", video_path);
@@ -645,7 +849,12 @@ pub fn run() {
             frontend_ready,
             exit_app,
             find_subtitle_for_video,
-            generate_subtitles
+            generate_subtitles,
+            check_ffmpeg_installed,
+            check_installed_models,
+            get_setup_status,
+            mark_setup_completed,
+            download_whisper_model
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
