@@ -199,6 +199,14 @@ struct DownloadProgress {
     message: String,
 }
 
+#[derive(Serialize, serde::Deserialize, Clone)]
+struct WatchProgress {
+    path: String,
+    current_time: f64,
+    duration: f64,
+    last_watched: u64,
+}
+
 // Check if FFmpeg is installed
 #[tauri::command]
 fn check_ffmpeg_installed() -> Result<bool, String> {
@@ -720,6 +728,95 @@ fn read_wav_file(path: &str) -> Result<Vec<f32>, String> {
     Ok(samples)
 }
 
+// Save watch progress for a video
+#[tauri::command]
+fn save_watch_progress(
+    video_path: String,
+    current_time: f64,
+    duration: f64,
+) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let config_dir = home.join(".glucose");
+    let progress_file = config_dir.join("watch_progress.json");
+    
+    // Create config directory if it doesn't exist
+    fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    
+    // Load existing progress data or create new
+    let mut progress_map: std::collections::HashMap<String, WatchProgress> = if progress_file.exists() {
+        let content = fs::read_to_string(&progress_file)
+            .map_err(|e| format!("Failed to read progress file: {}", e))?;
+        serde_json::from_str(&content)
+            .unwrap_or_else(|_| std::collections::HashMap::new())
+    } else {
+        std::collections::HashMap::new()
+    };
+    
+    // Get current time as Unix timestamp
+    let last_watched = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|e| format!("Failed to get current time: {}", e))?
+        .as_secs();
+    
+    // Update or insert progress for this video
+    progress_map.insert(video_path.clone(), WatchProgress {
+        path: video_path,
+        current_time,
+        duration,
+        last_watched,
+    });
+    
+    // Save to file
+    let content = serde_json::to_string_pretty(&progress_map)
+        .map_err(|e| format!("Failed to serialize progress: {}", e))?;
+    
+    fs::write(progress_file, content)
+        .map_err(|e| format!("Failed to write progress file: {}", e))?;
+    
+    Ok(())
+}
+
+// Get watch progress for a video
+#[tauri::command]
+fn get_watch_progress(video_path: String) -> Result<Option<WatchProgress>, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let config_dir = home.join(".glucose");
+    let progress_file = config_dir.join("watch_progress.json");
+    
+    if !progress_file.exists() {
+        return Ok(None);
+    }
+    
+    let content = fs::read_to_string(&progress_file)
+        .map_err(|e| format!("Failed to read progress file: {}", e))?;
+    
+    let progress_map: std::collections::HashMap<String, WatchProgress> = serde_json::from_str(&content)
+        .unwrap_or_else(|_| std::collections::HashMap::new());
+    
+    Ok(progress_map.get(&video_path).cloned())
+}
+
+// Get all watch progress data
+#[tauri::command]
+fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchProgress>, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let config_dir = home.join(".glucose");
+    let progress_file = config_dir.join("watch_progress.json");
+    
+    if !progress_file.exists() {
+        return Ok(std::collections::HashMap::new());
+    }
+    
+    let content = fs::read_to_string(&progress_file)
+        .map_err(|e| format!("Failed to read progress file: {}", e))?;
+    
+    let progress_map: std::collections::HashMap<String, WatchProgress> = serde_json::from_str(&content)
+        .unwrap_or_else(|_| std::collections::HashMap::new());
+    
+    Ok(progress_map)
+}
+
 #[tauri::command]
 fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
     let video_extensions = vec!["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv"];
@@ -904,7 +1001,10 @@ pub fn run() {
             check_installed_models,
             get_setup_status,
             mark_setup_completed,
-            download_whisper_model
+            download_whisper_model,
+            save_watch_progress,
+            get_watch_progress,
+            get_all_watch_progress
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

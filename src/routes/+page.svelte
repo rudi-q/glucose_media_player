@@ -49,9 +49,18 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
     modified: number;
   }
   
+  interface WatchProgress {
+    path: string;
+    current_time: number;
+    duration: number;
+    last_watched: number;
+  }
+  
   let recentVideos = $state<VideoFile[]>([]);
   let loadingRecent = $state(true);
   let thumbnailCache = $state<Map<string, string>>(new Map());
+  let watchProgressMap = $state<Map<string, WatchProgress>>(new Map());
+  let progressSaveInterval: number;
   
   let audioDevices = $state<MediaDeviceInfo[]>([]);
   let selectedAudioDevice = $state<string>('default');
@@ -159,6 +168,10 @@ onMount(() => {
         try {
           const videos = await invoke<VideoFile[]>("get_recent_videos");
           recentVideos = videos;
+          
+          // Load watch progress for all videos
+          const progressData = await invoke<Record<string, WatchProgress>>("get_all_watch_progress");
+          watchProgressMap = new Map(Object.entries(progressData));
         } catch (err) {
           console.error("Failed to load recent videos:", err);
         } finally {
@@ -174,6 +187,14 @@ onMount(() => {
 
     return () => {
       disposed = true;
+      // Clear progress save interval
+      if (progressSaveInterval) {
+        clearInterval(progressSaveInterval);
+      }
+      // Save progress one last time before unmount
+      if (videoElement && currentVideoPath && duration > 0) {
+        saveWatchProgress();
+      }
       // Unregister Tauri event listeners
       for (const un of unsubs) {
         try { un(); } catch (e) { console.error("Unlisten failed", e); }
@@ -291,7 +312,26 @@ onMount(() => {
     }
   }
 
+  async function saveWatchProgress() {
+    if (!currentVideoPath || !videoElement || duration <= 0) return;
+    
+    try {
+      await invoke('save_watch_progress', {
+        videoPath: currentVideoPath,
+        currentTime: videoElement.currentTime,
+        duration: duration
+      });
+    } catch (err) {
+      console.error('Failed to save watch progress:', err);
+    }
+  }
+
   async function loadVideo(path: string) {
+    // Save progress of previous video before loading new one
+    if (currentVideoPath && videoElement && duration > 0) {
+      await saveWatchProgress();
+    }
+    
     const src = convertFileSrc(path);
     videoSrc = src;
     currentVideoPath = path;  // Store original path for subtitle generation
@@ -441,7 +481,17 @@ onMount(() => {
     }
   }
 
-  function goHome() {
+  async function goHome() {
+    // Save progress before going home
+    if (currentVideoPath && videoElement && duration > 0) {
+      await saveWatchProgress();
+    }
+    
+    // Clear progress save interval
+    if (progressSaveInterval) {
+      clearInterval(progressSaveInterval);
+    }
+    
     videoSrc = null;
     if (videoElement) {
       videoElement.pause();
@@ -450,6 +500,7 @@ onMount(() => {
       backgroundVideo.pause();
     }
     isPlaying = false;
+    currentVideoPath = null;
   }
 
   async function closeApp() {
@@ -679,6 +730,31 @@ onMount(() => {
   function handleLoadedMetadata() {
     if (!videoElement) return;
     duration = videoElement.duration;
+    
+    // Try to restore watch progress
+    if (currentVideoPath) {
+      invoke<WatchProgress | null>('get_watch_progress', { videoPath: currentVideoPath })
+        .then(progress => {
+          if (progress && videoElement && progress.duration > 0) {
+            // Only restore if video was watched for more than 5% and less than 95%
+            const progressPercent = progress.current_time / progress.duration;
+            if (progressPercent > 0.05 && progressPercent < 0.95) {
+              videoElement.currentTime = progress.current_time;
+            }
+          }
+        })
+        .catch(err => console.error('Failed to load watch progress:', err));
+    }
+    
+    // Set up interval to save progress every 5 seconds
+    if (progressSaveInterval) {
+      clearInterval(progressSaveInterval);
+    }
+    progressSaveInterval = setInterval(() => {
+      if (videoElement && currentVideoPath && duration > 0) {
+        saveWatchProgress();
+      }
+    }, 5000);
     
     // Auto-play when video loads
     videoElement.play().catch(err => {
@@ -1075,6 +1151,15 @@ onMount(() => {
                     <div class="play-overlay">
                       <Play size={32} fill="white" stroke="none" />
                     </div>
+                    {#if watchProgressMap.has(video.path)}
+                      {@const progress = watchProgressMap.get(video.path)}
+                      {@const progressPercent = progress && progress.duration > 0 ? (progress.current_time / progress.duration) * 100 : 0}
+                      {#if progressPercent > 0 && progressPercent < 100}
+                        <div class="video-progress-bar">
+                          <div class="video-progress-fill" style="width: {progressPercent}%"></div>
+                        </div>
+                      {/if}
+                    {/if}
                   </div>
                   <div class="video-info">
                     <div class="video-name" title={video.name}>{video.name}</div>
@@ -1754,6 +1839,23 @@ onMount(() => {
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     position: relative;
     overflow: hidden;
+  }
+  
+  .video-progress-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 2;
+  }
+  
+  .video-progress-fill {
+    height: 100%;
+    background: rgba(255, 255, 255, 0.9);
+    transition: width 0.3s ease;
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
   }
 
 
