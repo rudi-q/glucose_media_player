@@ -21,7 +21,7 @@ importers:
         specifier: ^2.3.0
         version: 2.3.0
       '@tauri-apps/plugin-updater':
-        specifier: ~2
+        specifier: ^2.0.0
         version: 2.9.0
       lucide-svelte:
         specifier: ^0.545.0

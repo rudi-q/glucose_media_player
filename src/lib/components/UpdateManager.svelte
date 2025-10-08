@@ -1,3 +1,10 @@
+<script lang="ts" context="module">
+	// Public API interface for external consumers
+	export interface UpdateManagerAPI {
+		manualCheckForUpdates(manual?: boolean): Promise<void> | null;
+	}
+</script>
+
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { browser, dev } from '$app/environment';

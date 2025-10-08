@@ -46,11 +46,31 @@
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   }
+
+  // Generate accessible announcement text for screen readers
+  $: ariaAnnouncement = (() => {
+    if (updateState.checking) return 'Checking for updates';
+    if (updateState.downloading) return `Downloading update: ${progressPercentage}% complete`;
+    if (updateState.completed) return 'Update completed, restarting application';
+    if (updateState.error) return `Error checking updates: ${updateState.error}`;
+    if (updateState.upToDate) return 'Already up to date';
+    if (updateState.available) return `Update available: version ${updateState.version || 'unknown'}`;
+    return '';
+  })();
 </script>
 
 <!-- Update Notification Panel -->
 {#if updateState.checking || updateState.available || updateState.downloading || updateState.completed || updateState.error || updateState.upToDate}
   <div class="update-notification">
+    <!-- ARIA live region for screen reader announcements -->
+    <div 
+      role="status" 
+      aria-live="polite" 
+      aria-atomic="true"
+      class="visually-hidden"
+    >
+      {ariaAnnouncement}
+    </div>
     <div class="update-card">
       {#if updateState.checking}
         <div class="update-content">
@@ -194,6 +214,18 @@
     padding: 1rem;
     width: 320px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .update-content {

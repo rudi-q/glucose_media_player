@@ -19,7 +19,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
     Check,
     Loader2
   } from "lucide-svelte";
-  import UpdateManager from "$lib/components/UpdateManager.svelte";
+  import UpdateManager, { type UpdateManagerAPI } from "$lib/components/UpdateManager.svelte";
   import UpdateNotification from "$lib/components/UpdateNotification.svelte";
   import { getFormattedVersion } from "$lib/utils/version";
 
@@ -115,7 +115,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   let showSettings = $state(false);
   
   // Update manager reference
-  let updateManager: UpdateManager;
+  let updateManager: UpdateManagerAPI;
   let isCheckingForUpdates = $state(false);
 
 onMount(() => {
