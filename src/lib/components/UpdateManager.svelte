@@ -100,9 +100,9 @@
       await update.downloadAndInstall((event: DownloadEvent) => {
         switch (event.event) {
           case 'Started':
-            contentLength = event.data.contentLength;
+            contentLength = event.data.contentLength ?? 0;
             updateStore.setProgress(0, contentLength);
-            console.log(`Started downloading ${event.data.contentLength} bytes`);
+            console.log(`Started downloading ${contentLength} bytes`);
             break;
           case 'Progress':
             downloaded += event.data.chunkLength;
