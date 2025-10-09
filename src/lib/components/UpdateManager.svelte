@@ -146,15 +146,20 @@
   });
 
   // Expose manual check function for external use
-  export function manualCheckForUpdates(manual: boolean = true) {
-    if (!checkPromise) {
-      isManualCheck = manual;
-      // Create new promise and attach finalizer to clear it when settled
-      checkPromise = checkForUpdates().finally(() => {
-        checkPromise = null;
-        isManualCheck = false;
-      });
+  export function manualCheckForUpdates(manual: boolean = true): Promise<void> | null {
+    // Prevent concurrent checks - return null if already checking
+    if (checkPromise) {
+      console.log('Update check already in progress, ignoring request');
+      return null;
     }
+    
+    isManualCheck = manual;
+    // Create new promise and attach finalizer to clear it when settled
+    checkPromise = checkForUpdates().finally(() => {
+      checkPromise = null;
+      isManualCheck = false;
+    });
+    
     return checkPromise;
   }
 </script>

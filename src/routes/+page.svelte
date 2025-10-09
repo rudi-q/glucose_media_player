@@ -1814,7 +1814,13 @@ onMount(() => {
                       if (updateManager && !isCheckingForUpdates) {
                         try {
                           isCheckingForUpdates = true;
-                          await updateManager.manualCheckForUpdates();
+                          const checkPromise = updateManager.manualCheckForUpdates();
+                          if (checkPromise) {
+                            await checkPromise;
+                          } else {
+                            // Check already in progress, return early
+                            console.log('Update check already in progress');
+                          }
                         } finally {
                           isCheckingForUpdates = false;
                         }
