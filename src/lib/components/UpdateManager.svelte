@@ -41,20 +41,22 @@
       if (update) {
         console.log(`Found update ${update.version} from ${update.date} with notes ${update.body}`);
         
+        // setAvailable now clears checking flag automatically
         updateStore.setAvailable(true, update.version, update.date, update.body);
-        updateStore.setChecking(false);
         
         // Auto-start download and installation
         await downloadAndInstallUpdate(update, relaunch);
       } else {
         console.log('No updates available');
-        // Clear any previous update state to avoid showing stale data
-        updateStore.setAvailable(false);
         // Only show "up to date" message for manual checks
         if (isManualCheck) {
+          // setUpToDate now clears availability and metadata automatically
           updateStore.setUpToDate(true);
+        } else {
+          // Clear any previous update state to avoid showing stale data
+          // setAvailable now clears checking flag automatically
+          updateStore.setAvailable(false);
         }
-        updateStore.setChecking(false);
       }
     } catch (error) {
       console.error('Error checking for updates:', error);
@@ -107,7 +109,7 @@
             console.log(`Downloaded ${downloaded} from ${contentLength}`);
             break;
           case 'Finished':
-            updateStore.setDownloading(false);
+            // setCompleted now clears downloading flag automatically
             updateStore.setCompleted(true);
             console.log('Download finished');
             break;
