@@ -9,6 +9,7 @@
 	import { onMount } from 'svelte';
 	import { browser, dev } from '$app/environment';
 	import { updateStore } from '$lib/stores/updateStore';
+	import type { Update, DownloadEvent } from '@tauri-apps/plugin-updater';
 
 	// Props
   export let disableAutoCheck = false;
@@ -88,7 +89,7 @@
     }
   }
 
-  async function downloadAndInstallUpdate(update: any, relaunch: any) {
+  async function downloadAndInstallUpdate(update: Update, relaunch: () => Promise<void>) {
     try {
       updateStore.setDownloading(true);
       
@@ -96,7 +97,7 @@
       let contentLength = 0;
       
       // Download and install the update with progress tracking
-      await update.downloadAndInstall((event: any) => {
+      await update.downloadAndInstall((event: DownloadEvent) => {
         switch (event.event) {
           case 'Started':
             contentLength = event.data.contentLength;
@@ -125,7 +126,7 @@
       
     } catch (error) {
       console.error('Error downloading/installing update:', error);
-      updateStore.setDownloading(false);
+      // setError automatically clears downloading flag
       updateStore.setError(`Failed to install update: ${error}`);
     }
   }
