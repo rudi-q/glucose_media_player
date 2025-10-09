@@ -39,8 +39,16 @@ function createUpdateStore() {
 			contentLength: 0,
 			completed: false
 		})),
-		setAvailable: (available: boolean, version?: string, date?: string, body?: string) =>
-			update((state) => ({ ...state, available, version, date, body, upToDate: false })),
+	setAvailable: (available: boolean, version?: string, date?: string, body?: string) =>
+		update((state) => ({
+			...state,
+			available,
+			// Clear metadata when available is false to prevent stale data
+			version: available ? version : undefined,
+			date: available ? date : undefined,
+			body: available ? body : undefined,
+			upToDate: false
+		})),
 		setDownloading: (downloading: boolean) => update((state) => ({ ...state, downloading })),
 		setProgress: (downloaded: number, contentLength: number) =>
 			update((state) => ({ ...state, downloaded, contentLength })),
