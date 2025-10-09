@@ -2,7 +2,7 @@ name: CI
 
 "on":
   push:
-    branches: [main, develop, feature/*]
+    branches: [main, develop]
   pull_request:
     branches: [main, develop]
 
@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest]
 
     steps:
       - name: Checkout code

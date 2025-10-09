@@ -19,6 +19,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
     Check,
     Loader2
   } from "lucide-svelte";
+  import UpdateManager, { type UpdateManagerAPI } from "$lib/components/UpdateManager.svelte";
+  import UpdateNotification from "$lib/components/UpdateNotification.svelte";
+  import { getFormattedVersion } from "$lib/utils/version";
 
   let videoElement = $state<HTMLVideoElement>();
   let backgroundVideo = $state<HTMLVideoElement>();
@@ -31,7 +34,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   let volume = $state(1);
   let isMuted = $state(false);
   let showControls = $state(false);
-  let hideControlsTimeout: number;
+  let hideControlsTimeout: ReturnType<typeof setTimeout>;
   let isDragging = $state(false);
   let isScrubbing = $state(false);
   let wasPlayingBeforeScrub = $state(false);
@@ -61,14 +64,14 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   let loadingRecent = $state(true);
   let thumbnailCache = $state<Map<string, string>>(new Map());
   let watchProgressMap = $state<Map<string, WatchProgress>>(new Map());
-  let progressSaveInterval: number;
+  let progressSaveInterval: ReturnType<typeof setInterval>;
   
   let audioDevices = $state<MediaDeviceInfo[]>([]);
   let selectedAudioDevice = $state<string>('default');
   let showAudioMenu = $state(false);
   let selectedVideoIndex = $state(0);
   let showCloseButton = $state(false);
-  let hideCloseButtonTimeout: number;
+  let hideCloseButtonTimeout: ReturnType<typeof setTimeout>;
   let showVolumeMenu = $state(false);
   let subtitleSrc = $state<string | null>(null);
   let subtitlesEnabled = $state(true);
@@ -110,6 +113,10 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   let downloadProgress = $state(0);
   let downloadMessage = $state("");
   let showSettings = $state(false);
+  
+  // Update manager reference
+  let updateManager: UpdateManagerAPI;
+  let isCheckingForUpdates = $state(false);
 
 onMount(() => {
     let disposed = false;
@@ -1255,6 +1262,10 @@ onMount(() => {
   ondrop={handleDrop}
   onmousemove={handleMainContainerMouseMove}
 >
+  <!-- Update System -->
+  <UpdateManager bind:this={updateManager} disableAutoCheck={!shouldLoadGallery} />
+  <UpdateNotification />
+  
   <button class="close-button" class:visible={showCloseButton} onclick={closeApp} title="Close (Esc)">
     <X size={16} />
   </button>
@@ -1708,7 +1719,10 @@ onMount(() => {
     <div class="settings-overlay" onclick={(e) => { if (e.target === e.currentTarget) showSettings = false; }}>
       <div class="settings-modal">
         <div class="settings-header">
-          <h2>Settings</h2>
+          <div class="settings-header-content">
+            <h2>Settings</h2>
+            <span class="settings-version">{getFormattedVersion()}</span>
+          </div>
           <button class="settings-close" onclick={() => showSettings = false} title="Close">
             <X size={20} />
           </button>
@@ -1778,6 +1792,46 @@ onMount(() => {
                 </div>
               </div>
             {/if}
+          </div>
+          
+          <!-- App Updates Section -->
+          <div class="settings-section">
+            <h3>App Updates</h3>
+            
+            <div class="settings-group">
+              <div class="settings-item">
+                <div class="settings-item-label">
+                  <div class="settings-item-title">Check for Updates</div>
+                  <div class="settings-item-desc">
+                    Keep Glucose up to date with the latest features and improvements
+                  </div>
+                </div>
+                <div class="settings-item-action">
+                  <button 
+                    class="check-update-button"
+                    disabled={isCheckingForUpdates}
+                    onclick={async () => {
+                      if (updateManager && !isCheckingForUpdates) {
+                        try {
+                          isCheckingForUpdates = true;
+                          const checkPromise = updateManager.manualCheckForUpdates();
+                          if (checkPromise) {
+                            await checkPromise;
+                          } else {
+                            // Check already in progress, return early
+                            console.log('Update check already in progress');
+                          }
+                        } finally {
+                          isCheckingForUpdates = false;
+                        }
+                      }
+                    }}
+                  >
+                    {isCheckingForUpdates ? 'Checking...' : 'Check Now'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -2877,8 +2931,14 @@ onMount(() => {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 2rem 2.5rem 1.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 2rem 2.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .settings-header-content {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
   }
   
   .settings-header h2 {
@@ -2886,6 +2946,16 @@ onMount(() => {
     font-weight: 600;
     margin: 0;
     color: #fff;
+  }
+  
+  .settings-version {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.5);
+    padding: 0.25rem 0.625rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
   }
   
   .settings-close {
@@ -2990,6 +3060,44 @@ onMount(() => {
     background: rgba(255, 255, 255, 0.05);
     color: rgba(255, 255, 255, 0.5);
     border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .settings-item-action {
+    display: flex;
+    align-items: center;
+  }
+  
+  .check-update-button {
+    background: #fff;
+    color: #000;
+    border: none;
+    padding: 0.625rem 1.25rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border-radius: 6px;
+    white-space: nowrap;
+  }
+  
+  .check-update-button:hover {
+    background: rgba(255, 255, 255, 0.9);
+    transform: translateY(-1px);
+  }
+  
+  .check-update-button:active {
+    transform: translateY(0);
+  }
+  
+  .check-update-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
+  
+  .check-update-button:disabled:hover {
+    background: #fff;
+    transform: none;
   }
 
   

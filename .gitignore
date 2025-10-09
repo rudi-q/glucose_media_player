@@ -13,6 +13,14 @@ vite.config.ts.timestamp-*
 /src-tauri/target
 /src-tauri/WixTools
 
+# Tauri updater files
+src-tauri/latest.json
+src-tauri/*.key
+src-tauri/*.key.pub
+
+# Shell scripts in root
+/*.sh
+
 # IDE
 .vscode/
 .idea/

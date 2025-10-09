@@ -34,6 +34,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -50,5 +51,16 @@
         "description": "Glucose Video File"
       }
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYyMUQ3NTNBMkFEOEJEMDMKUldRRHZkZ3FPblVkOG1zc2tPMG1mWk44R0FHVVNZMWVoZDJGN1daUzNQVCtZbkhxam9jdSt0ODcK",
+      "endpoints": [
+        "https://github.com/rudi-q/glucose_media_player/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
