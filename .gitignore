@@ -30,3 +30,12 @@ src-tauri/*.key.pub
 
 # OS
 Thumbs.db
+
+# Exclude all .md files except specific project documentation
+*.md
+!CHANGELOG.md
+!README.md
+!README.test.md
+!SECURITY.md
+!CODE_OF_CONDUCT.md
+!CONTRIBUTING.md
