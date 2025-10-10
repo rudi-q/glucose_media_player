@@ -539,6 +539,7 @@ async fn generate_subtitles(
     app_handle: tauri::AppHandle,
     video_path: String,
     model_size: String,
+    language: String,
 ) -> Result<String, String> {
     #[cfg(debug_assertions)] {
         println!("Starting subtitle generation for: {}", video_path);
@@ -625,6 +626,7 @@ async fn generate_subtitles(
     let temp_audio_clone = temp_audio_str.clone();
     let subtitle_path_clone = subtitle_path_str.clone();
     let app_handle_clone = app_handle.clone();
+    let language_clone = language.clone();
     
     tokio::task::spawn_blocking(move || {
         transcribe_audio_with_whisper(
@@ -632,6 +634,7 @@ async fn generate_subtitles(
             &temp_audio_clone,
             &subtitle_path_clone,
             &app_handle_clone,
+            &language_clone,
         )
     }).await
     .map_err(|e| format!("Transcription task failed: {}", e))??;
@@ -655,6 +658,7 @@ fn transcribe_audio_with_whisper(
     audio_path: &str,
     output_subtitle_path: &str,
     app_handle: &tauri::AppHandle,
+    language: &str,
 ) -> Result<(), String> {
     use whisper_rs::{WhisperContext, WhisperContextParameters, FullParams, SamplingStrategy};
     
@@ -684,7 +688,7 @@ fn transcribe_audio_with_whisper(
     params.set_print_realtime(false);
     params.set_print_timestamps(true);
     params.set_translate(false);  // Don't translate, keep original language
-    params.set_language(Some("auto"));  // Auto-detect language
+    params.set_language(Some(language));  // Use selected language
     params.set_max_len(0);  // Disable max length limit per segment
     params.set_split_on_word(true);  // Split on word boundaries
     

@@ -1,6 +1,6 @@
 {
   "name": "glucose",
-  "version": "2.3.1",
+  "version": "2.4.0",
   "description": "A minimalist video player",
   "type": "module",
   "scripts": {

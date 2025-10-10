@@ -113,6 +113,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   let downloadProgress = $state(0);
   let downloadMessage = $state("");
   let showSettings = $state(false);
+  let subtitleLanguage = $state("auto"); // Language for AI subtitle generation
   
   // Update manager reference
   let updateManager: UpdateManagerAPI;
@@ -1161,7 +1162,8 @@ onMount(() => {
     try {
       const subtitlePath = await invoke<string>('generate_subtitles', {
         videoPath: currentVideoPath,
-        modelSize: modelSize
+        modelSize: modelSize,
+        language: subtitleLanguage
       });
       
       // Auto-load the generated subtitle
@@ -1788,6 +1790,38 @@ onMount(() => {
                     {:else}
                       <span class="status-badge inactive">Not Set Up</span>
                     {/if}
+                  </div>
+                </div>
+                
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">Subtitle Language</div>
+                    <div class="settings-item-desc">
+                      Select the language for AI-generated subtitles
+                    </div>
+                  </div>
+                  <div class="settings-item-action">
+                    <select 
+                      class="language-select"
+                      bind:value={subtitleLanguage}
+                    >
+                      <option value="auto">Auto Detect</option>
+                      <option value="en">English</option>
+                      <option value="es">Spanish</option>
+                      <option value="fr">French</option>
+                      <option value="de">German</option>
+                      <option value="it">Italian</option>
+                      <option value="pt">Portuguese</option>
+                      <option value="ru">Russian</option>
+                      <option value="ja">Japanese</option>
+                      <option value="ko">Korean</option>
+                      <option value="zh">Chinese</option>
+                      <option value="ar">Arabic</option>
+                      <option value="hi">Hindi</option>
+                      <option value="nl">Dutch</option>
+                      <option value="pl">Polish</option>
+                      <option value="tr">Turkish</option>
+                    </select>
                   </div>
                 </div>
               </div>
@@ -2966,16 +3000,16 @@ onMount(() => {
     justify-content: center;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 50%;
+    border-radius: 6px;
     color: rgba(255, 255, 255, 0.7);
     cursor: pointer;
     transition: all 0.2s ease;
   }
   
   .settings-close:hover {
-    background: rgba(255, 0, 0, 0.2);
-    border-color: rgba(255, 0, 0, 0.3);
-    color: #ff5555;
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.3);
+    color: #fff;
     transform: scale(1.1);
   }
   
@@ -3098,6 +3132,46 @@ onMount(() => {
   .check-update-button:disabled:hover {
     background: #fff;
     transform: none;
+  }
+  
+  .language-select {
+    background: rgba(255, 255, 255, 0.05);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 0.5rem 2.5rem 0.5rem 0.875rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border-radius: 6px;
+    outline: none;
+    width: auto;
+    min-width: 160px;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12"%3E%3Cpath fill="%23ffffff" d="M6 9L1 4h10z"/%3E%3C/svg%3E');
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+    background-size: 12px;
+  }
+  
+  .language-select:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    background-image: url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12"%3E%3Cpath fill="%23ffffff" d="M6 9L1 4h10z"/%3E%3C/svg%3E');
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+  
+  .language-select:focus {
+    border-color: #C065B6;
+    background-color: rgba(255, 255, 255, 0.08);
+    background-image: url('data:image/svg+xml;charset=UTF-8,%3Csvg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12"%3E%3Cpath fill="%23ffffff" d="M6 9L1 4h10z"/%3E%3C/svg%3E');
+  }
+  
+  .language-select option {
+    background: #1a1a1a;
+    color: #fff;
+    padding: 0.5rem;
   }
 
   
