@@ -8,6 +8,10 @@
   import type { VideoFile } from "$lib/types/video";
   import { formatDuration } from "$lib/utils/time";
   
+  // Module-level cache that persists across component remounts
+  let cachedVideos: VideoFile[] = [];
+  let videosLoaded = false;
+  
   let recentVideos = $state<VideoFile[]>([]);
   let loadingRecent = $state(true);
   let thumbnailCache = $state<Map<string, string>>(new Map());
@@ -23,11 +27,20 @@
   const showSettings = getContext<() => void>('showSettings');
   
   onMount(() => {
+    // Only load if not already loaded
+    if (videosLoaded) {
+      recentVideos = cachedVideos;
+      loadingRecent = false;
+      return;
+    }
+    
     // Load recent videos
     (async () => {
       try {
         const videos = await invoke<VideoFile[]>("get_recent_videos");
         recentVideos = videos;
+        cachedVideos = videos;
+        videosLoaded = true;
         
         // Load watch progress for all videos
         const progressData = await invoke<Record<string, WatchProgress>>("get_all_watch_progress");
