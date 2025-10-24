@@ -13,6 +13,10 @@
 
 	// Props
   export let disableAutoCheck = false;
+  export let onAutoCheckStart: (() => void) | undefined = undefined;
+  export let lastAutoCheckTime: number = 0;
+  
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
   
   // Check if we're in Tauri environment
   const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
@@ -28,9 +32,23 @@
       console.log('Updater disabled (development mode or not in Tauri environment)');
       return;
     }
+    
+    // For auto-checks, enforce daily limit
+    if (!isManualCheck && lastAutoCheckTime > 0) {
+      const timeSinceLastCheck = Date.now() - lastAutoCheckTime;
+      if (timeSinceLastCheck < ONE_DAY_MS) {
+        console.log(`Auto-check skipped - last check was ${Math.floor(timeSinceLastCheck / 1000)}s ago`);
+        return;
+      }
+    }
 
     try {
       updateStore.setChecking(true);
+      
+      // Notify parent that auto-check is starting
+      if (!isManualCheck && onAutoCheckStart) {
+        onAutoCheckStart();
+      }
       
       // Dynamic imports for Tauri plugins (only available in Tauri environment)
       const { check } = await import('@tauri-apps/plugin-updater');

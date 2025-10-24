@@ -4,6 +4,7 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, setContext } from "svelte";
   import { goto } from "$app/navigation";
+  import { page } from "$app/stores";
   import { X, Settings, Check, Loader2 } from "lucide-svelte";
   import UpdateManager, { type UpdateManagerAPI } from "$lib/components/UpdateManager.svelte";
   import UpdateNotification from "$lib/components/UpdateNotification.svelte";
@@ -24,6 +25,8 @@
   
   // Update manager
   let updateManager: UpdateManagerAPI;
+  let isOnGallery = $state(true);
+  let lastAutoCheckTime = $state<number>(0);
   
   // Subscribe to stores
   let settings = $state($appSettings);
@@ -32,6 +35,11 @@
   // Subscribe to setupStore changes
   setupStore.subscribe(status => {
     setupStatus = status;
+  });
+  
+  // Track current route
+  $effect(() => {
+    isOnGallery = $page.route.id === '/' || $page.route.id === null;
   });
   
   // Provide context for child routes
@@ -160,10 +168,19 @@
     showSetupDialog = false;
     invoke('mark_setup_completed').catch(console.error);
   }
+  
+  function handleAutoCheckStart() {
+    lastAutoCheckTime = Date.now();
+  }
 </script>
 
 <!-- Update System -->
-<UpdateManager bind:this={updateManager} disableAutoCheck={false} />
+<UpdateManager 
+  bind:this={updateManager} 
+  disableAutoCheck={!isOnGallery}
+  onAutoCheckStart={handleAutoCheckStart}
+  lastAutoCheckTime={lastAutoCheckTime}
+/>
 <UpdateNotification />
 
 {@render children()}
