@@ -8,5 +8,5 @@ export interface VideoFile {
 
 export interface VideoInfo {
 	format: string;
-	size_mb: number;
+	sizeMb: number;
 }

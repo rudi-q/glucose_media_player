@@ -54,6 +54,7 @@
   let showPreview = $state(false);
   let previewTime = $state(0);
   let previewPosition = $state(0);
+  let previewRaf: number | null = null;
   
   // Subtitle state
   let subtitleSrc = $state<string | null>(null);
@@ -506,7 +507,7 @@
       case 'mkv': ratio = 0.90; break;
     }
     
-    const estimatedSize = currentVideoInfo.size_mb * ratio;
+    const estimatedSize = currentVideoInfo.sizeMb * ratio;
     return `~${estimatedSize.toFixed(0)} MB`;
   }
   
@@ -599,11 +600,54 @@
     previewPosition = e.clientX - rect.left;
     showPreview = true;
     
-    previewVideo.currentTime = previewTime;
+    // Throttle preview seeks with requestAnimationFrame
+    if (previewRaf !== null) cancelAnimationFrame(previewRaf);
+    previewRaf = requestAnimationFrame(() => {
+      if (previewVideo) previewVideo.currentTime = previewTime;
+      previewRaf = null;
+    });
   }
   
   function handleProgressLeave() {
     showPreview = false;
+    // Cancel any pending preview seek
+    if (previewRaf !== null) {
+      cancelAnimationFrame(previewRaf);
+      previewRaf = null;
+    }
+  }
+  
+  function handleProgressKeydown(e: KeyboardEvent) {
+    if (!videoElement || !duration) return;
+    
+    let handled = false;
+    let newTime = currentTime;
+    const step = duration * 0.01; // 1% of duration
+    
+    switch (e.key) {
+      case 'ArrowLeft':
+        newTime = Math.max(0, currentTime - step);
+        handled = true;
+        break;
+      case 'ArrowRight':
+        newTime = Math.min(duration, currentTime + step);
+        handled = true;
+        break;
+      case 'Home':
+        newTime = 0;
+        handled = true;
+        break;
+      case 'End':
+        newTime = duration;
+        handled = true;
+        break;
+    }
+    
+    if (handled) {
+      e.preventDefault();
+      videoElement.currentTime = newTime;
+      currentTime = newTime;
+    }
   }
   
   function drawPreview() {
@@ -811,6 +855,7 @@
       onmousedown={startScrubbing}
       onmousemove={handleProgressHover}
       onmouseleave={handleProgressLeave}
+      onkeydown={handleProgressKeydown}
       role="slider" 
       aria-label="Video progress"
       aria-valuemin={0}
@@ -824,7 +869,7 @@
           <div class="preview-time">{formatTime(previewTime)}</div>
         </div>
       {/if}
-      <div class="progress-filled" style="width: {(currentTime / duration) * 100}%">
+      <div class="progress-filled" style="width: {duration ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0}%">
         <div class="progress-handle"></div>
       </div>
     </div>
@@ -871,7 +916,18 @@
                 aria-label="Volume"
                 aria-orientation="vertical"
                 bind:value={volume}
-                oninput={(e) => { if (videoElement) { videoElement.volume = (e.target as HTMLInputElement).valueAsNumber; if (isMuted) { isMuted = false; videoElement.muted = false; } } }}
+                oninput={(e) => { 
+                  if (videoElement) { 
+                    const newVolume = (e.target as HTMLInputElement).valueAsNumber;
+                    videoElement.volume = newVolume; 
+                    appSettings.updateVolume(newVolume);
+                    if (isMuted) { 
+                      isMuted = false; 
+                      videoElement.muted = false; 
+                      appSettings.updateMuted(false);
+                    } 
+                  } 
+                }}
               />
               <button class="mute-toggle" onclick={toggleMute} class:muted={isMuted}>
                 {#if isMuted}

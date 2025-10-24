@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 
 export interface WatchProgress {
 	path: string;
@@ -20,13 +20,10 @@ function createWatchProgressStore() {
 			}),
 		loadAllProgress: (progressData: Record<string, WatchProgress>) =>
 			set(new Map(Object.entries(progressData))),
-		getProgress: (videoPath: string): WatchProgress | undefined => {
-			let result: WatchProgress | undefined;
-			subscribe((map) => {
-				result = map.get(videoPath);
-			})();
-			return result;
-		},
+	getProgress: (videoPath: string): WatchProgress | undefined => {
+		const map = get({ subscribe });
+		return map.get(videoPath);
+	},
 		clear: () => set(new Map())
 	};
 }
