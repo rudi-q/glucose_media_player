@@ -14,6 +14,7 @@
 	// Props
   export let disableAutoCheck = false;
   export let onAutoCheckStart: (() => void) | undefined = undefined;
+  export let onAutoCheckTimeUpdate: ((time: number) => void) | undefined = undefined;
   export let lastAutoCheckTime: number = 0;
   
   const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -46,8 +47,14 @@
       updateStore.setChecking(true);
       
       // Notify parent that auto-check is starting
-      if (!isManualCheck && onAutoCheckStart) {
-        onAutoCheckStart();
+      if (!isManualCheck) {
+        const now = Date.now();
+        if (onAutoCheckStart) {
+          onAutoCheckStart();
+        }
+        if (onAutoCheckTimeUpdate) {
+          onAutoCheckTimeUpdate(now);
+        }
       }
       
       // Dynamic imports for Tauri plugins (only available in Tauri environment)

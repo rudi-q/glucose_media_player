@@ -82,6 +82,7 @@
   let conversionProgress = $state(0);
   let conversionMessage = $state("");
   let currentVideoInfo = $state<VideoInfo | null>(null);
+  let normalizedFormat = $derived(currentVideoInfo?.format?.toUpperCase() ?? '');
   
   // Progress tracking
   let currentVideoPath = $state<string | null>(null);
@@ -1076,17 +1077,17 @@
         
         {#if showConvertSubmenu}
           <div class="context-submenu">
-            {#if currentVideoInfo && currentVideoInfo.format !== 'MP4'}
+            {#if currentVideoInfo && normalizedFormat !== 'MP4'}
               <button class="context-menu-item" onclick={() => startConversion('mp4')}>
                 <span>MP4 {estimateConvertedSize('mp4')}</span>
               </button>
             {/if}
-            {#if currentVideoInfo && currentVideoInfo.format !== 'WEBM'}
+            {#if currentVideoInfo && normalizedFormat !== 'WEBM'}
               <button class="context-menu-item" onclick={() => startConversion('webm')}>
                 <span>WebM {estimateConvertedSize('webm')}</span>
               </button>
             {/if}
-            {#if currentVideoInfo && currentVideoInfo.format !== 'MKV'}
+            {#if currentVideoInfo && normalizedFormat !== 'MKV'}
               <button class="context-menu-item" onclick={() => startConversion('mkv')}>
                 <span>MKV {estimateConvertedSize('mkv')}</span>
               </button>
@@ -1424,7 +1425,6 @@
     outline: none;
     cursor: pointer;
     writing-mode: bt-lr;
-    -webkit-appearance: slider-vertical;
   }
 
   .volume-slider-vertical::-webkit-slider-thumb {

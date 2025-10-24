@@ -26,7 +26,13 @@
   // Update manager
   let updateManager: UpdateManagerAPI;
   let isOnGallery = $state(true);
+  
+  // Initialize from localStorage if available
   let lastAutoCheckTime = $state<number>(0);
+  if (typeof localStorage !== 'undefined') {
+    const stored = localStorage.getItem('lastAutoCheckTime');
+    lastAutoCheckTime = stored ? parseInt(stored, 10) || 0 : 0;
+  }
   
   // Subscribe to stores
   let settings = $state($appSettings);
@@ -172,6 +178,13 @@
   function handleAutoCheckStart() {
     lastAutoCheckTime = Date.now();
   }
+  
+  function handleAutoCheckTimeUpdate(time: number) {
+    lastAutoCheckTime = time;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('lastAutoCheckTime', time.toString());
+    }
+  }
 </script>
 
 <!-- Update System -->
@@ -179,6 +192,7 @@
   bind:this={updateManager} 
   disableAutoCheck={!isOnGallery}
   onAutoCheckStart={handleAutoCheckStart}
+  onAutoCheckTimeUpdate={handleAutoCheckTimeUpdate}
   lastAutoCheckTime={lastAutoCheckTime}
 />
 <UpdateNotification />
