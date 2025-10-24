@@ -27,7 +27,12 @@
   
   // Subscribe to stores
   let settings = $state($appSettings);
-  let setupStatus = $state($setupStore);
+  let setupStatus = $state<SetupStatus | null>(null);
+  
+  // Subscribe to setupStore changes
+  setupStore.subscribe(status => {
+    setupStatus = status;
+  });
   
   // Provide context for child routes
   setContext('showSettings', () => showSettings = true);
