@@ -22,7 +22,7 @@
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
   import type { VideoInfo } from "$lib/types/video";
   import { loadSubtitleFile } from "$lib/utils/subtitles";
-  import { formatTime, formatEstimatedTime } from "$lib/utils/time";
+  import { formatTime, formatEstimatedTime, formatTimeForScreenReader } from "$lib/utils/time";
   
   let { data } = $props();
   
@@ -93,7 +93,6 @@
   const showSetupDialog = getContext<() => void>('showSetupDialog');
   const getSetupStatus = getContext<() => SetupStatus | null>('setupStatus');
   
-  let settings = $state($appSettings);
   let setupStatus = $state(getSetupStatus());
   
   onMount(() => {
@@ -723,10 +722,12 @@
     generationMessage = 'Starting subtitle generation...';
     
     try {
+      // Get current subtitle language from store at call time
+      const currentSettings = $appSettings;
       const subtitlePath = await invoke<string>('generate_subtitles', {
         videoPath: currentVideoPath,
         modelSize: modelSize,
-        language: settings.subtitleLanguage
+        language: currentSettings.subtitleLanguage
       });
       
       // Auto-load the generated subtitle
@@ -862,6 +863,7 @@
       aria-valuemin={0}
       aria-valuemax={duration}
       aria-valuenow={currentTime}
+      aria-valuetext={formatTimeForScreenReader(currentTime)}
       tabindex="0"
     >
       {#if showPreview}

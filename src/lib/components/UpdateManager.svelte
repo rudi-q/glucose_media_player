@@ -49,6 +49,8 @@
       // Notify parent that auto-check is starting
       if (!isManualCheck) {
         const now = Date.now();
+        // Update local state immediately to prevent stale checks
+        lastAutoCheckTime = now;
         if (onAutoCheckStart) {
           onAutoCheckStart();
         }

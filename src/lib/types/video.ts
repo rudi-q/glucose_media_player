@@ -15,11 +15,16 @@ export interface VideoFile {
 }
 
 /**
+ * Common video format types
+ */
+export type VideoFormat = 'MP4' | 'MKV' | 'WEBM' | 'AVI' | 'MOV' | 'FLV' | 'WMV' | string;
+
+/**
  * Video metadata information.
- * @property {string} format - Video format as uppercase string token (e.g., 'MP4', 'WEBM', 'MKV')
+ * @property {VideoFormat} format - Video format as uppercase string token (e.g., 'MP4', 'WEBM', 'MKV')
  * @property {number} sizeMb - File size in megabytes
  */
 export interface VideoInfo {
-	format: string;
+	format: VideoFormat;
 	sizeMb: number;
 }

@@ -35,3 +35,19 @@ export function formatEstimatedTime(seconds: number): string {
 		return mins > 0 ? `~${hours}h ${mins}m` : `~${hours}h`;
 	}
 }
+
+/**
+ * Format time for screen readers (aria-valuetext)
+ */
+export function formatTimeForScreenReader(seconds: number): string {
+	const h = Math.floor(seconds / 3600);
+	const m = Math.floor((seconds % 3600) / 60);
+	const s = Math.floor(seconds % 60);
+	
+	const parts: string[] = [];
+	if (h > 0) parts.push(`${h} ${h === 1 ? 'hour' : 'hours'}`);
+	if (m > 0) parts.push(`${m} ${m === 1 ? 'minute' : 'minutes'}`);
+	if (s > 0 || parts.length === 0) parts.push(`${s} ${s === 1 ? 'second' : 'seconds'}`);
+	
+	return parts.join(' ');
+}
