@@ -32,6 +32,11 @@
     "withGlobalTauri": true
   },
   "bundle": {
+    "publisher": "DoublOne Studios Limited",
+    "homepage": "https://glucose.media",
+    "category": "Entertainment",
+    "shortDescription": "Glucose Media Player offers a minimal, no-UI video playback experience for Windows, prioritizing content over interface clutter and supporting common formats.",
+    "longDescription": "Glucose Media Player is designed for users seeking a truly minimalist video experience on Windows 10 and above, featuring a tiny 4 MB installer and free, open-source licensing (MPL 2.0). The player’s interface fades away when not in use, allowing viewers to focus solely on the film without unnecessary toolbars or controls. When interaction is needed, moving the mouse or pressing the spacebar reveals minimal playback controls, keeping distractions to a minimum. Glucose supports the most common video formats, and includes local AI-powered subtitle generation for enhanced privacy. By making the UI invisible and reducing clutter, Glucose Media Player lets the story on screen take center stage, appealing to users who value simplicity and immersion in their viewing experience.",
     "active": true,
     "targets": ["nsis", "dmg"],
     "createUpdaterArtifacts": true,

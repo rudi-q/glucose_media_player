@@ -12,6 +12,9 @@ vite.config.ts.timestamp-*
 # Tauri
 /src-tauri/target
 /src-tauri/WixTools
+src-tauri/gen/
+src-tauri/msix
+src-tauri/*.microsoftstore.*.json
 
 # Tauri updater files
 src-tauri/latest.json
