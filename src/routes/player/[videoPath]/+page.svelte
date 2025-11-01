@@ -235,6 +235,10 @@
       case "f":
         toggleViewMode();
         break;
+      case "p":
+        e.preventDefault();
+        togglePipMode();
+        break;
       case "m":
         toggleMute();
         break;
@@ -443,6 +447,67 @@
     document.addEventListener('mouseup', handleMouseUp);
   }
   
+  async function togglePipMode() {
+    if (viewMode === 'pip') {
+      // Exit PiP mode - return to cinematic
+      try {
+        // Restore transparent background
+        document.body.style.background = 'transparent';
+        
+        // Clear inline video styles
+        if (videoElement) {
+          videoElement.style.cssText = '';
+        }
+        
+        await invoke('exit_pip_mode');
+        viewMode = 'cinematic';
+      } catch (err) {
+        console.error('Failed to exit PiP mode:', err);
+      }
+    } else {
+      // Enter PiP mode from any other mode
+      try {
+        await invoke('enter_pip_mode');
+        
+        // Change mode immediately
+        viewMode = 'pip';
+        
+        // Force solid background for PiP (transparency causes black screen)
+        document.body.style.background = '#000';
+        
+        // Wait a moment for window resize, then trigger video reflow
+        await new Promise(resolve => setTimeout(resolve, 150));
+        
+        if (videoElement) {
+          const wasPlaying = !videoElement.paused;
+          
+          // Force PiP video sizing via inline styles
+          videoElement.style.cssText = `
+            width: 100% !important;
+            height: 100% !important;
+            max-width: 100% !important;
+            max-height: 100% !important;
+            object-fit: contain !important;
+            position: absolute !important;
+            top: 0 !important;
+            left: 0 !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            display: block !important;
+          `;
+          void videoElement.offsetHeight; // Force reflow
+          
+          // Restore playback state
+          if (wasPlaying) {
+            videoElement.play().catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.error('Failed to enter PiP mode:', err);
+      }
+    }
+  }
+
   async function toggleViewMode() {
     const modes: ViewMode[] = ['cinematic', 'fullscreen', 'pip'];
     const currentIndex = modes.indexOf(viewMode);
