@@ -167,13 +167,6 @@ fn enter_pip_mode(app_handle: tauri::AppHandle) -> Result<(), String> {
     #[cfg(debug_assertions)]
     println!("Saved window state: {:?}", state);
     
-    // Disable transparency in PiP mode (can cause rendering issues)
-    #[cfg(target_os = "windows")]
-    {
-        // Note: Transparency cannot be toggled at runtime on Windows with current Tauri
-        // The window is created with transparency=true, so we work around it with CSS
-    }
-    
     // Enable decorations for PiP mode so window can be dragged
     window.set_decorations(true)
         .map_err(|e| format!("Failed to enable decorations: {}", e))?;

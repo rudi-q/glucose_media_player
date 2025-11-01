@@ -448,8 +448,6 @@
     const currentIndex = modes.indexOf(viewMode);
     const nextMode = modes[(currentIndex + 1) % modes.length];
     
-    console.log(`Switching from ${viewMode} to ${nextMode}`);
-    
     // Handle PiP transitions
     if (viewMode === 'pip') {
       // Exiting PiP mode
@@ -463,7 +461,6 @@
         }
         
         await invoke('exit_pip_mode');
-        console.log('Exited PiP mode');
       } catch (err) {
         console.error('Failed to exit PiP mode:', err);
       }
@@ -473,7 +470,6 @@
       // Entering PiP mode
       try {
         await invoke('enter_pip_mode');
-        console.log('Entered PiP mode, waiting for window resize...');
         
         // Change mode immediately
         viewMode = nextMode;
@@ -485,16 +481,6 @@
         await new Promise(resolve => setTimeout(resolve, 150));
         
         if (videoElement) {
-          console.log('Forcing video reflow');
-          console.log('Video element dimensions:', {
-            width: videoElement.offsetWidth,
-            height: videoElement.offsetHeight,
-            clientWidth: videoElement.clientWidth,
-            clientHeight: videoElement.clientHeight
-          });
-          
-          // Force video element to recalculate its size
-          const currentTime = videoElement.currentTime;
           const wasPlaying = !videoElement.paused;
           
           // Force PiP video sizing via inline styles
@@ -513,14 +499,9 @@
           `;
           void videoElement.offsetHeight; // Force reflow
           
-          console.log('After reflow, video dimensions:', {
-            width: videoElement.offsetWidth,
-            height: videoElement.offsetHeight
-          });
-          
           // Restore playback state
           if (wasPlaying) {
-            videoElement.play().catch(e => console.log('Play failed:', e));
+            videoElement.play().catch(() => {});
           }
         }
         
@@ -1242,11 +1223,6 @@
     background: #000 !important;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-  }
-
-  /* Ensure body is not transparent in PiP mode */
-  :global(body:has(.video-container.pip)) {
-    background: #000 !important;
   }
 
   .video-container {
