@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::path::Path;
 use std::process::Command;
 use tauri::{PhysicalPosition, PhysicalSize};
@@ -47,6 +47,27 @@ const MIDDLE_ATTEMPT_DELAY_MS: u64 = 1000;
 const FINAL_ATTEMPT_DELAY_MS: u64 = 500;
 const INITIAL_ATTEMPT_COUNT: u32 = 5;
 const MIDDLE_ATTEMPT_COUNT: u32 = 15;
+
+// PiP window configuration from constants.json
+#[derive(Deserialize)]
+struct PipWindowConfig {
+    width: u32,
+    height: u32,
+    padding: i32,
+}
+
+#[derive(Deserialize)]
+struct AppConstants {
+    #[serde(rename = "pipWindow")]
+    pip_window: PipWindowConfig,
+}
+
+fn get_pip_constants() -> PipWindowConfig {
+    const CONSTANTS_JSON: &str = include_str!("../../constants.json");
+    let constants: AppConstants = serde_json::from_str(CONSTANTS_JSON)
+        .expect("Failed to parse constants.json");
+    constants.pip_window
+}
 
 // Path sanitization function
 fn sanitize_path(path: &str) -> String {
@@ -171,8 +192,11 @@ fn enter_pip_mode(app_handle: tauri::AppHandle) -> Result<(), String> {
     window.set_decorations(true)
         .map_err(|e| format!("Failed to enable decorations: {}", e))?;
     
+    // Get PiP configuration from constants.json
+    let pip_config = get_pip_constants();
+    
     // Set PiP window properties
-    window.set_size(PhysicalSize::new(400, 225))
+    window.set_size(PhysicalSize::new(pip_config.width, pip_config.height))
         .map_err(|e| format!("Failed to set window size: {}", e))?;
     
     // Position at bottom-right corner with some padding
@@ -180,8 +204,8 @@ fn enter_pip_mode(app_handle: tauri::AppHandle) -> Result<(), String> {
     if let Ok(monitor) = window.current_monitor() {
         if let Some(monitor) = monitor {
             let monitor_size = monitor.size();
-            let x = (monitor_size.width as i32) - 400 - 20; // 20px padding
-            let y = (monitor_size.height as i32) - 225 - 20;
+            let x = (monitor_size.width as i32) - (pip_config.width as i32) - pip_config.padding;
+            let y = (monitor_size.height as i32) - (pip_config.height as i32) - pip_config.padding;
             window.set_position(PhysicalPosition::new(x, y))
                 .map_err(|e| format!("Failed to set window position: {}", e))?;
         }
