@@ -451,16 +451,28 @@
     if (viewMode === 'pip') {
       // Exit PiP mode - return to cinematic
       try {
+        await invoke('exit_pip_mode');
+        
+        // Change mode immediately
+        viewMode = 'cinematic';
+        
         // Restore transparent background
         document.body.style.background = 'transparent';
         
+        // Wait for window resize, then restore video
+        await new Promise(resolve => setTimeout(resolve, 150));
+        
         // Clear inline video styles
         if (videoElement) {
+          const wasPlaying = !videoElement.paused;
           videoElement.style.cssText = '';
+          void videoElement.offsetHeight; // Force reflow
+          
+          // Restore playback state
+          if (wasPlaying) {
+            videoElement.play().catch(() => {});
+          }
         }
-        
-        await invoke('exit_pip_mode');
-        viewMode = 'cinematic';
       } catch (err) {
         console.error('Failed to exit PiP mode:', err);
       }
@@ -517,17 +529,33 @@
     if (viewMode === 'pip') {
       // Exiting PiP mode
       try {
+        await invoke('exit_pip_mode');
+        
+        // Change mode immediately
+        viewMode = nextMode;
+        
         // Restore transparent background
         document.body.style.background = 'transparent';
         
+        // Wait for window resize, then restore video
+        await new Promise(resolve => setTimeout(resolve, 150));
+        
         // Clear inline video styles
         if (videoElement) {
+          const wasPlaying = !videoElement.paused;
           videoElement.style.cssText = '';
+          void videoElement.offsetHeight; // Force reflow
+          
+          // Restore playback state
+          if (wasPlaying) {
+            videoElement.play().catch(() => {});
+          }
         }
         
-        await invoke('exit_pip_mode');
+        return; // Exit early since we already set viewMode
       } catch (err) {
         console.error('Failed to exit PiP mode:', err);
+        return;
       }
     }
     
