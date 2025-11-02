@@ -1,15 +1,17 @@
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use tauri::{Manager, RunEvent};
+use tauri::RunEvent;
 use std::fs;
 use std::time::SystemTime;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::path::Path;
 use std::process::Command;
+use tauri::{PhysicalPosition, PhysicalSize};
+use anyhow::anyhow;
 
 // Helper to create a Command with hidden console window on Windows
 fn create_hidden_command(program: &str) -> Command {
@@ -29,6 +31,17 @@ fn create_hidden_command(program: &str) -> Command {
 static PENDING_FILES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static FILE_PROCESSED: Mutex<bool> = Mutex::new(false);
 
+// PiP window state storage
+#[derive(Clone, Debug)]
+struct WindowState {
+    size: PhysicalSize<u32>,
+    position: PhysicalPosition<i32>,
+    decorations_enabled: bool,
+    pip_active: bool,
+}
+
+static WINDOW_STATE: Mutex<Option<WindowState>> = Mutex::new(None);
+
 // Configuration constants
 const MAX_FILE_LOADING_ATTEMPTS: u32 = 30;
 const FRONTEND_READY_WAIT_MS: u64 = 500;
@@ -37,6 +50,27 @@ const MIDDLE_ATTEMPT_DELAY_MS: u64 = 1000;
 const FINAL_ATTEMPT_DELAY_MS: u64 = 500;
 const INITIAL_ATTEMPT_COUNT: u32 = 5;
 const MIDDLE_ATTEMPT_COUNT: u32 = 15;
+
+// PiP window configuration from constants.json
+#[derive(Deserialize)]
+struct PipWindowConfig {
+    width: u32,
+    height: u32,
+    padding: i32,
+}
+
+#[derive(Deserialize)]
+struct AppConstants {
+    #[serde(rename = "pipWindow")]
+    pip_window: PipWindowConfig,
+}
+
+fn get_pip_constants() -> Result<PipWindowConfig, anyhow::Error> {
+    const CONSTANTS_JSON: &str = include_str!("../../constants.json");
+    let constants: AppConstants = serde_json::from_str(CONSTANTS_JSON)
+        .map_err(|e| anyhow!("Failed to parse constants.json: {}", e))?;
+    Ok(constants.pip_window)
+}
 
 // Path sanitization function
 fn sanitize_path(path: &str) -> String {
@@ -135,6 +169,119 @@ fn exit_app(app_handle: tauri::AppHandle) {
     #[cfg(debug_assertions)]
     println!("Exit app command called");
     app_handle.exit(0);
+}
+
+#[tauri::command]
+fn enter_pip_mode(app_handle: tauri::AppHandle) -> Result<(), String> {
+    let window = app_handle.get_webview_window("main")
+        .ok_or("Failed to get main window")?;
+    
+    // Check if already in PiP mode (idempotency)
+    {
+        let state = WINDOW_STATE.lock().unwrap();
+        if let Some(saved_state) = state.as_ref() {
+            if saved_state.pip_active {
+                #[cfg(debug_assertions)]
+                println!("Already in PiP mode, skipping");
+                return Ok(());
+            }
+        }
+    }
+    
+    // Get PiP configuration from constants.json
+    let pip_config = get_pip_constants()
+        .map_err(|e| format!("Failed to load PiP configuration: {}", e))?;
+    
+    // Save current window state
+    let current_size = window.outer_size()
+        .map_err(|e| format!("Failed to get window size: {}", e))?;
+    let current_position = window.outer_position()
+        .map_err(|e| format!("Failed to get window position: {}", e))?;
+    let current_decorations = window.is_decorated()
+        .map_err(|e| format!("Failed to get decoration state: {}", e))?;
+    
+    let mut state = WINDOW_STATE.lock().unwrap();
+    *state = Some(WindowState {
+        size: current_size,
+        position: current_position,
+        decorations_enabled: current_decorations,
+        pip_active: true,
+    });
+    
+    #[cfg(debug_assertions)]
+    println!("Saved window state: {:?}", state);
+    
+    // Enable decorations for PiP mode so window can be dragged
+    window.set_decorations(true)
+        .map_err(|e| format!("Failed to enable decorations: {}", e))?;
+    
+    // Set PiP window properties
+    window.set_size(PhysicalSize::new(pip_config.width, pip_config.height))
+        .map_err(|e| format!("Failed to set window size: {}", e))?;
+    
+    // Position at bottom-right corner with some padding
+    // Get monitor size or use fallback defaults
+    let (screen_width, screen_height) = if let Ok(Some(monitor)) = window.current_monitor() {
+        let size = monitor.size();
+        (size.width as i32, size.height as i32)
+    } else {
+        // Fallback when monitor detection fails
+        (1920i32, 1080i32)
+    };
+    
+    // Calculate position from screen size
+    let x = screen_width - (pip_config.width as i32) - pip_config.padding;
+    let y = screen_height - (pip_config.height as i32) - pip_config.padding;
+    let position = PhysicalPosition::new(x, y);
+    
+    window.set_position(position)
+        .map_err(|e| format!("Failed to set window position: {}", e))?;
+    
+    // Set window to always on top
+    window.set_always_on_top(true)
+        .map_err(|e| format!("Failed to set always on top: {}", e))?;
+    
+    #[cfg(debug_assertions)]
+    println!("Entered PiP mode");
+    
+    Ok(())
+}
+
+#[tauri::command]
+fn exit_pip_mode(app_handle: tauri::AppHandle) -> Result<(), String> {
+    let window = app_handle.get_webview_window("main")
+        .ok_or("Failed to get main window")?;
+    
+    // Validate that we are in PiP mode and have saved state
+    let mut state = WINDOW_STATE.lock().unwrap();
+    let saved_state = state.take()
+        .ok_or("Cannot exit PiP mode: no saved window state found")?;
+    
+    if !saved_state.pip_active {
+        return Err("Cannot exit PiP mode: PiP mode is not currently active".to_string());
+    }
+    
+    #[cfg(debug_assertions)]
+    println!("Restoring window state: {:?}", saved_state);
+    
+    // Restore size and position
+    window.set_size(saved_state.size)
+        .map_err(|e| format!("Failed to restore window size: {}", e))?;
+    window.set_position(saved_state.position)
+        .map_err(|e| format!("Failed to restore window position: {}", e))?;
+    
+    // Restore original decoration state
+    window.set_decorations(saved_state.decorations_enabled)
+        .map_err(|e| format!("Failed to restore decoration state: {}", e))?;
+    
+    // Remove always on top
+    window.set_always_on_top(false)
+        .map_err(|e| format!("Failed to remove always on top: {}", e))?;
+    
+    #[cfg(debug_assertions)]
+    println!("Exited PiP mode");
+    
+    Ok(())
 }
 
 #[tauri::command]
@@ -1251,7 +1398,9 @@ pub fn run() {
             get_watch_progress,
             get_all_watch_progress,
             get_video_info,
-            convert_video
+            convert_video,
+            enter_pip_mode,
+            exit_pip_mode
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
