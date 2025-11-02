@@ -220,28 +220,19 @@ fn enter_pip_mode(app_handle: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("Failed to set window size: {}", e))?;
     
     // Position at bottom-right corner with some padding
-    let position = if let Ok(monitor) = window.current_monitor() {
-        if let Some(monitor) = monitor {
-            let monitor_size = monitor.size();
-            let x = (monitor_size.width as i32) - (pip_config.width as i32) - pip_config.padding;
-            let y = (monitor_size.height as i32) - (pip_config.height as i32) - pip_config.padding;
-            PhysicalPosition::new(x, y)
-        } else {
-            // Fallback when monitor info not available
-            let default_width = 1920i32;
-            let default_height = 1080i32;
-            let x = default_width - (pip_config.width as i32) - pip_config.padding;
-            let y = default_height - (pip_config.height as i32) - pip_config.padding;
-            PhysicalPosition::new(x, y)
-        }
+    // Get monitor size or use fallback defaults
+    let (screen_width, screen_height) = if let Ok(Some(monitor)) = window.current_monitor() {
+        let size = monitor.size();
+        (size.width as i32, size.height as i32)
     } else {
         // Fallback when monitor detection fails
-        let default_width = 1920i32;
-        let default_height = 1080i32;
-        let x = default_width - (pip_config.width as i32) - pip_config.padding;
-        let y = default_height - (pip_config.height as i32) - pip_config.padding;
-        PhysicalPosition::new(x, y)
+        (1920i32, 1080i32)
     };
+    
+    // Calculate position from screen size
+    let x = screen_width - (pip_config.width as i32) - pip_config.padding;
+    let y = screen_height - (pip_config.height as i32) - pip_config.padding;
+    let position = PhysicalPosition::new(x, y);
     
     window.set_position(position)
         .map_err(|e| format!("Failed to set window position: {}", e))?;
