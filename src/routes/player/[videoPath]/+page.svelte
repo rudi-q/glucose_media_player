@@ -466,6 +466,7 @@
         if (videoElement) {
           const wasPlaying = !videoElement.paused;
           videoElement.classList.remove('pip-video-active');
+          videoElement.style.cssText = ''; // Clear any inline styles
           void videoElement.offsetHeight; // Force reflow
           
           // Restore playback state
@@ -532,6 +533,7 @@
         if (videoElement) {
           const wasPlaying = !videoElement.paused;
           videoElement.classList.remove('pip-video-active');
+          videoElement.style.cssText = ''; // Clear any inline styles
           void videoElement.offsetHeight; // Force reflow
           
           // Restore playback state
@@ -564,20 +566,8 @@
         if (videoElement) {
           const wasPlaying = !videoElement.paused;
           
-          // Force PiP video sizing via inline styles
-          videoElement.style.cssText = `
-            width: 100% !important;
-            height: 100% !important;
-            max-width: 100% !important;
-            max-height: 100% !important;
-            object-fit: contain !important;
-            position: absolute !important;
-            top: 0 !important;
-            left: 0 !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            display: block !important;
-          `;
+          // Apply PiP video styling via CSS class (consistent with exit paths)
+          videoElement.classList.add('pip-video-active');
           void videoElement.offsetHeight; // Force reflow
           
           // Restore playback state
