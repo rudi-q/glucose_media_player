@@ -11,6 +11,7 @@ use serde::{Serialize, Deserialize};
 use std::path::Path;
 use std::process::Command;
 use tauri::{PhysicalPosition, PhysicalSize};
+use anyhow::anyhow;
 
 // Helper to create a Command with hidden console window on Windows
 fn create_hidden_command(program: &str) -> Command {
@@ -35,6 +36,8 @@ static FILE_PROCESSED: Mutex<bool> = Mutex::new(false);
 struct WindowState {
     size: PhysicalSize<u32>,
     position: PhysicalPosition<i32>,
+    decorations_enabled: bool,
+    pip_active: bool,
 }
 
 static WINDOW_STATE: Mutex<Option<WindowState>> = Mutex::new(None);
@@ -62,11 +65,11 @@ struct AppConstants {
     pip_window: PipWindowConfig,
 }
 
-fn get_pip_constants() -> PipWindowConfig {
+fn get_pip_constants() -> Result<PipWindowConfig, anyhow::Error> {
     const CONSTANTS_JSON: &str = include_str!("../../constants.json");
     let constants: AppConstants = serde_json::from_str(CONSTANTS_JSON)
-        .expect("Failed to parse constants.json");
-    constants.pip_window
+        .map_err(|e| anyhow!("Failed to parse constants.json: {}", e))?;
+    Ok(constants.pip_window)
 }
 
 // Path sanitization function
@@ -173,16 +176,36 @@ fn enter_pip_mode(app_handle: tauri::AppHandle) -> Result<(), String> {
     let window = app_handle.get_webview_window("main")
         .ok_or("Failed to get main window")?;
     
+    // Check if already in PiP mode (idempotency)
+    {
+        let state = WINDOW_STATE.lock().unwrap();
+        if let Some(saved_state) = state.as_ref() {
+            if saved_state.pip_active {
+                #[cfg(debug_assertions)]
+                println!("Already in PiP mode, skipping");
+                return Ok(());
+            }
+        }
+    }
+    
+    // Get PiP configuration from constants.json
+    let pip_config = get_pip_constants()
+        .map_err(|e| format!("Failed to load PiP configuration: {}", e))?;
+    
     // Save current window state
     let current_size = window.outer_size()
         .map_err(|e| format!("Failed to get window size: {}", e))?;
     let current_position = window.outer_position()
         .map_err(|e| format!("Failed to get window position: {}", e))?;
+    let current_decorations = window.is_decorated()
+        .map_err(|e| format!("Failed to get decoration state: {}", e))?;
     
     let mut state = WINDOW_STATE.lock().unwrap();
     *state = Some(WindowState {
         size: current_size,
         position: current_position,
+        decorations_enabled: current_decorations,
+        pip_active: true,
     });
     
     #[cfg(debug_assertions)]
@@ -192,24 +215,36 @@ fn enter_pip_mode(app_handle: tauri::AppHandle) -> Result<(), String> {
     window.set_decorations(true)
         .map_err(|e| format!("Failed to enable decorations: {}", e))?;
     
-    // Get PiP configuration from constants.json
-    let pip_config = get_pip_constants();
-    
     // Set PiP window properties
     window.set_size(PhysicalSize::new(pip_config.width, pip_config.height))
         .map_err(|e| format!("Failed to set window size: {}", e))?;
     
     // Position at bottom-right corner with some padding
-    // Get screen size if available, otherwise use reasonable defaults
-    if let Ok(monitor) = window.current_monitor() {
+    let position = if let Ok(monitor) = window.current_monitor() {
         if let Some(monitor) = monitor {
             let monitor_size = monitor.size();
             let x = (monitor_size.width as i32) - (pip_config.width as i32) - pip_config.padding;
             let y = (monitor_size.height as i32) - (pip_config.height as i32) - pip_config.padding;
-            window.set_position(PhysicalPosition::new(x, y))
-                .map_err(|e| format!("Failed to set window position: {}", e))?;
+            PhysicalPosition::new(x, y)
+        } else {
+            // Fallback when monitor info not available
+            let default_width = 1920i32;
+            let default_height = 1080i32;
+            let x = default_width - (pip_config.width as i32) - pip_config.padding;
+            let y = default_height - (pip_config.height as i32) - pip_config.padding;
+            PhysicalPosition::new(x, y)
         }
-    }
+    } else {
+        // Fallback when monitor detection fails
+        let default_width = 1920i32;
+        let default_height = 1080i32;
+        let x = default_width - (pip_config.width as i32) - pip_config.padding;
+        let y = default_height - (pip_config.height as i32) - pip_config.padding;
+        PhysicalPosition::new(x, y)
+    };
+    
+    window.set_position(position)
+        .map_err(|e| format!("Failed to set window position: {}", e))?;
     
     // Set window to always on top
     window.set_always_on_top(true)
@@ -226,13 +261,9 @@ fn exit_pip_mode(app_handle: tauri::AppHandle) -> Result<(), String> {
     let window = app_handle.get_webview_window("main")
         .ok_or("Failed to get main window")?;
     
-    // Disable decorations when exiting PiP
-    window.set_decorations(false)
-        .map_err(|e| format!("Failed to disable decorations: {}", e))?;
-    
     // Restore window state
-    let state = WINDOW_STATE.lock().unwrap();
-    if let Some(saved_state) = state.as_ref() {
+    let mut state = WINDOW_STATE.lock().unwrap();
+    if let Some(saved_state) = state.take() {
         #[cfg(debug_assertions)]
         println!("Restoring window state: {:?}", saved_state);
         
@@ -240,6 +271,10 @@ fn exit_pip_mode(app_handle: tauri::AppHandle) -> Result<(), String> {
             .map_err(|e| format!("Failed to restore window size: {}", e))?;
         window.set_position(saved_state.position)
             .map_err(|e| format!("Failed to restore window position: {}", e))?;
+        
+        // Restore original decoration state
+        window.set_decorations(saved_state.decorations_enabled)
+            .map_err(|e| format!("Failed to restore decoration state: {}", e))?;
     }
     
     // Remove always on top
