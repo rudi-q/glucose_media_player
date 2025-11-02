@@ -462,10 +462,10 @@
         // Wait for window resize, then restore video
         await new Promise(resolve => setTimeout(resolve, 150));
         
-        // Clear inline video styles
+        // Remove PiP video styling
         if (videoElement) {
           const wasPlaying = !videoElement.paused;
-          videoElement.style.cssText = '';
+          videoElement.classList.remove('pip-video-active');
           void videoElement.offsetHeight; // Force reflow
           
           // Restore playback state
@@ -493,20 +493,8 @@
         if (videoElement) {
           const wasPlaying = !videoElement.paused;
           
-          // Force PiP video sizing via inline styles
-          videoElement.style.cssText = `
-            width: 100% !important;
-            height: 100% !important;
-            max-width: 100% !important;
-            max-height: 100% !important;
-            object-fit: contain !important;
-            position: absolute !important;
-            top: 0 !important;
-            left: 0 !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            display: block !important;
-          `;
+          // Apply PiP video styling via CSS class
+          videoElement.classList.add('pip-video-active');
           void videoElement.offsetHeight; // Force reflow
           
           // Restore playback state
@@ -540,10 +528,10 @@
         // Wait for window resize, then restore video
         await new Promise(resolve => setTimeout(resolve, 150));
         
-        // Clear inline video styles
+        // Remove PiP video styling
         if (videoElement) {
           const wasPlaying = !videoElement.paused;
-          videoElement.style.cssText = '';
+          videoElement.classList.remove('pip-video-active');
           void videoElement.offsetHeight; // Force reflow
           
           // Restore playback state
@@ -1381,14 +1369,23 @@
   }
 
   .pip-video {
-    width: 100% !important;
-    height: 100% !important;
-    max-width: 100% !important;
-    max-height: 100% !important;
-    object-fit: contain !important;
-    position: absolute !important;
-    top: 0 !important;
-    left: 0 !important;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+  }
+
+  :global(.video-container.pip .main-video.pip-video-active) {
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+    visibility: visible;
+    opacity: 1;
   }
 
   .preview-video {
