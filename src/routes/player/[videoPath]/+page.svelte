@@ -46,7 +46,8 @@
   let hideControlsTimeout: ReturnType<typeof setTimeout>;
   let showCloseButton = $state(false);
   let hideCloseButtonTimeout: ReturnType<typeof setTimeout>;
-  let isCinematicMode = $state(true);
+  type ViewMode = 'cinematic' | 'fullscreen' | 'pip';
+  let viewMode = $state<ViewMode>('cinematic');
   
   // Scrubbing/seeking state
   let isScrubbing = $state(false);
@@ -232,7 +233,11 @@
         togglePlay();
         break;
       case "f":
-        toggleCinematicMode();
+        toggleViewMode();
+        break;
+      case "p":
+        e.preventDefault();
+        togglePipMode();
         break;
       case "m":
         toggleMute();
@@ -442,8 +447,143 @@
     document.addEventListener('mouseup', handleMouseUp);
   }
   
-  function toggleCinematicMode() {
-    isCinematicMode = !isCinematicMode;
+  async function togglePipMode() {
+    if (viewMode === 'pip') {
+      // Exit PiP mode - return to cinematic
+      try {
+        await invoke('exit_pip_mode');
+        
+        // Change mode immediately
+        viewMode = 'cinematic';
+        
+        // Restore transparent background
+        document.body.style.background = 'transparent';
+        
+        // Wait for window resize, then restore video
+        await new Promise(resolve => setTimeout(resolve, 150));
+        
+        // Remove PiP video styling
+        if (videoElement) {
+          const wasPlaying = !videoElement.paused;
+          videoElement.classList.remove('pip-video-active');
+          videoElement.style.cssText = ''; // Clear any inline styles
+          void videoElement.offsetHeight; // Force reflow
+          
+          // Restore playback state
+          if (wasPlaying) {
+            videoElement.play().catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.error('Failed to exit PiP mode:', err);
+      }
+    } else {
+      // Enter PiP mode from any other mode
+      try {
+        await invoke('enter_pip_mode');
+        
+        // Change mode immediately
+        viewMode = 'pip';
+        
+        // Force solid background for PiP (transparency causes black screen)
+        document.body.style.background = '#000';
+        
+        // Wait a moment for window resize, then trigger video reflow
+        await new Promise(resolve => setTimeout(resolve, 150));
+        
+        if (videoElement) {
+          const wasPlaying = !videoElement.paused;
+          
+          // Apply PiP video styling via CSS class
+          videoElement.classList.add('pip-video-active');
+          void videoElement.offsetHeight; // Force reflow
+          
+          // Restore playback state
+          if (wasPlaying) {
+            videoElement.play().catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.error('Failed to enter PiP mode:', err);
+      }
+    }
+  }
+
+  async function toggleViewMode() {
+    const modes: ViewMode[] = ['cinematic', 'fullscreen', 'pip'];
+    const currentIndex = modes.indexOf(viewMode);
+    const nextMode = modes[(currentIndex + 1) % modes.length];
+    
+    // Handle PiP transitions
+    if (viewMode === 'pip') {
+      // Exiting PiP mode
+      try {
+        await invoke('exit_pip_mode');
+        
+        // Change mode immediately
+        viewMode = nextMode;
+        
+        // Restore transparent background
+        document.body.style.background = 'transparent';
+        
+        // Wait for window resize, then restore video
+        await new Promise(resolve => setTimeout(resolve, 150));
+        
+        // Remove PiP video styling
+        if (videoElement) {
+          const wasPlaying = !videoElement.paused;
+          videoElement.classList.remove('pip-video-active');
+          videoElement.style.cssText = ''; // Clear any inline styles
+          void videoElement.offsetHeight; // Force reflow
+          
+          // Restore playback state
+          if (wasPlaying) {
+            videoElement.play().catch(() => {});
+          }
+        }
+        
+        return; // Exit early since we already set viewMode
+      } catch (err) {
+        console.error('Failed to exit PiP mode:', err);
+        return;
+      }
+    }
+    
+    if (nextMode === 'pip') {
+      // Entering PiP mode
+      try {
+        await invoke('enter_pip_mode');
+        
+        // Change mode immediately
+        viewMode = nextMode;
+        
+        // Force solid background for PiP (transparency causes black screen)
+        document.body.style.background = '#000';
+        
+        // Wait a moment for window resize, then trigger video reflow
+        await new Promise(resolve => setTimeout(resolve, 150));
+        
+        if (videoElement) {
+          const wasPlaying = !videoElement.paused;
+          
+          // Apply PiP video styling via CSS class (consistent with exit paths)
+          videoElement.classList.add('pip-video-active');
+          void videoElement.offsetHeight; // Force reflow
+          
+          // Restore playback state
+          if (wasPlaying) {
+            videoElement.play().catch(() => {});
+          }
+        }
+        
+        return; // Exit early since we already set viewMode
+      } catch (err) {
+        console.error('Failed to enter PiP mode:', err);
+        return; // Don't change mode if entering PiP failed
+      }
+    }
+    
+    viewMode = nextMode;
   }
   
   function handleMainContainerMouseMove() {
@@ -764,12 +904,14 @@
   class="player-container video-player"
   onmousemove={handleMainContainerMouseMove}
 >
-  <button class="close-button" class:visible={showCloseButton} onclick={closeApp} title="Close (Esc)">
-    <X size={16} />
-  </button>
+  {#if viewMode !== 'pip'}
+    <button class="close-button" class:visible={showCloseButton} onclick={closeApp} title="Close (Esc)">
+      <X size={16} />
+    </button>
+  {/if}
   
-  <div class="video-container" class:cinematic={isCinematicMode} class:fullscreen={!isCinematicMode}>
-    {#if isCinematicMode}
+  <div class="video-container" class:cinematic={viewMode === 'cinematic'} class:fullscreen={viewMode === 'fullscreen'} class:pip={viewMode === 'pip'}>
+    {#if viewMode === 'cinematic'}
       <!-- Blurred background video for cinematic mode -->
       <!-- svelte-ignore a11y_media_has_caption -->
       <video
@@ -786,8 +928,9 @@
     <video
       bind:this={videoElement}
       class="main-video"
-      class:cinematic-video={isCinematicMode}
-      class:fullscreen-video={!isCinematicMode}
+      class:cinematic-video={viewMode === 'cinematic'}
+      class:fullscreen-video={viewMode === 'fullscreen'}
+      class:pip-video={viewMode === 'pip'}
       src={videoSrc}
       ontimeupdate={handleTimeUpdate}
       onloadedmetadata={handleLoadedMetadata}
@@ -848,8 +991,9 @@
   <div 
     class="controls" 
     class:visible={showControls} 
-    class:cinematic-controls={isCinematicMode} 
-    class:overlay-controls={!isCinematicMode}
+    class:cinematic-controls={viewMode === 'cinematic'} 
+    class:overlay-controls={viewMode === 'fullscreen'}
+    class:pip-controls={viewMode === 'pip'}
   >
     <div 
       class="progress-bar" 
@@ -1013,7 +1157,7 @@
           </div>
         {/if}
         
-        <button class="control-button" onclick={toggleCinematicMode} title="Toggle view mode (F)">
+        <button class="control-button" onclick={toggleViewMode} title="Toggle view mode (F)">
           <Maximize size={20} />
         </button>
       </div>
@@ -1046,9 +1190,17 @@
         {/if}
       </button>
       <div class="context-menu-divider"></div>
-      <button class="context-menu-item" onclick={() => { toggleCinematicMode(); showContextMenu = false; }}>
+      <button class="context-menu-item" onclick={() => { toggleViewMode(); showContextMenu = false; }}>
         <Maximize size={16} />
-        <span>{isCinematicMode ? 'Fullscreen Mode' : 'Cinematic Mode'}</span>
+        <span>
+          {#if viewMode === 'cinematic'}
+            Fullscreen Mode
+          {:else if viewMode === 'fullscreen'}
+            PiP Mode
+          {:else}
+            Cinematic Mode
+          {/if}
+        </span>
       </button>
       {#if subtitleSrc}
         <button class="context-menu-item" onclick={() => { toggleSubtitles(); showContextMenu = false; }}>
@@ -1138,6 +1290,12 @@
     -webkit-backdrop-filter: none;
   }
 
+  .player-container:has(.video-container.pip) {
+    background: #000 !important;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
   .video-container {
     position: relative;
     flex: 1;
@@ -1154,6 +1312,13 @@
   .video-container.fullscreen {
     position: absolute;
     inset: 0;
+  }
+
+  .video-container.pip {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
   }
 
   .background-video {
@@ -1193,6 +1358,26 @@
     object-fit: contain;
   }
 
+  .pip-video {
+    width: auto;
+    height: auto;
+    object-fit: contain;
+  }
+
+  :global(.video-container.pip .main-video.pip-video-active) {
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+    visibility: visible;
+    opacity: 1;
+  }
+
   .preview-video {
     position: absolute;
     width: 1px;
@@ -1213,6 +1398,16 @@
     right: 0;
     z-index: 10;
     min-height: 120px;
+    pointer-events: all;
+  }
+
+  .video-container.pip ~ .controls-zone {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    min-height: 60px;
     pointer-events: all;
   }
 
@@ -1249,6 +1444,53 @@
   .overlay-controls.visible {
     opacity: 1;
     pointer-events: all;
+  }
+
+  .pip-controls {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.7) 70%, transparent 100%);
+    padding: 0.5rem;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .pip-controls.visible {
+    opacity: 1;
+    pointer-events: all;
+  }
+
+  /* Hide some controls in PiP mode */
+  .pip-controls .controls-left .control-button:not(:first-child),
+  .pip-controls .controls-right > *:not(.control-button:last-child) {
+    display: none;
+  }
+
+  /* Hide close button in PiP mode (handled via conditional rendering) */
+  /* Hide subtitle menus and volume menus in PiP mode */
+  .pip-controls .subtitle-menu,
+  .pip-controls .model-selector,
+  .pip-controls .volume-menu {
+    display: none !important;
+  }
+
+  .pip-controls .time {
+    font-size: 0.65rem;
+  }
+
+  .pip-controls .control-button {
+    padding: 0.25rem;
+  }
+
+  .pip-controls .progress-bar {
+    height: 2px;
+    margin-bottom: 0.5rem;
+  }
+
+  .pip-controls .progress-bar:hover {
+    height: 3px;
   }
 
   .progress-bar {

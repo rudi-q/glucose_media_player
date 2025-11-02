@@ -1,27 +1,18 @@
 <div align="center">
-  <img src="static/logo-dark.svg" alt="glucose" width="400" />
-  
-  <h3>A brutally minimalist, cinematic media viewer</h3>
-  
-  <p>
-    <strong>glucose</strong> is a modern media viewer that strips away complexity to deliver a pure, immersive viewing experience.
-  </p>
+  <a href="https://glucose.media"><img src="static/logo-dark.svg" alt="Glucose Media Player" width="400"></a>
 
-  <p>
-    <img src="https://img.shields.io/badge/License-MPL%202.0-FFAB97?style=flat" alt="License: MPL 2.0" />
-    <img src="https://img.shields.io/badge/version-0.2.0-C065B6?style=flat" alt="Version" />
+_A Sleek & Lightweight VLC Alternative with On-Device AI Subtitle<br>_
 
-[//]: # (    <img src="https://img.shields.io/github/stars/yourusername/glucose?color=8C77FF&style=flat&logo=github" alt="GitHub Stars" />)
-[//]: # (    <img src="https://img.shields.io/github/downloads/yourusername/glucose/total?label=Downloads&logo=github&color=FF6362&style=flat" alt="Downloads" />)
-  </p>
-  
-  <p>
-    <img src="https://img.shields.io/badge/SvelteKit-FF3E00?style=flat&logo=svelte&logoColor=white" alt="SvelteKit" />
-    <img src="https://img.shields.io/badge/TypeScript-007ACC?style=flat&logo=typescript&logoColor=white" alt="TypeScript" />
-    <img src="https://img.shields.io/badge/Tauri-24C8D8?style=flat&logo=tauri&logoColor=white" alt="Tauri" />
-    <img src="https://img.shields.io/badge/Rust-000000?style=flat&logo=rust&logoColor=white" alt="Rust" />
-    <img src="https://img.shields.io/badge/Vite-646CFF?style=flat&logo=vite&logoColor=white" alt="Vite" />
-  </p>
+
+[![License: MPL](https://img.shields.io/badge/License-MPL%20v2.0-1a1a1a?style=for-the-badge&logo=opensourceinitiative&logoColor=white&labelColor=0a0a0a)](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12)
+[![Built with Tauri](https://img.shields.io/badge/Built%20with-Tauri-1a1a1a?style=for-the-badge&logo=tauri&logoColor=white&labelColor=0a0a0a)](https://tauri.app)
+[![Svelte](https://img.shields.io/badge/Frontend-Svelte-1a1a1a?style=for-the-badge&logo=svelte&logoColor=white&labelColor=0a0a0a)](https://svelte.dev)
+[![Rust](https://img.shields.io/badge/Backend-Rust-1a1a1a?style=for-the-badge&logo=rust&logoColor=white&labelColor=0a0a0a)](https://rust-lang.org)
+
+[![Version](https://img.shields.io/github/v/release/rudi-q/glucose_media_player?style=for-the-badge&labelColor=0a0a0a&color=1a1a1a&label=Version)](https://github.com/rudi-q/glucose_media_player/releases)
+[![Downloads](https://img.shields.io/github/downloads/rudi-q/glucose_media_player/total?style=for-the-badge&labelColor=0a0a0a&color=1a1a1a)](https://github.com/rudi-q/glucose_media_player/releases)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20-1a1a1a?style=for-the-badge&labelColor=0a0a0a)](https://github.com/rudi-q/glucose_media_player/releases)
+
 </div>
 
 ---
@@ -34,7 +25,6 @@ Enjoy your media with a beautifully blurred background and centered content for 
 ### 🖼️ Universal Media Support
 - **Videos**: MP4, MKV, AVI, MOV, WebM, WMV, FLV, M4V
 - **Subtitles**: SRT, VTT, ASS, SSA, SUB
-- **Images**: JPG, JPEG, PNG, GIF, WebP, BMP, SVG, AVIF, HEIC, HEIF
 
 ### 🎯 Minimal by Design
 No clutter, no distractions. Just your content and elegant controls that appear when you need them.
@@ -65,8 +55,6 @@ Automatically scans and displays your recent videos in a beautiful grid layout.
 Download the latest release for your platform:
 
 - **Windows**: `glucose_0.2.0_x64_en-US.msi` or `.exe`
-- **macOS**: `glucose_0.2.0_universal.dmg`
-- **Linux**: `glucose_0.2.0_amd64.deb` or `glucose_0.2.0_amd64.AppImage`
 
 ### Build from Source
 
@@ -84,7 +72,7 @@ Download the latest release for your platform:
 
 ```bash
 # Clone the repository
-git clone https://github.com/rudi-q/glucose-media-player.git
+git clone https://github.com/rudi-q/glucose_media_player.git
 cd glucose
 
 # Install dependencies
@@ -148,25 +136,6 @@ glucose offers three convenient ways to open your media:
 
 ---
 
-## 🛠️ Development
-
-### Project Structure
-
-```
-glucose/
-├── src/                    # SvelteKit frontend
-│   ├── routes/
-│   │   └── +page.svelte   # Main application component
-│   └── app.html           # HTML template
-├── src-tauri/             # Rust backend
-│   ├── src/
-│   │   └── lib.rs         # Tauri commands and logic
-│   ├── Cargo.toml         # Rust dependencies
-│   └── tauri.conf.json    # Tauri configuration
-├── static/                # Static assets
-└── package.json           # Node.js dependencies
-```
-
 ### Available Scripts
 
 ```bash
@@ -184,64 +153,6 @@ pnpm build            # Build frontend only
 pnpm tauri:build      # Build complete application
 pnpm preview          # Preview production build locally
 ```
-
-### Tech Stack
-
-#### Frontend
-- **[Svelte 5](https://svelte.dev/)** — Reactive UI framework with runes
-- **[SvelteKit](https://kit.svelte.dev/)** — Application framework
-- **[TypeScript](https://www.typescriptlang.org/)** — Type-safe JavaScript
-- **[Vite](https://vitejs.dev/)** — Lightning-fast build tool
-- **Pure CSS** — Custom brutalist/minimal styling
-
-#### Backend
-- **[Rust](https://www.rust-lang.org/)** — Systems programming language
-- **[Tauri v2](https://tauri.app/)** — Native desktop framework
-- **Plugins**:
-  - `tauri-plugin-opener` — Opening files and URLs
-  - `tauri-plugin-dialog` — Native file dialogs
-  - `tauri-plugin-process` — Process management
-
-### Contributing
-
-Contributing guidelines coming soon.
-
----
-
-## 🎨 Design Philosophy
-
-glucose embraces **brutal minimalism**:
-
-- **Content First**: The media is the star. UI elements fade away when not needed.
-- **Performance**: Native performance with minimal resource usage.
-- **Transparency**: Literally — frameless, transparent windows that blend with your desktop.
-- **Efficiency**: Keyboard shortcuts for everything. Mouse is optional.
-- **Beauty in Simplicity**: No unnecessary features. Every element serves a purpose.
-
----
-
-## 🐛 Known Issues
-
-- Image playback controls (play/pause, timeline) are inherited from video mode but not applicable to static images
-- Recent gallery only displays videos, not images
-- Some HEIC/HEIF images may not display depending on browser codec support
-
----
-
-## 📋 Roadmap
-
-- [ ] Playlist support for sequential playback
-- [ ] Image-specific controls and transitions
-- [ ] Image gallery with thumbnail view
-- [ ] Slideshow mode for images
-- [x] Subtitle support for videos (SRT, VTT, ASS, SSA, SUB)
-- [ ] Custom keyboard shortcut configuration
-- [ ] Multiple window support
-- [ ] Folder watching and auto-refresh
-- [ ] Video playback speed controls
-- [ ] Chapter markers support
-
----
 
 ## 📄 License
 
@@ -263,8 +174,8 @@ Copyright (c) 2025 glucose
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/rudi-q/glucose-media-player/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/rudi-q/glucose-media-player/discussions)
+- **Issues**: [GitHub Issues](https://github.com/rudi-q/glucose_media_player/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/rudi-q/glucose_media_player/discussions)
 
 ---
 
