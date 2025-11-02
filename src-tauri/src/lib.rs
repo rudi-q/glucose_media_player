@@ -261,21 +261,27 @@ fn exit_pip_mode(app_handle: tauri::AppHandle) -> Result<(), String> {
     let window = app_handle.get_webview_window("main")
         .ok_or("Failed to get main window")?;
     
-    // Restore window state
+    // Validate that we are in PiP mode and have saved state
     let mut state = WINDOW_STATE.lock().unwrap();
-    if let Some(saved_state) = state.take() {
-        #[cfg(debug_assertions)]
-        println!("Restoring window state: {:?}", saved_state);
-        
-        window.set_size(saved_state.size)
-            .map_err(|e| format!("Failed to restore window size: {}", e))?;
-        window.set_position(saved_state.position)
-            .map_err(|e| format!("Failed to restore window position: {}", e))?;
-        
-        // Restore original decoration state
-        window.set_decorations(saved_state.decorations_enabled)
-            .map_err(|e| format!("Failed to restore decoration state: {}", e))?;
+    let saved_state = state.take()
+        .ok_or("Cannot exit PiP mode: no saved window state found")?;
+    
+    if !saved_state.pip_active {
+        return Err("Cannot exit PiP mode: PiP mode is not currently active".to_string());
     }
+    
+    #[cfg(debug_assertions)]
+    println!("Restoring window state: {:?}", saved_state);
+    
+    // Restore size and position
+    window.set_size(saved_state.size)
+        .map_err(|e| format!("Failed to restore window size: {}", e))?;
+    window.set_position(saved_state.position)
+        .map_err(|e| format!("Failed to restore window position: {}", e))?;
+    
+    // Restore original decoration state
+    window.set_decorations(saved_state.decorations_enabled)
+        .map_err(|e| format!("Failed to restore decoration state: {}", e))?;
     
     // Remove always on top
     window.set_always_on_top(false)
