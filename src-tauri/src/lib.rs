@@ -412,23 +412,45 @@ fn get_video_duration(video_path: &str) -> Option<f64> {
 // Check if FFmpeg is installed
 #[tauri::command]
 fn check_ffmpeg_installed() -> Result<bool, String> {
-    create_hidden_command("ffmpeg")
+    // First check resources folder in AppData\Local
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
+            let ffmpeg_exe = std::path::Path::new(&app_data)
+                .join("glucose")
+                .join("resources")
+                .join("ffmpeg")
+                .join("bin")
+                .join("ffmpeg.exe");
+            let ffmpeg_path = ffmpeg_exe.to_string_lossy();
+            println!("[FFmpeg Check] Checking AppData\\Local: {}", ffmpeg_path);
+            if ffmpeg_exe.exists() {
+                println!("[FFmpeg Check] ✓ Found FFmpeg in AppData\\Local: {}", ffmpeg_path);
+                return Ok(true);
+            }
+            println!("[FFmpeg Check] ✗ FFmpeg not found in AppData\\Local");
+        }
+    }
+    
+    // Fall back to PATH
+    println!("[FFmpeg Check] Checking system PATH...");
+    let result = create_hidden_command("ffmpeg")
         .arg("-version")
         .output()
         .map(|output| output.status.success())
-        .or(Ok(false))
+        .unwrap_or(false);
+    
+    if result {
+        println!("[FFmpeg Check] ✓ Found FFmpeg in system PATH");
+    } else {
+        println!("[FFmpeg Check] ✗ FFmpeg not found in system PATH");
+    }
+    Ok(result)
 }
 
 // Check which Whisper models are installed
 #[tauri::command]
 fn check_installed_models() -> Result<Vec<String>, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let models_dir = home.join(".whisper").join("models");
-    
-    if !models_dir.exists() {
-        return Ok(Vec::new());
-    }
-    
     let mut models = Vec::new();
     let model_files = vec![
         ("ggml-tiny.bin", "tiny"),
@@ -436,12 +458,56 @@ fn check_installed_models() -> Result<Vec<String>, String> {
         ("ggml-large-v3-turbo-q5_0.bin", "large-v3-turbo"),
     ];
     
-    for (filename, model_name) in model_files {
-        if models_dir.join(filename).exists() {
-            models.push(model_name.to_string());
+    println!("[Models Check] Starting model check...");
+    
+    // Check resources folder in AppData\Local first
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
+            let resources_models_dir = std::path::Path::new(&app_data)
+                .join("glucose")
+                .join("resources")
+                .join("models");
+            let resources_path = resources_models_dir.to_string_lossy();
+            println!("[Models Check] Checking AppData\\Local: {}", resources_path);
+            if resources_models_dir.exists() {
+                println!("[Models Check] AppData\\Local models folder exists");
+                for (filename, model_name) in &model_files {
+                    let model_path = resources_models_dir.join(filename);
+                    if model_path.exists() {
+                        println!("[Models Check] ✓ Found {} in AppData\\Local: {}", model_name, filename);
+                        models.push(model_name.to_string());
+                    } else {
+                        println!("[Models Check] ✗ {} not found in AppData\\Local", filename);
+                    }
+                }
+            } else {
+                println!("[Models Check] AppData\\Local models folder does not exist");
+            }
         }
     }
     
+    // Check home directory
+    if let Some(home) = dirs::home_dir() {
+        let models_dir = home.join(".whisper").join("models");
+        let home_path = models_dir.to_string_lossy();
+        println!("[Models Check] Checking home directory: {}", home_path);
+        if models_dir.exists() {
+            println!("[Models Check] Home models folder exists");
+            for (filename, model_name) in &model_files {
+                if models_dir.join(filename).exists() && !models.contains(&model_name.to_string()) {
+                    println!("[Models Check] ✓ Found {} in home: {}", model_name, filename);
+                    models.push(model_name.to_string());
+                } else if !models.contains(&model_name.to_string()) {
+                    println!("[Models Check] ✗ {} not found in home", filename);
+                }
+            }
+        } else {
+            println!("[Models Check] Home models folder does not exist");
+        }
+    }
+    
+    println!("[Models Check] Complete. Found models: {:?}", models);
     Ok(models)
 }
 
