@@ -33,5 +33,5 @@ futures-util = "0.3.32"
 anyhow = "1.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-tauri-plugin-updater = "2.9.0"
+tauri-plugin-updater = "2.10.0"
 
