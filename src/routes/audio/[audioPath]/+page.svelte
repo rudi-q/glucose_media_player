@@ -50,6 +50,10 @@
   // Resolved restore position from get_watch_progress; applied in
   // onloadedmetadata so playback always starts at the right position.
   let pendingRestoreTime: number | null = null;
+  // Settles when the per-track get_watch_progress IPC call completes (or fails).
+  // onloadedmetadata awaits this before calling play() to eliminate the race
+  // where playback starts at 0 then jumps when the IPC resolves later.
+  let progressRestorePromise: Promise<void> = Promise.resolve();
 
   // UI
   let showCloseBtn = $state(false);
@@ -434,38 +438,56 @@
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
+  // Per-track restore — runs on mount and re-runs whenever audioPath changes
+  // (same-route navigation, e.g. opening a new file via file association).
+  $effect(() => {
+    const path = audioPath; // establish reactive dependency
+    let cancelled = false;
+
+    // Reset per-track state immediately so stale values from the previous
+    // file don't show while the new file loads.
+    pendingRestoreTime = null;
+    currentTime = 0;
+    duration = 0;
+
+    progressRestorePromise = new Promise<void>((resolve) => {
+      invoke<{ current_time: number; duration: number } | null>('get_watch_progress', {
+        videoPath: path,
+      }).then((progress) => {
+        if (!cancelled && progress && progress.duration > 0) {
+          const pct = progress.current_time / progress.duration;
+          if (pct > 0.05 && pct < 0.95) {
+            pendingRestoreTime = progress.current_time;
+            // Metadata already loaded before IPC resolved — apply immediately.
+            if (audioEl && audioEl.readyState >= 1) {
+              audioEl.currentTime = pendingRestoreTime;
+            }
+          }
+        }
+        resolve();
+      }).catch(() => {
+        if (!cancelled) {
+          const saved = $watchProgressStore.get(path);
+          if (saved && saved.current_time > 5) {
+            pendingRestoreTime = saved.current_time;
+            if (audioEl && audioEl.readyState >= 1) {
+              audioEl.currentTime = pendingRestoreTime;
+            }
+          }
+        }
+        resolve();
+      });
+    });
+
+    return () => { cancelled = true; };
+  });
+
   onMount(() => {
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
     window.addEventListener('keydown', handleKey);
 
-    // Fetch saved progress and store it in pendingRestoreTime so that
-    // onloadedmetadata can apply it before calling audioEl.play(), avoiding
-    // a race where playback starts at 0 then jumps after the IPC resolves.
-    invoke<{ current_time: number; duration: number } | null>('get_watch_progress', {
-      videoPath: audioPath,
-    }).then((progress) => {
-      if (progress && progress.duration > 0) {
-        const pct = progress.current_time / progress.duration;
-        if (pct > 0.05 && pct < 0.95) {
-          pendingRestoreTime = progress.current_time;
-          // If metadata already loaded before this resolved, apply now.
-          if (audioEl && audioEl.readyState >= 1) {
-            audioEl.currentTime = pendingRestoreTime;
-          }
-        }
-      }
-    }).catch(() => {
-      const saved = $watchProgressStore.get(audioPath);
-      if (saved && saved.current_time > 5) {
-        pendingRestoreTime = saved.current_time;
-        if (audioEl && audioEl.readyState >= 1) {
-          audioEl.currentTime = pendingRestoreTime;
-        }
-      }
-    });
-
-    // Restore volume from store
+    // Restore volume/mute from persisted settings (app-level, not per-track).
     volume = $appSettings.volume ?? 1;
     isMuted = $appSettings.isMuted ?? false;
 
@@ -656,9 +678,12 @@
   onplay={() => { isPlaying = true; audioCtx?.resume(); showControls(); }}
   onpause={() => { isPlaying = false; saveProgress(); }}
   ontimeupdate={() => { if (!isScrubbing) currentTime = audioEl.currentTime; }}
-  onloadedmetadata={() => {
+  onloadedmetadata={async () => {
     duration = audioEl.duration;
     setupAudio();
+    // Wait for the progress-restore IPC to settle so play() always starts
+    // at the correct position, never jumping mid-playback.
+    await progressRestorePromise;
     if (pendingRestoreTime !== null) {
       audioEl.currentTime = pendingRestoreTime;
     }
