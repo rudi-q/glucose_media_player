@@ -1029,11 +1029,16 @@
       gainNode.gain.value = volume;
       source.connect(gainNode);
       gainNode.connect(audioCtx.destination);
-      // Native volume stays at 1; the gain node handles all level control
+      // Native volume stays at 1 so the gain node has headroom for boost;
+      // mute is applied via videoElement.muted to match toggleMute's mechanism.
       videoElement.volume = 1;
+      videoElement.muted = isMuted;
       audioSourceConnected = true;
     } catch (err) {
       console.error("Failed to setup audio context:", err);
+      // Sync persisted volume/mute to the native element as a fallback.
+      videoElement.volume = Math.min(1, volume);
+      videoElement.muted = isMuted;
     }
   }
 

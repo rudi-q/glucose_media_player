@@ -619,7 +619,7 @@
   bind:this={audioEl}
   src={convertFileSrc(audioPath)}
   crossorigin="anonymous"
-  onplay={() => { isPlaying = true; audioCtx?.resume(); }}
+  onplay={() => { isPlaying = true; audioCtx?.resume(); showControls(); }}
   onpause={() => { isPlaying = false; saveProgress(); }}
   ontimeupdate={() => { if (!isScrubbing) currentTime = audioEl.currentTime; }}
   onloadedmetadata={() => {

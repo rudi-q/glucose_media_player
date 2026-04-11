@@ -396,71 +396,81 @@ fn find_subtitle_for_video(video_path: String) -> Result<Option<String>, String>
 // Bitmap formats (PGS, VobSub, DVB) are silently skipped because they cannot
 // be converted to a text format that the browser can render.
 #[tauri::command]
-fn get_embedded_subtitle_tracks(
+async fn get_embedded_subtitle_tracks(
     video_path: String,
 ) -> Result<Vec<EmbeddedSubtitleTrack>, String> {
-    const SUPPORTED: &[&str] = &["subrip", "ass", "ssa", "webvtt", "mov_text", "srt", "text"];
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-    let output = create_hidden_command("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "s",
-            "-show_entries",
-            "stream=index,codec_name:stream_tags=language,title",
-            "-of",
-            "json",
-            &video_path,
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
+    let task = tokio::task::spawn_blocking(move || {
+        const SUPPORTED: &[&str] =
+            &["subrip", "ass", "ssa", "webvtt", "mov_text", "srt", "text"];
 
-    if !output.status.success() {
-        return Ok(vec![]);
-    }
+        let output = create_hidden_command("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "s",
+                "-show_entries",
+                "stream=index,codec_name:stream_tags=language,title",
+                "-of",
+                "json",
+                &video_path,
+            ])
+            .output()
+            .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
-        Ok(v) => v,
-        Err(_) => return Ok(vec![]),
-    };
-
-    let streams = match parsed["streams"].as_array() {
-        Some(s) => s,
-        None => return Ok(vec![]),
-    };
-
-    let mut tracks = Vec::new();
-    for stream in streams {
-        let codec_name = stream["codec_name"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string();
-
-        if !SUPPORTED.contains(&codec_name.as_str()) {
-            continue;
+        if !output.status.success() {
+            return Ok(vec![]);
         }
 
-        let Some(index) = stream["index"].as_i64() else {
-            continue;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
+            Ok(v) => v,
+            Err(_) => return Ok(vec![]),
         };
-        tracks.push(EmbeddedSubtitleTrack {
-            index,
-            codec_name,
-            language: stream["tags"]["language"].as_str().map(|s| s.to_string()),
-            title: stream["tags"]["title"].as_str().map(|s| s.to_string()),
-        });
-    }
 
-    #[cfg(debug_assertions)]
-    println!(
-        "Found {} embedded subtitle track(s) in: {}",
-        tracks.len(),
-        video_path
-    );
+        let streams = match parsed["streams"].as_array() {
+            Some(s) => s,
+            None => return Ok(vec![]),
+        };
 
-    Ok(tracks)
+        let mut tracks = Vec::new();
+        for stream in streams {
+            let codec_name = stream["codec_name"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
+
+            if !SUPPORTED.contains(&codec_name.as_str()) {
+                continue;
+            }
+
+            let Some(index) = stream["index"].as_i64() else {
+                continue;
+            };
+            tracks.push(EmbeddedSubtitleTrack {
+                index,
+                codec_name,
+                language: stream["tags"]["language"].as_str().map(|s| s.to_string()),
+                title: stream["tags"]["title"].as_str().map(|s| s.to_string()),
+            });
+        }
+
+        #[cfg(debug_assertions)]
+        println!(
+            "Found {} embedded subtitle track(s) in: {}",
+            tracks.len(),
+            video_path
+        );
+
+        Ok::<Vec<EmbeddedSubtitleTrack>, String>(tracks)
+    });
+
+    tokio::time::timeout(TIMEOUT, task)
+        .await
+        .map_err(|_| "ffprobe timed out after 30 seconds".to_string())?
+        .map_err(|e| format!("Task panicked: {}", e))?
 }
 
 // Extract a single subtitle stream from a video file and return its content as
@@ -468,7 +478,7 @@ fn get_embedded_subtitle_tracks(
 // when the output format is forced to `srt`.  Sending output to `pipe:1` means
 // no temp file is written to disk.
 #[tauri::command]
-fn extract_embedded_subtitle(
+async fn extract_embedded_subtitle(
     video_path: String,
     stream_index: i64,
 ) -> Result<String, String> {
@@ -476,33 +486,42 @@ fn extract_embedded_subtitle(
         return Err(format!("Invalid stream index: {}", stream_index));
     }
 
-    #[cfg(debug_assertions)]
-    println!(
-        "Extracting embedded subtitle stream {} from: {}",
-        stream_index, video_path
-    );
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-    let output = create_hidden_command("ffmpeg")
-        .args([
-            "-v",
-            "error",
-            "-i",
-            &video_path,
-            "-map",
-            &format!("0:{}", stream_index),
-            "-f",
-            "srt",
-            "pipe:1",
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+    let task = tokio::task::spawn_blocking(move || {
+        #[cfg(debug_assertions)]
+        println!(
+            "Extracting embedded subtitle stream {} from: {}",
+            stream_index, video_path
+        );
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("FFmpeg failed to extract subtitle: {}", stderr));
-    }
+        let output = create_hidden_command("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-i",
+                &video_path,
+                "-map",
+                &format!("0:{}", stream_index),
+                "-f",
+                "srt",
+                "pipe:1",
+            ])
+            .output()
+            .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("FFmpeg failed to extract subtitle: {}", stderr));
+        }
+
+        Ok::<String, String>(String::from_utf8_lossy(&output.stdout).to_string())
+    });
+
+    tokio::time::timeout(TIMEOUT, task)
+        .await
+        .map_err(|_| "ffmpeg timed out after 30 seconds".to_string())?
+        .map_err(|e| format!("Task panicked: {}", e))?
 }
 
 #[derive(Serialize, Clone)]
