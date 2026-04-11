@@ -47,6 +47,9 @@
 
   // Progress autosave
   let progressSaveInterval: ReturnType<typeof setInterval>;
+  // Resolved restore position from get_watch_progress; applied in
+  // onloadedmetadata so playback always starts at the right position.
+  let pendingRestoreTime: number | null = null;
 
   // UI
   let showCloseBtn = $state(false);
@@ -434,22 +437,29 @@
     window.addEventListener('resize', resizeCanvas);
     window.addEventListener('keydown', handleKey);
 
-    // Restore saved progress — invoke the backend directly so this works on
-    // first load when watchProgressStore hasn't been populated yet.
+    // Fetch saved progress and store it in pendingRestoreTime so that
+    // onloadedmetadata can apply it before calling audioEl.play(), avoiding
+    // a race where playback starts at 0 then jumps after the IPC resolves.
     invoke<{ current_time: number; duration: number } | null>('get_watch_progress', {
       videoPath: audioPath,
     }).then((progress) => {
-      if (progress && audioEl && progress.duration > 0) {
+      if (progress && progress.duration > 0) {
         const pct = progress.current_time / progress.duration;
         if (pct > 0.05 && pct < 0.95) {
-          audioEl.currentTime = progress.current_time;
+          pendingRestoreTime = progress.current_time;
+          // If metadata already loaded before this resolved, apply now.
+          if (audioEl && audioEl.readyState >= 1) {
+            audioEl.currentTime = pendingRestoreTime;
+          }
         }
       }
     }).catch(() => {
-      // Fall back to in-memory store if the invoke fails
       const saved = $watchProgressStore.get(audioPath);
       if (saved && saved.current_time > 5) {
-        audioEl.currentTime = saved.current_time;
+        pendingRestoreTime = saved.current_time;
+        if (audioEl && audioEl.readyState >= 1) {
+          audioEl.currentTime = pendingRestoreTime;
+        }
       }
     });
 
@@ -483,6 +493,16 @@
   });
 
   async function closeApp() {
+    // Persist the current position before the process exits — exit(0) kills
+    // the process immediately so onDestroy never runs.
+    const pos = audioEl?.currentTime ?? currentTime;
+    if (duration > 0 && pos > 2) {
+      await invoke('save_watch_progress', {
+        videoPath: audioPath,
+        currentTime: pos,
+        duration
+      }).catch(console.error);
+    }
     try {
       const { exit } = await import('@tauri-apps/plugin-process');
       await exit(0);
@@ -637,6 +657,9 @@
   onloadedmetadata={() => {
     duration = audioEl.duration;
     setupAudio();
+    if (pendingRestoreTime !== null) {
+      audioEl.currentTime = pendingRestoreTime;
+    }
     audioEl.play().catch((err) => console.log('Auto-play prevented:', err));
   }}
   onended={() => { isPlaying = false; saveProgress(); }}
