@@ -649,7 +649,7 @@
                   max="2"
                   step="0.01"
                   aria-label="Volume"
-                  bind:value={volume}
+                  value={volume}
                   oninput={(e) => setVolume((e.target as HTMLInputElement).valueAsNumber)}
                 />
                 <span class="volume-percent">{Math.round((isMuted ? 0 : volume) * 100)}%</span>
