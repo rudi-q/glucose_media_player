@@ -41,6 +41,9 @@
   let isMuted = $state($appSettings.isMuted ?? false);
   let showVolumeMenu = $state(false);
 
+  // Progress autosave
+  let progressSaveInterval: ReturnType<typeof setInterval>;
+
   // UI
   let showCloseBtn = $state(false);
   let hideCloseBtnTimer: ReturnType<typeof setTimeout>;
@@ -402,7 +405,7 @@
         path: audioPath,
         current_time: currentTime,
         duration,
-        last_watched: Date.now()
+        last_watched: Math.floor(Date.now() / 1000)
       });
       invoke('save_watch_progress', {
         videoPath: audioPath,
@@ -434,9 +437,14 @@
       startVisualizer();
     }
 
+    progressSaveInterval = setInterval(() => {
+      if (isPlaying && duration > 0) saveProgress();
+    }, 5000);
+
     return () => {
       window.removeEventListener('resize', resizeCanvas);
       window.removeEventListener('keydown', handleKey);
+      clearInterval(progressSaveInterval);
     };
   });
 
@@ -445,6 +453,7 @@
     audioCtx?.close();
     clearTimeout(hideCloseBtnTimer);
     clearTimeout(hideControlsTimer);
+    clearInterval(progressSaveInterval);
     saveProgress();
   });
 
@@ -478,10 +487,6 @@
     scrubValue = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * duration;
   }
 
-  $effect(() => {
-    // Keep gain in sync if volume/mute changes externally
-    applyGain();
-  });
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -602,7 +607,7 @@
   src={convertFileSrc(audioPath)}
   crossorigin="anonymous"
   onplay={() => { isPlaying = true; audioCtx?.resume(); }}
-  onpause={() => { isPlaying = false; }}
+  onpause={() => { isPlaying = false; saveProgress(); }}
   ontimeupdate={() => { if (!isScrubbing) currentTime = audioEl.currentTime; }}
   onloadedmetadata={() => {
     duration = audioEl.duration;

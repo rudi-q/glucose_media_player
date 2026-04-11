@@ -127,12 +127,10 @@
     }
   }
   
-  const AUDIO_EXTENSIONS = new Set(['mp3','flac','wav','aac','ogg','opus','m4a','aiff','wma']);
-
   async function loadVideo(path: string) {
     const encodedPath = encodeURIComponent(path);
     const ext = path.split('.').pop()?.toLowerCase() ?? '';
-    await goto(AUDIO_EXTENSIONS.has(ext) ? `/audio/${encodedPath}` : `/player/${encodedPath}`);
+    await goto(AUDIO_EXT.has(ext) ? `/audio/${encodedPath}` : `/player/${encodedPath}`);
   }
   
   async function closeApp() {

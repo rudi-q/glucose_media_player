@@ -438,8 +438,11 @@ fn get_embedded_subtitle_tracks(
             continue;
         }
 
+        let Some(index) = stream["index"].as_i64() else {
+            continue;
+        };
         tracks.push(EmbeddedSubtitleTrack {
-            index: stream["index"].as_i64().unwrap_or(0),
+            index,
             codec_name,
             language: stream["tags"]["language"].as_str().map(|s| s.to_string()),
             title: stream["tags"]["title"].as_str().map(|s| s.to_string()),
@@ -465,6 +468,10 @@ fn extract_embedded_subtitle(
     video_path: String,
     stream_index: i64,
 ) -> Result<String, String> {
+    if stream_index < 0 {
+        return Err(format!("Invalid stream index: {}", stream_index));
+    }
+
     #[cfg(debug_assertions)]
     println!(
         "Extracting embedded subtitle stream {} from: {}",

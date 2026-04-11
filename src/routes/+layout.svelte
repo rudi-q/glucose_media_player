@@ -13,6 +13,8 @@
   import { appSettings, setupStore, type SetupStatus } from "$lib/stores/appStore";
   import { watchProgressStore } from "$lib/stores/watchProgressStore";
   
+  const AUDIO_EXTENSIONS = new Set(['mp3','flac','wav','aac','ogg','opus','m4a','aiff','wma']);
+
   let { children } = $props();
 
   let appReady = $state(false);
@@ -66,16 +68,14 @@
         listen<string>("open-file", async (event) => {
           const encodedPath = encodeURIComponent(event.payload);
           const ext = event.payload.split('.').pop()?.toLowerCase() ?? '';
-          const isAudio = ['mp3','flac','wav','aac','ogg','opus','m4a','aiff','wma'].includes(ext);
-          await goto(isAudio ? `/audio/${encodedPath}` : `/player/${encodedPath}`);
+          await goto(AUDIO_EXTENSIONS.has(ext) ? `/audio/${encodedPath}` : `/player/${encodedPath}`);
           invoke("mark_file_processed").catch(console.error);
         }),
         listen<string[]>("tauri://drag-drop", async (event) => {
           if (event.payload && event.payload.length > 0) {
             const encodedPath = encodeURIComponent(event.payload[0]);
             const ext = event.payload[0].split('.').pop()?.toLowerCase() ?? '';
-            const isAudio = ['mp3','flac','wav','aac','ogg','opus','m4a','aiff','wma'].includes(ext);
-            await goto(isAudio ? `/audio/${encodedPath}` : `/player/${encodedPath}`);
+            await goto(AUDIO_EXTENSIONS.has(ext) ? `/audio/${encodedPath}` : `/player/${encodedPath}`);
           }
         }),
         // Listen for download progress

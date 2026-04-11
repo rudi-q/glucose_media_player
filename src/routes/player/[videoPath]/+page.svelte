@@ -978,12 +978,16 @@
         // @ts-ignore - setSinkId is not yet in all TS typings
         if (typeof (audioCtx as any).setSinkId !== "undefined") {
           await (audioCtx as any).setSinkId(deviceId);
+          console.debug("Audio output routed via AudioContext.setSinkId");
         } else {
           // Fallback: route on the video element (best-effort when AudioContext
           // setSinkId is unavailable, e.g. older WebKit builds)
           // @ts-ignore
           if (typeof videoElement.setSinkId !== "undefined") {
             await videoElement.setSinkId(deviceId);
+            console.debug("Audio output routed via videoElement.setSinkId (AudioContext.setSinkId unavailable)");
+          } else {
+            console.warn("Audio routing unavailable: neither AudioContext nor videoElement supports setSinkId");
           }
         }
       } else {
@@ -991,6 +995,9 @@
         // @ts-ignore - setSinkId is not in TS types but supported in browsers
         if (typeof videoElement.setSinkId !== "undefined") {
           await videoElement.setSinkId(deviceId);
+          console.debug("Audio output routed via videoElement.setSinkId (no AudioContext)");
+        } else {
+          console.warn("Audio routing unavailable: videoElement does not support setSinkId");
         }
       }
       selectedAudioDevice = deviceId;
@@ -1002,7 +1009,15 @@
   }
 
   function setupAudioContext() {
-    if (!videoElement || audioSourceConnected) return;
+    if (!videoElement) return;
+    // If we have a live context with a source already attached, nothing to do.
+    // If the context was closed externally, reset and recreate.
+    if (audioSourceConnected && audioCtx?.state !== "closed") return;
+    if (audioCtx?.state === "closed") {
+      audioCtx = null;
+      gainNode = null;
+      audioSourceConnected = false;
+    }
     try {
       audioCtx = new AudioContext();
       const source = audioCtx.createMediaElementSource(videoElement);
