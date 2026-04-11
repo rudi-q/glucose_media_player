@@ -422,11 +422,24 @@
     window.addEventListener('resize', resizeCanvas);
     window.addEventListener('keydown', handleKey);
 
-    // Restore saved progress
-    const saved = $watchProgressStore.get(audioPath);
-    if (saved && saved.current_time > 5) {
-      audioEl.currentTime = saved.current_time;
-    }
+    // Restore saved progress — invoke the backend directly so this works on
+    // first load when watchProgressStore hasn't been populated yet.
+    invoke<{ current_time: number; duration: number } | null>('get_watch_progress', {
+      videoPath: audioPath,
+    }).then((progress) => {
+      if (progress && audioEl && progress.duration > 0) {
+        const pct = progress.current_time / progress.duration;
+        if (pct > 0.05 && pct < 0.95) {
+          audioEl.currentTime = progress.current_time;
+        }
+      }
+    }).catch(() => {
+      // Fall back to in-memory store if the invoke fails
+      const saved = $watchProgressStore.get(audioPath);
+      if (saved && saved.current_time > 5) {
+        audioEl.currentTime = saved.current_time;
+      }
+    });
 
     // Restore volume from store
     volume = $appSettings.volume ?? 1;

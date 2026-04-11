@@ -8,6 +8,18 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use std::time::SystemTime;
+
+const VIDEO_EXTENSIONS: &[&str] = &[
+    "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
+];
+const AUDIO_EXTENSIONS: &[&str] = &[
+    "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "aiff", "wma",
+];
+/// All media extensions recognised by the app (video + audio).
+const MEDIA_EXTENSIONS: &[&str] = &[
+    "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
+    "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "aiff", "wma",
+];
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use tauri::RunEvent;
 use tauri::{Emitter, Manager};
@@ -97,16 +109,8 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, Strin
     let file_path = app
         .dialog()
         .file()
-        .add_filter(
-            "Video Files",
-            &[
-                "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
-            ],
-        )
-        .add_filter(
-            "Audio Files",
-            &["mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "aiff", "wma"],
-        )
+        .add_filter("Video Files", VIDEO_EXTENSIONS)
+        .add_filter("Audio Files", AUDIO_EXTENSIONS)
         .blocking_pick_file();
 
     match file_path {
@@ -1512,10 +1516,6 @@ fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchPro
 
 #[tauri::command]
 fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
-    let video_extensions = vec![
-        "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
-        "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "aiff", "wma",
-    ];
     let mut videos = Vec::new();
 
     // Check if ffprobe is available once at the start
@@ -1554,7 +1554,7 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
                         if metadata.is_file() {
                             if let Some(ext) = entry.path().extension() {
                                 if let Some(ext_str) = ext.to_str() {
-                                    if video_extensions.contains(&ext_str.to_lowercase().as_str()) {
+                                    if MEDIA_EXTENSIONS.contains(&ext_str.to_lowercase().as_str()) {
                                         if let Ok(modified) = metadata.modified() {
                                             if let Ok(duration) =
                                                 modified.duration_since(SystemTime::UNIX_EPOCH)
@@ -1701,9 +1701,6 @@ pub fn run() {
                 #[cfg(debug_assertions)]
                 println!("*** LAUNCHED WITH ARGUMENTS - POTENTIAL FILE ASSOCIATION ***");
 
-                let video_extensions = vec![
-                    "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
-                ];
                 let mut video_files: Vec<String> = Vec::new();
 
                 for arg in &args[1..] {
@@ -1713,7 +1710,7 @@ pub fn run() {
                     println!("Processing argument: {} -> {}", arg, clean_arg);
 
                     let lower = clean_arg.to_lowercase();
-                    for ext in &video_extensions {
+                    for ext in MEDIA_EXTENSIONS {
                         if lower.ends_with(&format!(".{}", ext)) {
                             video_files.push(clean_arg.clone());
                             #[cfg(debug_assertions)]
@@ -1779,10 +1776,6 @@ pub fn run() {
                         println!("Received opened event with URLs: {:?}", urls);
                     }
 
-                    let video_extensions = vec![
-                        "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg",
-                        "ogv",
-                    ];
                     let mut video_files: Vec<String> = Vec::new();
 
                     for url in urls {
@@ -1798,7 +1791,7 @@ pub fn run() {
                             println!("Decoded path: {}", decoded_path);
 
                             let lower = decoded_path.to_lowercase();
-                            for ext in &video_extensions {
+                            for ext in MEDIA_EXTENSIONS {
                                 if lower.ends_with(&format!(".{}", ext)) {
                                     video_files.push(decoded_path.to_string());
                                     #[cfg(debug_assertions)]

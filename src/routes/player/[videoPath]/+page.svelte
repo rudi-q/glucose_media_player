@@ -973,22 +973,23 @@
     if (!videoElement) return;
 
     try {
+      let routed = false;
       if (audioCtx) {
         // When the Web Audio graph is active, route through AudioContext
         // @ts-ignore - setSinkId is not yet in all TS typings
         if (typeof (audioCtx as any).setSinkId !== "undefined") {
           await (audioCtx as any).setSinkId(deviceId);
           console.debug("Audio output routed via AudioContext.setSinkId");
-        } else {
+          routed = true;
+        } else if (typeof videoElement.setSinkId !== "undefined") {
           // Fallback: route on the video element (best-effort when AudioContext
           // setSinkId is unavailable, e.g. older WebKit builds)
           // @ts-ignore
-          if (typeof videoElement.setSinkId !== "undefined") {
-            await videoElement.setSinkId(deviceId);
-            console.debug("Audio output routed via videoElement.setSinkId (AudioContext.setSinkId unavailable)");
-          } else {
-            console.warn("Audio routing unavailable: neither AudioContext nor videoElement supports setSinkId");
-          }
+          await videoElement.setSinkId(deviceId);
+          console.debug("Audio output routed via videoElement.setSinkId (AudioContext.setSinkId unavailable)");
+          routed = true;
+        } else {
+          console.warn("Audio routing unavailable: neither AudioContext nor videoElement supports setSinkId");
         }
       } else {
         // No AudioContext yet — route directly on the video element
@@ -996,13 +997,16 @@
         if (typeof videoElement.setSinkId !== "undefined") {
           await videoElement.setSinkId(deviceId);
           console.debug("Audio output routed via videoElement.setSinkId (no AudioContext)");
+          routed = true;
         } else {
           console.warn("Audio routing unavailable: videoElement does not support setSinkId");
         }
       }
-      selectedAudioDevice = deviceId;
-      appSettings.updateAudioDevice(deviceId);
-      showAudioMenu = false;
+      if (routed) {
+        selectedAudioDevice = deviceId;
+        appSettings.updateAudioDevice(deviceId);
+        showAudioMenu = false;
+      }
     } catch (err) {
       console.error("Failed to change audio output:", err);
     }
