@@ -604,7 +604,11 @@
   onplay={() => { isPlaying = true; audioCtx?.resume(); }}
   onpause={() => { isPlaying = false; }}
   ontimeupdate={() => { if (!isScrubbing) currentTime = audioEl.currentTime; }}
-  onloadedmetadata={() => { duration = audioEl.duration; }}
+  onloadedmetadata={() => {
+    duration = audioEl.duration;
+    setupAudio();
+    audioEl.play().catch((err) => console.log('Auto-play prevented:', err));
+  }}
   onended={() => { isPlaying = false; saveProgress(); }}
   preload="metadata"
 ></audio>

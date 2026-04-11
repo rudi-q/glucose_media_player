@@ -388,6 +388,112 @@ fn find_subtitle_for_video(video_path: String) -> Result<Option<String>, String>
     Ok(None)
 }
 
+// Return the list of text-based subtitle streams embedded in a video file.
+// Bitmap formats (PGS, VobSub, DVB) are silently skipped because they cannot
+// be converted to a text format that the browser can render.
+#[tauri::command]
+fn get_embedded_subtitle_tracks(
+    video_path: String,
+) -> Result<Vec<EmbeddedSubtitleTrack>, String> {
+    const SUPPORTED: &[&str] = &["subrip", "ass", "ssa", "webvtt", "mov_text", "srt", "text"];
+
+    let output = create_hidden_command("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "s",
+            "-show_entries",
+            "stream=index,codec_name:stream_tags=language,title",
+            "-of",
+            "json",
+            &video_path,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
+
+    if !output.status.success() {
+        return Ok(vec![]);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
+        Ok(v) => v,
+        Err(_) => return Ok(vec![]),
+    };
+
+    let streams = match parsed["streams"].as_array() {
+        Some(s) => s,
+        None => return Ok(vec![]),
+    };
+
+    let mut tracks = Vec::new();
+    for stream in streams {
+        let codec_name = stream["codec_name"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
+
+        if !SUPPORTED.contains(&codec_name.as_str()) {
+            continue;
+        }
+
+        tracks.push(EmbeddedSubtitleTrack {
+            index: stream["index"].as_i64().unwrap_or(0),
+            codec_name,
+            language: stream["tags"]["language"].as_str().map(|s| s.to_string()),
+            title: stream["tags"]["title"].as_str().map(|s| s.to_string()),
+        });
+    }
+
+    #[cfg(debug_assertions)]
+    println!(
+        "Found {} embedded subtitle track(s) in: {}",
+        tracks.len(),
+        video_path
+    );
+
+    Ok(tracks)
+}
+
+// Extract a single subtitle stream from a video file and return its content as
+// an SRT string. FFmpeg handles codec conversion (e.g. ASS → SRT) automatically
+// when the output format is forced to `srt`.  Sending output to `pipe:1` means
+// no temp file is written to disk.
+#[tauri::command]
+fn extract_embedded_subtitle(
+    video_path: String,
+    stream_index: i64,
+) -> Result<String, String> {
+    #[cfg(debug_assertions)]
+    println!(
+        "Extracting embedded subtitle stream {} from: {}",
+        stream_index, video_path
+    );
+
+    let output = create_hidden_command("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-i",
+            &video_path,
+            "-map",
+            &format!("0:{}", stream_index),
+            "-f",
+            "srt",
+            "pipe:1",
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("FFmpeg failed to extract subtitle: {}", stderr));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 #[derive(Serialize, Clone)]
 struct VideoFile {
     path: String,
@@ -438,6 +544,14 @@ struct ConversionProgress {
 struct VideoInfo {
     format: String,
     size_mb: f64,
+}
+
+#[derive(Serialize, Clone)]
+struct EmbeddedSubtitleTrack {
+    index: i64,
+    codec_name: String,
+    language: Option<String>,
+    title: Option<String>,
 }
 
 // Get video duration using FFmpeg
@@ -1624,6 +1738,8 @@ pub fn run() {
             frontend_ready,
             exit_app,
             find_subtitle_for_video,
+            get_embedded_subtitle_tracks,
+            extract_embedded_subtitle,
             generate_subtitles,
             check_ffmpeg_installed,
             check_installed_models,

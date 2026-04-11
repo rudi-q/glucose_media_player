@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, setContext } from "svelte";
+  import { fade } from "svelte/transition";
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
   import { X, Settings, Check, Loader2 } from "lucide-svelte";
@@ -13,6 +14,8 @@
   import { watchProgressStore } from "$lib/stores/watchProgressStore";
   
   let { children } = $props();
+
+  let appReady = $state(false);
   
   // Shared state accessible via context
   let showSettings = $state(false);
@@ -96,9 +99,9 @@
       }
     })();
     
-    // Check setup status on first launch
-    checkSetupStatus();
-    
+    // Check setup status on first launch, then reveal the app
+    checkSetupStatus().finally(() => { appReady = true; });
+
     // Notify backend that frontend is ready
     invoke("frontend_ready").catch(console.error);
     
@@ -198,6 +201,12 @@
   lastAutoCheckTime={lastAutoCheckTime}
 />
 <UpdateNotification />
+
+{#if !appReady}
+  <div class="splash-screen" out:fade={{ duration: 250 }}>
+    <img src="/logo-dark.svg" alt="glucose" class="splash-logo" />
+  </div>
+{/if}
 
 {@render children()}
 
@@ -509,6 +518,23 @@
 {/if}
 
 <style>
+  .splash-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: #080a10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .splash-logo {
+    width: 120px;
+    height: auto;
+    opacity: 0.9;
+  }
+
   /* Settings and Setup dialog styles - imported from original */
   .settings-overlay {
     position: fixed;

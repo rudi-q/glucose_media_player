@@ -29,7 +29,7 @@
     type WatchProgress,
   } from "$lib/stores/watchProgressStore";
   import type { VideoInfo } from "$lib/types/video";
-  import { loadSubtitleFile } from "$lib/utils/subtitles";
+  import { loadSubtitleFile, convertSrtToVtt } from "$lib/utils/subtitles";
   import {
     formatTime,
     formatEstimatedTime,
@@ -74,6 +74,15 @@
   let subtitlesEnabled = $state(true);
   let subtitleFileName = $state<string | null>(null);
   let showSubtitleMenu = $state(false);
+
+  // Embedded subtitle tracks (populated for MKV and other containers)
+  interface EmbeddedSubtitleTrack {
+    index: number;
+    codec_name: string;
+    language: string | null;
+    title: string | null;
+  }
+  let embeddedSubtitleTracks = $state<EmbeddedSubtitleTrack[]>([]);
   let isGeneratingSubtitles = $state(false);
   let generationProgress = $state(0);
   let generationMessage = $state("");
@@ -126,7 +135,7 @@
         videoSrc = src;
         currentVideoPath = data.videoPath;
 
-        // Auto-detect and load subtitle file
+        // Auto-detect subtitles: external file first, then embedded tracks
         try {
           const subtitlePath = await invoke<string | null>(
             "find_subtitle_for_video",
@@ -135,6 +144,18 @@
           if (subtitlePath) {
             console.log("Auto-loading subtitle:", subtitlePath);
             await loadSubtitle(subtitlePath);
+          }
+
+          // Always detect embedded tracks so the subtitle menu can list them
+          const tracks = await invoke<EmbeddedSubtitleTrack[]>(
+            "get_embedded_subtitle_tracks",
+            { videoPath: data.videoPath },
+          );
+          embeddedSubtitleTracks = tracks;
+
+          // Auto-load the first embedded track when no external file was found
+          if (!subtitlePath && tracks.length > 0) {
+            await loadEmbeddedSubtitle(tracks[0]);
           }
         } catch (err) {
           console.log("No subtitle found or error:", err);
@@ -346,6 +367,51 @@
       subtitleSrc = result.blobUrl;
       subtitleFileName = result.fileName;
       subtitlesEnabled = true;
+    }
+  }
+
+  function formatEmbeddedTrackLabel(track: EmbeddedSubtitleTrack): string {
+    if (track.title) return track.title;
+    if (track.language) return track.language.toUpperCase();
+    return `Track ${track.index}`;
+  }
+
+  function formatCodecLabel(codec: string): string {
+    switch (codec) {
+      case "subrip":
+      case "srt":
+      case "mov_text":
+        return "SRT";
+      case "ass":
+      case "ssa":
+        return "ASS";
+      case "webvtt":
+        return "VTT";
+      default:
+        return codec.toUpperCase();
+    }
+  }
+
+  async function loadEmbeddedSubtitle(track: EmbeddedSubtitleTrack) {
+    try {
+      const srtContent = await invoke<string>("extract_embedded_subtitle", {
+        videoPath: data.videoPath,
+        streamIndex: track.index,
+      });
+
+      // Revoke previous blob URL to avoid memory leaks
+      if (subtitleSrc && subtitleSrc.startsWith("blob:")) {
+        URL.revokeObjectURL(subtitleSrc);
+      }
+
+      const vttContent = convertSrtToVtt(srtContent);
+      const blob = new Blob([vttContent], { type: "text/vtt;charset=utf-8" });
+      subtitleSrc = URL.createObjectURL(blob);
+      subtitleFileName = formatEmbeddedTrackLabel(track);
+      subtitlesEnabled = true;
+    } catch (err) {
+      console.error("Failed to extract embedded subtitle:", err);
+      alert("Failed to load embedded subtitle: " + err);
     }
   }
 
@@ -646,6 +712,13 @@
     hideCloseButtonTimeout = setTimeout(() => {
       showCloseButton = false;
     }, 1000);
+
+    // Show controls whenever the mouse moves anywhere over the player
+    showControls = true;
+    clearTimeout(hideControlsTimeout);
+    hideControlsTimeout = setTimeout(() => {
+      showControls = false;
+    }, 2000);
   }
 
   function handleControlsEnter() {
@@ -1297,6 +1370,21 @@
                   <span class="model-name">Generate with AI</span>
                   <span class="model-desc">Auto-generate using Whisper AI</span>
                 </button>
+                {#if embeddedSubtitleTracks.length > 0}
+                  <div class="subtitle-menu-divider"></div>
+                  {#each embeddedSubtitleTracks as track}
+                    <button
+                      class="model-option"
+                      onclick={() => {
+                        showSubtitleMenu = false;
+                        loadEmbeddedSubtitle(track);
+                      }}
+                    >
+                      <span class="model-name">{formatEmbeddedTrackLabel(track)}</span>
+                      <span class="model-desc">Embedded · {formatCodecLabel(track.codec_name)}{track.language ? ` · ${track.language}` : ""}</span>
+                    </button>
+                  {/each}
+                {/if}
                 {#if subtitleFileName}
                   <div class="subtitle-menu-divider"></div>
                   <button class="model-option" onclick={toggleSubtitles}>
