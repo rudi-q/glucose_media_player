@@ -296,7 +296,9 @@
 
   function seek(t: number) {
     if (!audioEl) return;
-    audioEl.currentTime = Math.max(0, Math.min(duration, t));
+    const clamped = Math.max(0, Math.min(duration, t));
+    audioEl.currentTime = clamped;
+    currentTime = clamped; // sync immediately so rapid seeks accumulate correctly
   }
 
   // ── Canvas sizing ───────────────────────────────────────────────────────────
