@@ -103,6 +103,10 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, Strin
                 "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
             ],
         )
+        .add_filter(
+            "Audio Files",
+            &["mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "aiff", "wma"],
+        )
         .blocking_pick_file();
 
     match file_path {
@@ -1389,6 +1393,7 @@ fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchPro
 fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
     let video_extensions = vec![
         "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
+        "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "aiff", "wma",
     ];
     let mut videos = Vec::new();
 

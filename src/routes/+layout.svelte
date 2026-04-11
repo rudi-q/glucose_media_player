@@ -61,16 +61,18 @@
     (async () => {
       const results = await Promise.allSettled([
         listen<string>("open-file", async (event) => {
-          // Navigate to player with the file path
           const encodedPath = encodeURIComponent(event.payload);
-          await goto(`/player/${encodedPath}`);
-          // Mark file as processed
+          const ext = event.payload.split('.').pop()?.toLowerCase() ?? '';
+          const isAudio = ['mp3','flac','wav','aac','ogg','opus','m4a','aiff','wma'].includes(ext);
+          await goto(isAudio ? `/audio/${encodedPath}` : `/player/${encodedPath}`);
           invoke("mark_file_processed").catch(console.error);
         }),
         listen<string[]>("tauri://drag-drop", async (event) => {
           if (event.payload && event.payload.length > 0) {
             const encodedPath = encodeURIComponent(event.payload[0]);
-            await goto(`/player/${encodedPath}`);
+            const ext = event.payload[0].split('.').pop()?.toLowerCase() ?? '';
+            const isAudio = ['mp3','flac','wav','aac','ogg','opus','m4a','aiff','wma'].includes(ext);
+            await goto(isAudio ? `/audio/${encodedPath}` : `/player/${encodedPath}`);
           }
         }),
         // Listen for download progress
