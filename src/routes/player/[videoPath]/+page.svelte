@@ -90,6 +90,11 @@
   let audioDevices = $state<MediaDeviceInfo[]>([]);
   let selectedAudioDevice = $state($appSettings.selectedAudioDevice);
 
+  // Web Audio API for volume boost beyond 100%
+  let audioCtx: AudioContext | null = null;
+  let gainNode: GainNode | null = null;
+  let audioSourceConnected = false;
+
   // Conversion state
   let isConverting = $state(false);
   let conversionProgress = $state(0);
@@ -231,6 +236,13 @@
       }
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
+      // Close Web Audio context to free resources
+      if (audioCtx) {
+        audioCtx.close().catch(() => {});
+        audioCtx = null;
+        gainNode = null;
+        audioSourceConnected = false;
+      }
     };
   });
 
@@ -389,6 +401,7 @@
   function togglePlay() {
     if (!videoElement) return;
     if (videoElement.paused) {
+      if (audioCtx?.state === "suspended") audioCtx.resume();
       videoElement.play();
       if (backgroundVideo) backgroundVideo.play();
       isPlaying = true;
@@ -427,9 +440,13 @@
 
   function adjustVolume(delta: number) {
     if (!videoElement) return;
-    const newVolume = Math.max(0, Math.min(1, volume + delta));
+    const newVolume = Math.max(0, Math.min(2, volume + delta));
     volume = newVolume;
-    videoElement.volume = newVolume;
+    if (gainNode) {
+      gainNode.gain.value = newVolume;
+    } else {
+      videoElement.volume = Math.min(1, newVolume);
+    }
     appSettings.updateVolume(newVolume);
     if (isMuted) {
       isMuted = false;
@@ -769,7 +786,9 @@
       }
     }, 5000);
 
-    // Auto-play when video loads
+    // Set up Web Audio API for volume boost, then auto-play
+    setupAudioContext();
+    if (audioCtx?.state === "suspended") audioCtx.resume();
     videoElement.play().catch((err) => {
       console.log("Auto-play prevented:", err);
     });
@@ -881,15 +900,48 @@
     if (!videoElement) return;
 
     try {
-      // @ts-ignore - setSinkId is not in TS types but supported in browsers
-      if (typeof videoElement.setSinkId !== "undefined") {
-        await videoElement.setSinkId(deviceId);
-        selectedAudioDevice = deviceId;
-        appSettings.updateAudioDevice(deviceId);
-        showAudioMenu = false;
+      if (audioCtx) {
+        // When the Web Audio graph is active, route through AudioContext
+        // @ts-ignore - setSinkId is not yet in all TS typings
+        if (typeof (audioCtx as any).setSinkId !== "undefined") {
+          await (audioCtx as any).setSinkId(deviceId);
+        } else {
+          // Fallback: route on the video element (best-effort when AudioContext
+          // setSinkId is unavailable, e.g. older WebKit builds)
+          // @ts-ignore
+          if (typeof videoElement.setSinkId !== "undefined") {
+            await videoElement.setSinkId(deviceId);
+          }
+        }
+      } else {
+        // No AudioContext yet — route directly on the video element
+        // @ts-ignore - setSinkId is not in TS types but supported in browsers
+        if (typeof videoElement.setSinkId !== "undefined") {
+          await videoElement.setSinkId(deviceId);
+        }
       }
+      selectedAudioDevice = deviceId;
+      appSettings.updateAudioDevice(deviceId);
+      showAudioMenu = false;
     } catch (err) {
       console.error("Failed to change audio output:", err);
+    }
+  }
+
+  function setupAudioContext() {
+    if (!videoElement || audioSourceConnected) return;
+    try {
+      audioCtx = new AudioContext();
+      const source = audioCtx.createMediaElementSource(videoElement);
+      gainNode = audioCtx.createGain();
+      gainNode.gain.value = volume;
+      source.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      // Native volume stays at 1; the gain node handles all level control
+      videoElement.volume = 1;
+      audioSourceConnected = true;
+    } catch (err) {
+      console.error("Failed to setup audio context:", err);
     }
   }
 
@@ -1156,7 +1208,7 @@
             >
               {#if isMuted}
                 <VolumeX size={20} />
-              {:else if volume < 0.5}
+              {:else if volume < 1}
                 <Volume1 size={20} />
               {:else}
                 <Volume2 size={20} />
@@ -1168,7 +1220,7 @@
                   type="range"
                   class="volume-slider-vertical"
                   min="0"
-                  max="1"
+                  max="2"
                   step="0.01"
                   aria-label="Volume"
                   aria-orientation="vertical"
@@ -1177,7 +1229,11 @@
                     if (videoElement) {
                       const newVolume = (e.target as HTMLInputElement)
                         .valueAsNumber;
-                      videoElement.volume = newVolume;
+                      if (gainNode) {
+                        gainNode.gain.value = newVolume;
+                      } else {
+                        videoElement.volume = Math.min(1, newVolume);
+                      }
                       appSettings.updateVolume(newVolume);
                       if (isMuted) {
                         isMuted = false;
@@ -1187,6 +1243,9 @@
                     }
                   }}
                 />
+                <span class="volume-percent">
+                  {Math.round(volume * 100)}%
+                </span>
                 <button
                   class="mute-toggle"
                   onclick={toggleMute}
@@ -1970,6 +2029,13 @@
 
   .volume-slider-vertical::-moz-range-thumb:hover {
     transform: scale(1.2);
+  }
+
+  .volume-percent {
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+    color: rgba(255, 255, 255, 0.6);
+    letter-spacing: 0.02em;
   }
 
   .mute-toggle {
