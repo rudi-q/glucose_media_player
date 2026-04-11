@@ -84,6 +84,16 @@
       startVisualizer();
     } catch (e) {
       console.error('Audio context setup failed:', e);
+      // Clean up partial state
+      if (gainNode) gainNode.disconnect();
+      if (analyser) analyser.disconnect();
+      gainNode = null;
+      analyser = null;
+      smoothed = new Float32Array();
+      freqData = new Uint8Array();
+      waveData = new Uint8Array();
+      if (audioCtx) audioCtx.close().catch(() => {});
+      audioCtx = null;
     }
   }
 
@@ -278,7 +288,11 @@
     } else {
       setupAudio(); // must run first — creates audioCtx
       if (audioCtx?.state === 'suspended') await audioCtx.resume();
-      audioEl.play();
+      try {
+        await audioEl.play();
+      } catch (err) {
+        console.log('Play prevented:', err);
+      }
     }
   }
 
