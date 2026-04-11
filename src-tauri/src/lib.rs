@@ -680,7 +680,7 @@ async fn download_whisper_model(
         &output_path,
         &format!("Downloading {} model", model_size),
     )
-    .await?;
+        .await?;
 
     Ok(output_path.to_string_lossy().to_string())
 }
@@ -968,8 +968,8 @@ async fn generate_subtitles(
             &language_clone,
         )
     })
-    .await
-    .map_err(|e| format!("Transcription task failed: {}", e))??;
+        .await
+        .map_err(|e| format!("Transcription task failed: {}", e))??;
 
     // Clean up temporary audio file
     let _ = fs::remove_file(&temp_audio_str);
@@ -1038,9 +1038,7 @@ fn transcribe_audio_with_whisper(
     println!("Transcription complete, extracting segments...");
 
     // Extract segments with timestamps
-    let num_segments = state
-        .full_n_segments()
-        .map_err(|e| format!("Failed to get segment count: {}", e))?;
+    let num_segments = state.full_n_segments();
 
     #[cfg(debug_assertions)]
     println!("Found {} segments", num_segments);
@@ -1048,15 +1046,19 @@ fn transcribe_audio_with_whisper(
     let mut segments = Vec::new();
 
     for i in 0..num_segments {
-        let start_timestamp = state
-            .full_get_segment_t0(i)
-            .map_err(|e| format!("Failed to get start timestamp: {}", e))?;
-        let end_timestamp = state
-            .full_get_segment_t1(i)
-            .map_err(|e| format!("Failed to get end timestamp: {}", e))?;
-        let text = state
-            .full_get_segment_text(i)
-            .map_err(|e| format!("Failed to get segment text: {}", e))?;
+        // 1. Fetch the segment object for this loop iteration
+        // USING .ok_or_else() INSTEAD OF .map_err() because get_segment returns an Option
+        let segment = state.get_segment(i)
+            .ok_or_else(|| format!("Failed to get segment {}", i))?;
+
+        // 2. Grab the timestamps from the object
+        let start_timestamp = segment.start_timestamp();
+        let end_timestamp = segment.end_timestamp();
+
+        // 3. Grab the text
+        let text = segment.to_str()
+            .map_err(|e| format!("Failed to parse segment text: {}", e))?
+            .to_string();
 
         // Convert from Whisper's timestamp units (10ms) to seconds
         let start_seconds = start_timestamp as f64 / 100.0;
@@ -1286,8 +1288,8 @@ async fn convert_video(
             &app_handle_clone,
         )
     })
-    .await
-    .map_err(|e| format!("Conversion task failed: {}", e))??;
+        .await
+        .map_err(|e| format!("Conversion task failed: {}", e))??;
 
     // Emit completion
     let _ = app_handle.emit(
