@@ -27,6 +27,10 @@
   // Visualizer state
   let animId: number;
   let smoothed: Float32Array = new Float32Array(128);
+  // Reusable typed-array buffers — allocated once in setupAudio() to avoid
+  // per-frame GC pressure in the animation loop.
+  let freqData = new Uint8Array(new ArrayBuffer(0));
+  let waveData = new Uint8Array(new ArrayBuffer(0));
   let bassEnergy = 0;
 
   // Playback state
@@ -68,6 +72,8 @@
       audioEl.volume = 1;
       sourceConnected = true;
       smoothed = new Float32Array(analyser.frequencyBinCount);
+      freqData = new Uint8Array(analyser.frequencyBinCount);
+      waveData = new Uint8Array(analyser.fftSize);
       startVisualizer();
     } catch (e) {
       console.error('Audio context setup failed:', e);
@@ -135,9 +141,8 @@
     const cx = W / 2;
     const cy = H / 2;
 
-    // Read frequency data
-    const bins = analyser.frequencyBinCount; // fftSize / 2
-    const freqData = new Uint8Array(bins);
+    // Read frequency data into reusable buffer
+    const bins = freqData.length; // frequencyBinCount = fftSize / 2
     analyser.getByteFrequencyData(freqData);
 
     // Exponential smoothing
@@ -234,9 +239,8 @@
 
     // ── Waveform inside inner circle ──
     if (analyser) {
-      const waveData = new Uint8Array(analyser.fftSize);
       analyser.getByteTimeDomainData(waveData);
-      const waveSlice = waveData.slice(0, 128);
+      const waveSlice = waveData.subarray(0, 128); // zero-copy view
       const waveR = innerR * 0.65;
       ctx.save();
       ctx.strokeStyle = `hsla(200, 80%, 75%, 0.5)`;
@@ -306,7 +310,12 @@
   // ── Keyboard shortcuts ──────────────────────────────────────────────────────
 
   function handleKey(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement) return;
+    const active = document.activeElement;
+    if (
+      active instanceof HTMLElement &&
+      active !== document.body &&
+      active.matches('input, textarea, select, button, [contenteditable="true"], [role="slider"]')
+    ) return;
 
     // Close app
     if (e.key === 'Escape') {
@@ -400,16 +409,19 @@
   // ── Watch progress ──────────────────────────────────────────────────────────
 
   function saveProgress() {
-    if (duration > 0 && currentTime > 2) {
+    // Read live position from the element so scrubs that haven't fired a
+    // timeupdate yet are still captured correctly.
+    const pos = audioEl?.currentTime ?? currentTime;
+    if (duration > 0 && pos > 2) {
       watchProgressStore.setProgress(audioPath, {
         path: audioPath,
-        current_time: currentTime,
+        current_time: pos,
         duration,
         last_watched: Math.floor(Date.now() / 1000)
       });
       invoke('save_watch_progress', {
         videoPath: audioPath,
-        currentTime,
+        currentTime: pos,
         duration
       }).catch(console.error);
     }
