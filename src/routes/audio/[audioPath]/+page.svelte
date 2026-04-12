@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { goto } from '$app/navigation';
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { invoke } from '@tauri-apps/api/core';
@@ -314,13 +314,11 @@
   function setVolume(v: number) {
     volume = Math.min(2, Math.max(0, v));
     applyGain();
-    flashVolumeMenu();
   }
 
   function toggleMute() {
     isMuted = !isMuted;
     applyGain();
-    flashVolumeMenu();
   }
 
   function seek(t: number) {
@@ -389,13 +387,16 @@
       case 'ArrowUp':
         e.preventDefault();
         setVolume(volume + 0.1);
+        flashVolumeMenu();
         break;
       case 'ArrowDown':
         e.preventDefault();
         setVolume(volume - 0.1);
+        flashVolumeMenu();
         break;
       case 'm':
         toggleMute();
+        flashVolumeMenu();
         break;
     }
   }
@@ -475,6 +476,28 @@
   $effect(() => {
     const path = audioPath; // establish reactive dependency
     let cancelled = false;
+
+    // Persist the outgoing track's position before we zero the reactive state.
+    // onpause fires after duration is already reset to 0, so saveProgress()
+    // would bail — capture now and write directly. Use untrack() so reading
+    // duration/currentTime here doesn't re-trigger this effect on every tick.
+    untrack(() => {
+      const outgoingDuration = duration;
+      const outgoingPos = audioEl?.currentTime ?? currentTime;
+      if (outgoingDuration > 0 && outgoingPos > 2) {
+        watchProgressStore.setProgress(path, {
+          path,
+          current_time: outgoingPos,
+          duration: outgoingDuration,
+          last_watched: Math.floor(Date.now() / 1000)
+        });
+        invoke('save_watch_progress', {
+          videoPath: path,
+          currentTime: outgoingPos,
+          duration: outgoingDuration
+        }).catch(console.error);
+      }
+    });
 
     // Reset per-track state immediately so stale values from the previous
     // file don't show while the new file loads.
@@ -597,7 +620,7 @@
   onmouseleave={() => { showCloseBtn = false; }}
 >
   <!-- Close button -->
-  <button class="close-btn" class:visible={showCloseBtn} onclick={closeApp} title="Close (Esc)">
+  <button class="close-btn" class:visible={showCloseBtn} tabindex={showCloseBtn ? 0 : -1} onclick={closeApp} onfocus={() => { showCloseBtn = true; clearTimeout(hideCloseBtnTimer); hideCloseBtnTimer = setTimeout(() => { showCloseBtn = false; }, 1200); }} title="Close (Esc)">
     <X size={16} />
   </button>
 
@@ -614,7 +637,7 @@
   <!-- Controls zone — overlaid at the bottom, identical structure to video player -->
   <div class="controls-zone">
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="controls" class:visible={controlsVisible} bind:this={controlsEl} onmouseenter={showControls}>
+    <div class="controls" class:visible={controlsVisible} inert={!controlsVisible} bind:this={controlsEl} onmouseenter={showControls}>
 
       <!-- Progress bar -->
       <div
