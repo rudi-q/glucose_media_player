@@ -377,6 +377,7 @@
 
       subtitleSrc = result.blobUrl;
       subtitleFileName = result.fileName;
+      selectedEmbeddedLanguage = '';
       subtitlesEnabled = true;
     }
   }
@@ -510,9 +511,14 @@
   }
 
   function flashVolumeMenu() {
+    showControls = true;
+    clearTimeout(hideControlsTimeout);
     showVolumeMenu = true;
     clearTimeout(volumeMenuAutoTimer);
-    volumeMenuAutoTimer = setTimeout(() => { showVolumeMenu = false; }, 1500);
+    volumeMenuAutoTimer = setTimeout(() => {
+      showVolumeMenu = false;
+      showControls = false;
+    }, 1500);
   }
 
   function toggleMute() {
