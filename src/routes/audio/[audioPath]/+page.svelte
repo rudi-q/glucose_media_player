@@ -63,6 +63,7 @@
   let hideControlsTimer: ReturnType<typeof setTimeout>;
   let controlsEl: HTMLElement;
   let volumeMenuAutoTimer: ReturnType<typeof setTimeout>;
+  let previousAudioPath = '';
 
   // ── Audio context setup ─────────────────────────────────────────────────────
 
@@ -300,7 +301,13 @@
   }
 
   function applyGain() {
-    if (gainNode) gainNode.gain.value = isMuted ? 0 : volume;
+    if (gainNode) {
+      gainNode.gain.value = isMuted ? 0 : volume;
+    } else if (audioEl) {
+      // Gain node unavailable (setupAudio failed) — fall back to native element.
+      audioEl.volume = Math.min(1, isMuted ? 0 : volume);
+      audioEl.muted = isMuted;
+    }
     appSettings.updateVolume(volume);
     appSettings.updateMuted(isMuted);
   }
@@ -482,21 +489,23 @@
     // would bail — capture now and write directly. Use untrack() so reading
     // duration/currentTime here doesn't re-trigger this effect on every tick.
     untrack(() => {
+      const outgoingPath = previousAudioPath;
       const outgoingDuration = duration;
       const outgoingPos = audioEl?.currentTime ?? currentTime;
-      if (outgoingDuration > 0 && outgoingPos > 2) {
-        watchProgressStore.setProgress(path, {
-          path,
+      if (outgoingPath && outgoingDuration > 0 && outgoingPos > 2) {
+        watchProgressStore.setProgress(outgoingPath, {
+          path: outgoingPath,
           current_time: outgoingPos,
           duration: outgoingDuration,
           last_watched: Math.floor(Date.now() / 1000)
         });
         invoke('save_watch_progress', {
-          videoPath: path,
+          videoPath: outgoingPath,
           currentTime: outgoingPos,
           duration: outgoingDuration
         }).catch(console.error);
       }
+      previousAudioPath = path;
     });
 
     // Reset per-track state immediately so stale values from the previous

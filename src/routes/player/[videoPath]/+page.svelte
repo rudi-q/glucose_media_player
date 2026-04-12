@@ -306,6 +306,7 @@
         break;
       case "m":
         toggleMute();
+        flashVolumeMenu();
         break;
       case "c":
       case "s":
@@ -509,7 +510,6 @@
     isMuted = !isMuted;
     videoElement.muted = isMuted;
     appSettings.updateMuted(isMuted);
-    flashVolumeMenu();
   }
 
   function adjustVolume(delta: number) {
@@ -838,13 +838,14 @@
     }
   }
 
-  function handleLoadedMetadata() {
+  async function handleLoadedMetadata() {
     if (!videoElement) return;
     duration = videoElement.duration;
 
-    // Try to restore watch progress
+    // Restore watch progress first, then play — avoids jumping from 0 to the
+    // saved position after playback has already started.
     if (currentVideoPath) {
-      invoke<WatchProgress | null>("get_watch_progress", {
+      await invoke<WatchProgress | null>("get_watch_progress", {
         videoPath: currentVideoPath,
       })
         .then((progress) => {
