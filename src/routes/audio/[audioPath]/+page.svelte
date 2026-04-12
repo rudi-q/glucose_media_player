@@ -54,12 +54,14 @@
   // onloadedmetadata awaits this before calling play() to eliminate the race
   // where playback starts at 0 then jumps when the IPC resolves later.
   let progressRestorePromise: Promise<void> = Promise.resolve();
+  let currentLoadId = 0;
 
   // UI
   let showCloseBtn = $state(false);
   let hideCloseBtnTimer: ReturnType<typeof setTimeout>;
   let controlsVisible = $state(true);
   let hideControlsTimer: ReturnType<typeof setTimeout>;
+  let controlsEl: HTMLElement;
 
   // ── Audio context setup ─────────────────────────────────────────────────────
 
@@ -417,10 +419,17 @@
   function showControls() {
     controlsVisible = true;
     clearTimeout(hideControlsTimer);
-    hideControlsTimer = setTimeout(() => {
-      if (isPlaying) controlsVisible = false;
-    }, 2500);
+    if (!showVolumeMenu && !controlsEl?.matches(':focus-within') && !controlsEl?.matches(':hover')) {
+      hideControlsTimer = setTimeout(() => {
+        if (isPlaying) controlsVisible = false;
+      }, 2500);
+    }
   }
+
+  // Re-arm the hide timer when the volume menu closes.
+  $effect(() => {
+    if (!showVolumeMenu) showControls();
+  });
 
   function handleMouseMove() {
     showControls();
@@ -596,7 +605,7 @@
   <!-- Controls zone — overlaid at the bottom, identical structure to video player -->
   <div class="controls-zone">
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="controls" class:visible={controlsVisible} onmouseenter={showControls}>
+    <div class="controls" class:visible={controlsVisible} bind:this={controlsEl} onmouseenter={showControls}>
 
       <!-- Progress bar -->
       <div
@@ -693,11 +702,15 @@
   onpause={() => { isPlaying = false; saveProgress(); }}
   ontimeupdate={() => { if (!isScrubbing) currentTime = audioEl.currentTime; }}
   onloadedmetadata={async () => {
+    const myLoadId = ++currentLoadId;
     duration = audioEl.duration;
     setupAudio();
     // Wait for the progress-restore IPC to settle so play() always starts
     // at the correct position, never jumping mid-playback.
     await progressRestorePromise;
+    // A newer load started while we were awaiting — bail to avoid seeking
+    // or auto-playing against the wrong track.
+    if (myLoadId !== currentLoadId) return;
     if (pendingRestoreTime !== null) {
       audioEl.currentTime = pendingRestoreTime;
     }
