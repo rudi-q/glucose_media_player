@@ -1044,6 +1044,23 @@
       videoElement.volume = 1;
       videoElement.muted = isMuted;
       audioSourceConnected = true;
+      // Reapply persisted output device — the new AudioContext always starts
+      // routing to the default sink, so we need to re-route if the user had
+      // previously selected a non-default device.
+      if (selectedAudioDevice && selectedAudioDevice !== "default") {
+        // @ts-ignore - setSinkId is not yet in all TS typings
+        if (typeof (audioCtx as any).setSinkId !== "undefined") {
+          (audioCtx as any).setSinkId(selectedAudioDevice).catch((err: unknown) => {
+            console.warn("Failed to reapply audio device via AudioContext.setSinkId:", err);
+          });
+        // @ts-ignore
+        } else if (typeof videoElement.setSinkId !== "undefined") {
+          // @ts-ignore
+          videoElement.setSinkId(selectedAudioDevice).catch((err: unknown) => {
+            console.warn("Failed to reapply audio device via videoElement.setSinkId:", err);
+          });
+        }
+      }
     } catch (err) {
       console.error("Failed to setup audio context:", err);
       // Sync persisted volume/mute to the native element as a fallback.
