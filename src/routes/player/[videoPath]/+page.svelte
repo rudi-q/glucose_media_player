@@ -83,6 +83,7 @@
     title: string | null;
   }
   let embeddedSubtitleTracks = $state<EmbeddedSubtitleTrack[]>([]);
+  let selectedEmbeddedLanguage = $state('en');
   let isGeneratingSubtitles = $state(false);
   let generationProgress = $state(0);
   let generationMessage = $state("");
@@ -136,7 +137,10 @@
         videoSrc = src;
         currentVideoPath = data.videoPath;
 
-        // Auto-detect subtitles: external file first, then embedded tracks
+        // Auto-detect subtitles: external file first, then embedded tracks.
+        // These are split into separate try/catch blocks so a failure in the
+        // external lookup doesn't prevent embedded tracks from being discovered.
+        let externalSubtitleLoaded = false;
         try {
           const subtitlePath = await invoke<string | null>(
             "find_subtitle_for_video",
@@ -145,8 +149,13 @@
           if (subtitlePath) {
             console.log("Auto-loading subtitle:", subtitlePath);
             await loadSubtitle(subtitlePath);
+            externalSubtitleLoaded = true;
           }
+        } catch (err) {
+          console.log("External subtitle lookup failed:", err);
+        }
 
+        try {
           // Always detect embedded tracks so the subtitle menu can list them
           const tracks = await invoke<EmbeddedSubtitleTrack[]>(
             "get_embedded_subtitle_tracks",
@@ -155,11 +164,11 @@
           embeddedSubtitleTracks = tracks;
 
           // Auto-load the first embedded track when no external file was found
-          if (!subtitlePath && tracks.length > 0) {
+          if (!externalSubtitleLoaded && tracks.length > 0) {
             await loadEmbeddedSubtitle(tracks[0]);
           }
         } catch (err) {
-          console.log("No subtitle found or error:", err);
+          console.log("Embedded subtitle detection failed:", err);
         }
       }
     })();
@@ -410,6 +419,7 @@
       const blob = new Blob([vttContent], { type: "text/vtt;charset=utf-8" });
       subtitleSrc = URL.createObjectURL(blob);
       subtitleFileName = formatEmbeddedTrackLabel(track);
+      selectedEmbeddedLanguage = track.language ?? 'en';
       subtitlesEnabled = true;
     } catch (err) {
       console.error("Failed to extract embedded subtitle:", err);
@@ -1063,6 +1073,14 @@
       }
     } catch (err) {
       console.error("Failed to setup audio context:", err);
+      // Clean up any partially-created context so the next call can retry
+      // cleanly and doesn't leak a dangling AudioContext.
+      if (audioCtx) {
+        audioCtx.close().catch(() => {});
+        audioCtx = null;
+      }
+      gainNode = null;
+      audioSourceConnected = false;
       // Sync persisted volume/mute to the native element as a fallback.
       videoElement.volume = Math.min(1, volume);
       videoElement.muted = isMuted;
@@ -1211,7 +1229,7 @@
           bind:this={trackElement}
           kind="subtitles"
           src={subtitleSrc}
-          srclang="en"
+          srclang={selectedEmbeddedLanguage}
           label="Subtitles"
           default
           onload={handleTrackLoad}
