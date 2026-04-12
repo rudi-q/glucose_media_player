@@ -95,6 +95,7 @@
 
   // Audio/Volume state
   let showVolumeMenu = $state(false);
+  let volumeMenuAutoTimer: ReturnType<typeof setTimeout>;
   let showAudioMenu = $state(false);
   let audioDevices = $state<MediaDeviceInfo[]>([]);
   let selectedAudioDevice = $state($appSettings.selectedAudioDevice);
@@ -497,11 +498,18 @@
     }
   }
 
+  function flashVolumeMenu() {
+    showVolumeMenu = true;
+    clearTimeout(volumeMenuAutoTimer);
+    volumeMenuAutoTimer = setTimeout(() => { showVolumeMenu = false; }, 1500);
+  }
+
   function toggleMute() {
     if (!videoElement) return;
     isMuted = !isMuted;
     videoElement.muted = isMuted;
     appSettings.updateMuted(isMuted);
+    flashVolumeMenu();
   }
 
   function adjustVolume(delta: number) {
@@ -519,6 +527,7 @@
       videoElement.muted = false;
       appSettings.updateMuted(false);
     }
+    flashVolumeMenu();
   }
 
   function startScrubbing(e: MouseEvent) {
@@ -1043,6 +1052,7 @@
   }
 
   function toggleVolumeMenu() {
+    clearTimeout(volumeMenuAutoTimer);
     showVolumeMenu = !showVolumeMenu;
   }
 

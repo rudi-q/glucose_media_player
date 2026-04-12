@@ -62,6 +62,7 @@
   let controlsVisible = $state(true);
   let hideControlsTimer: ReturnType<typeof setTimeout>;
   let controlsEl: HTMLElement;
+  let volumeMenuAutoTimer: ReturnType<typeof setTimeout>;
 
   // ── Audio context setup ─────────────────────────────────────────────────────
 
@@ -304,14 +305,22 @@
     appSettings.updateMuted(isMuted);
   }
 
+  function flashVolumeMenu() {
+    showVolumeMenu = true;
+    clearTimeout(volumeMenuAutoTimer);
+    volumeMenuAutoTimer = setTimeout(() => { showVolumeMenu = false; }, 1500);
+  }
+
   function setVolume(v: number) {
     volume = Math.min(2, Math.max(0, v));
     applyGain();
+    flashVolumeMenu();
   }
 
   function toggleMute() {
     isMuted = !isMuted;
     applyGain();
+    flashVolumeMenu();
   }
 
   function seek(t: number) {
@@ -654,7 +663,7 @@
 
         <div class="controls-right">
           <div class="volume-control">
-            <button class="control-button" onclick={() => showVolumeMenu = !showVolumeMenu} title="Volume">
+            <button class="control-button" onclick={() => { clearTimeout(volumeMenuAutoTimer); showVolumeMenu = !showVolumeMenu; }} title="Volume">
               {#if isMuted || volume === 0}
                 <VolumeX size={20} />
               {:else if volume < 1}
