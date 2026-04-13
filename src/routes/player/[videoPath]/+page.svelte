@@ -146,14 +146,18 @@
             "find_subtitle_for_video",
             { videoPath: data.videoPath },
           );
+          if (disposed) return;
           if (subtitlePath) {
             console.log("Auto-loading subtitle:", subtitlePath);
             await loadSubtitle(subtitlePath);
+            if (disposed) return;
             externalSubtitleLoaded = true;
           }
         } catch (err) {
           console.log("External subtitle lookup failed:", err);
         }
+
+        if (disposed) return;
 
         try {
           // Always detect embedded tracks so the subtitle menu can list them
@@ -161,6 +165,7 @@
             "get_embedded_subtitle_tracks",
             { videoPath: data.videoPath },
           );
+          if (disposed) return;
           embeddedSubtitleTracks = tracks;
 
           // Auto-load the first embedded track when no external file was found
@@ -1235,7 +1240,7 @@
           bind:this={trackElement}
           kind="subtitles"
           src={subtitleSrc}
-          srclang={selectedEmbeddedLanguage}
+          srclang={selectedEmbeddedLanguage || undefined}
           label="Subtitles"
           default
           onload={handleTrackLoad}
