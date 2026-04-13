@@ -88,6 +88,7 @@
   let generationProgress = $state(0);
   let generationMessage = $state("");
   let showModelSelector = $state(false);
+  let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
 
   // Context menu state
   let showContextMenu = $state(false);
@@ -272,6 +273,9 @@
       }
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
+      // Clear volume menu auto-hide timer
+      clearTimeout(volumeMenuAutoTimer);
+      clearTimeout(hideControlsTimeout);
       // Close Web Audio context to free resources
       if (audioCtx) {
         audioCtx.close().catch(() => {});
@@ -373,7 +377,17 @@
   }
 
   async function loadSubtitle(path: string) {
+    const loadId = ++subtitleLoadId;
     const result = await loadSubtitleFile(path);
+
+    // Ignore if another load has started while we were awaiting
+    if (loadId !== subtitleLoadId) {
+      if (result?.blobUrl && result.blobUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(result.blobUrl);
+      }
+      return;
+    }
+
     if (result) {
       // Revoke previous blob URL if exists
       if (subtitleSrc && subtitleSrc.startsWith("blob:")) {
@@ -410,11 +424,17 @@
   }
 
   async function loadEmbeddedSubtitle(track: EmbeddedSubtitleTrack) {
+    const loadId = ++subtitleLoadId;
     try {
       const srtContent = await invoke<string>("extract_embedded_subtitle", {
         videoPath: data.videoPath,
         streamIndex: track.index,
       });
+
+      // Ignore if another load has started while we were awaiting
+      if (loadId !== subtitleLoadId) {
+        return;
+      }
 
       // Revoke previous blob URL to avoid memory leaks
       if (subtitleSrc && subtitleSrc.startsWith("blob:")) {
@@ -865,6 +885,7 @@
 
     // Restore watch progress first, then play — avoids jumping from 0 to the
     // saved position after playback has already started.
+    const videoPathBeforeAwait = currentVideoPath;
     if (currentVideoPath) {
       await invoke<WatchProgress | null>("get_watch_progress", {
         videoPath: currentVideoPath,
@@ -879,6 +900,9 @@
         })
         .catch((err) => console.error("Failed to load watch progress:", err));
     }
+
+    // Bail if component unmounted or video changed during await
+    if (!videoElement || currentVideoPath !== videoPathBeforeAwait) return;
 
     // Set up interval to save progress every 5 seconds
     if (progressSaveInterval) {
