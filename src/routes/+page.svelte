@@ -3,7 +3,12 @@
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { X, Settings, FolderOpen, Play } from "lucide-svelte";
+  import { X, Settings, FolderOpen, Play, Music2 } from "lucide-svelte";
+
+  const AUDIO_EXT = new Set(['mp3','flac','wav','aac','ogg','opus','m4a','aiff','wma']);
+  function isAudio(path: string) {
+    return AUDIO_EXT.has(path.split('.').pop()?.toLowerCase() ?? '');
+  }
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
   import type { VideoFile } from "$lib/types/video";
   import { formatDuration } from "$lib/utils/time";
@@ -124,7 +129,8 @@
   
   async function loadVideo(path: string) {
     const encodedPath = encodeURIComponent(path);
-    await goto(`/player/${encodedPath}`);
+    const ext = path.split('.').pop()?.toLowerCase() ?? '';
+    await goto(AUDIO_EXT.has(ext) ? `/audio/${encodedPath}` : `/player/${encodedPath}`);
   }
   
   async function closeApp() {
@@ -305,16 +311,22 @@
                 class:selected={selectedVideoIndex === index}
                 onclick={() => loadVideo(video.path)}
               >
-                <div class="video-thumbnail">
-                  {#await generateThumbnail(video.path)}
-                    <Play size={48} strokeWidth={1.5} />
-                  {:then thumbnail}
-                    {#if thumbnail}
-                      <img src={thumbnail} alt={video.name} class="thumbnail-img" />
-                    {:else}
+                <div class="video-thumbnail" class:audio-card={isAudio(video.path)}>
+                  {#if isAudio(video.path)}
+                    <div class="audio-thumb">
+                      <Music2 size={40} strokeWidth={1.2} />
+                    </div>
+                  {:else}
+                    {#await generateThumbnail(video.path)}
                       <Play size={48} strokeWidth={1.5} />
-                    {/if}
-                  {/await}
+                    {:then thumbnail}
+                      {#if thumbnail}
+                        <img src={thumbnail} alt={video.name} class="thumbnail-img" />
+                      {:else}
+                        <Play size={48} strokeWidth={1.5} />
+                      {/if}
+                    {/await}
+                  {/if}
                   <div class="play-overlay">
                     <Play size={32} fill="white" stroke="none" />
                   </div>
@@ -514,6 +526,19 @@
     height: 100%;
     object-fit: contain;
     background: rgba(0, 0, 0, 0.3);
+  }
+
+  .audio-card {
+    background: linear-gradient(135deg, rgba(30, 40, 70, 0.6) 0%, rgba(10, 15, 30, 0.8) 100%);
+  }
+
+  .audio-thumb {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    color: rgba(140, 180, 255, 0.55);
   }
 
   .play-overlay {

@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, setContext } from "svelte";
+  import { fade } from "svelte/transition";
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
   import { X, Settings, Check, Loader2 } from "lucide-svelte";
@@ -12,7 +13,11 @@
   import { appSettings, setupStore, type SetupStatus } from "$lib/stores/appStore";
   import { watchProgressStore } from "$lib/stores/watchProgressStore";
   
+  const AUDIO_EXTENSIONS = new Set(['mp3','flac','wav','aac','ogg','opus','m4a','aiff','wma']);
+
   let { children } = $props();
+
+  let appReady = $state(false);
   
   // Shared state accessible via context
   let showSettings = $state(false);
@@ -61,16 +66,16 @@
     (async () => {
       const results = await Promise.allSettled([
         listen<string>("open-file", async (event) => {
-          // Navigate to player with the file path
           const encodedPath = encodeURIComponent(event.payload);
-          await goto(`/player/${encodedPath}`);
-          // Mark file as processed
+          const ext = event.payload.split('.').pop()?.toLowerCase() ?? '';
+          await goto(AUDIO_EXTENSIONS.has(ext) ? `/audio/${encodedPath}` : `/player/${encodedPath}`);
           invoke("mark_file_processed").catch(console.error);
         }),
         listen<string[]>("tauri://drag-drop", async (event) => {
           if (event.payload && event.payload.length > 0) {
             const encodedPath = encodeURIComponent(event.payload[0]);
-            await goto(`/player/${encodedPath}`);
+            const ext = event.payload[0].split('.').pop()?.toLowerCase() ?? '';
+            await goto(AUDIO_EXTENSIONS.has(ext) ? `/audio/${encodedPath}` : `/player/${encodedPath}`);
           }
         }),
         // Listen for download progress
@@ -94,9 +99,9 @@
       }
     })();
     
-    // Check setup status on first launch
-    checkSetupStatus();
-    
+    // Check setup status on first launch, then reveal the app
+    checkSetupStatus().finally(() => { appReady = true; });
+
     // Notify backend that frontend is ready
     invoke("frontend_ready").catch(console.error);
     
@@ -196,6 +201,12 @@
   lastAutoCheckTime={lastAutoCheckTime}
 />
 <UpdateNotification />
+
+{#if !appReady}
+  <div class="splash-screen" out:fade={{ duration: 250 }}>
+    <img src="/logo-dark.svg" alt="glucose" class="splash-logo" />
+  </div>
+{/if}
 
 {@render children()}
 
@@ -507,6 +518,22 @@
 {/if}
 
 <style>
+  .splash-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: #080a10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .splash-logo {
+    width: 120px;
+    height: auto;
+    opacity: 0.9;
+  }
+
   /* Settings and Setup dialog styles - imported from original */
   .settings-overlay {
     position: fixed;

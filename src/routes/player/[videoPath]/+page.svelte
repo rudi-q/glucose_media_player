@@ -29,7 +29,7 @@
     type WatchProgress,
   } from "$lib/stores/watchProgressStore";
   import type { VideoInfo } from "$lib/types/video";
-  import { loadSubtitleFile } from "$lib/utils/subtitles";
+  import { loadSubtitleFile, convertSrtToVtt } from "$lib/utils/subtitles";
   import {
     formatTime,
     formatEstimatedTime,
@@ -74,10 +74,21 @@
   let subtitlesEnabled = $state(true);
   let subtitleFileName = $state<string | null>(null);
   let showSubtitleMenu = $state(false);
+
+  // Embedded subtitle tracks (populated for MKV and other containers)
+  interface EmbeddedSubtitleTrack {
+    index: number;
+    codec_name: string;
+    language: string | null;
+    title: string | null;
+  }
+  let embeddedSubtitleTracks = $state<EmbeddedSubtitleTrack[]>([]);
+  let selectedEmbeddedLanguage = $state('en');
   let isGeneratingSubtitles = $state(false);
   let generationProgress = $state(0);
   let generationMessage = $state("");
   let showModelSelector = $state(false);
+  let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
 
   // Context menu state
   let showContextMenu = $state(false);
@@ -86,9 +97,15 @@
 
   // Audio/Volume state
   let showVolumeMenu = $state(false);
+  let volumeMenuAutoTimer: ReturnType<typeof setTimeout>;
   let showAudioMenu = $state(false);
   let audioDevices = $state<MediaDeviceInfo[]>([]);
   let selectedAudioDevice = $state($appSettings.selectedAudioDevice);
+
+  // Web Audio API for volume boost beyond 100%
+  let audioCtx: AudioContext | null = null;
+  let gainNode: GainNode | null = null;
+  let audioSourceConnected = false;
 
   // Conversion state
   let isConverting = $state(false);
@@ -121,18 +138,43 @@
         videoSrc = src;
         currentVideoPath = data.videoPath;
 
-        // Auto-detect and load subtitle file
+        // Auto-detect subtitles: external file first, then embedded tracks.
+        // These are split into separate try/catch blocks so a failure in the
+        // external lookup doesn't prevent embedded tracks from being discovered.
+        let externalSubtitleLoaded = false;
         try {
           const subtitlePath = await invoke<string | null>(
             "find_subtitle_for_video",
             { videoPath: data.videoPath },
           );
+          if (disposed) return;
           if (subtitlePath) {
             console.log("Auto-loading subtitle:", subtitlePath);
             await loadSubtitle(subtitlePath);
+            if (disposed) return;
+            externalSubtitleLoaded = true;
           }
         } catch (err) {
-          console.log("No subtitle found or error:", err);
+          console.log("External subtitle lookup failed:", err);
+        }
+
+        if (disposed) return;
+
+        try {
+          // Always detect embedded tracks so the subtitle menu can list them
+          const tracks = await invoke<EmbeddedSubtitleTrack[]>(
+            "get_embedded_subtitle_tracks",
+            { videoPath: data.videoPath },
+          );
+          if (disposed) return;
+          embeddedSubtitleTracks = tracks;
+
+          // Auto-load the first embedded track when no external file was found
+          if (!externalSubtitleLoaded && tracks.length > 0) {
+            await loadEmbeddedSubtitle(tracks[0]);
+          }
+        } catch (err) {
+          console.log("Embedded subtitle detection failed:", err);
         }
       }
     })();
@@ -231,6 +273,16 @@
       }
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
+      // Clear volume menu auto-hide timer
+      clearTimeout(volumeMenuAutoTimer);
+      clearTimeout(hideControlsTimeout);
+      // Close Web Audio context to free resources
+      if (audioCtx) {
+        audioCtx.close().catch(() => {});
+        audioCtx = null;
+        gainNode = null;
+        audioSourceConnected = false;
+      }
     };
   });
 
@@ -272,6 +324,7 @@
         break;
       case "m":
         toggleMute();
+        flashVolumeMenu();
         break;
       case "c":
       case "s":
@@ -324,7 +377,17 @@
   }
 
   async function loadSubtitle(path: string) {
+    const loadId = ++subtitleLoadId;
     const result = await loadSubtitleFile(path);
+
+    // Ignore if another load has started while we were awaiting
+    if (loadId !== subtitleLoadId) {
+      if (result?.blobUrl && result.blobUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(result.blobUrl);
+      }
+      return;
+    }
+
     if (result) {
       // Revoke previous blob URL if exists
       if (subtitleSrc && subtitleSrc.startsWith("blob:")) {
@@ -333,7 +396,60 @@
 
       subtitleSrc = result.blobUrl;
       subtitleFileName = result.fileName;
+      selectedEmbeddedLanguage = '';
       subtitlesEnabled = true;
+    }
+  }
+
+  function formatEmbeddedTrackLabel(track: EmbeddedSubtitleTrack): string {
+    if (track.title) return track.title;
+    if (track.language) return track.language.toUpperCase();
+    return `Track ${track.index}`;
+  }
+
+  function formatCodecLabel(codec: string): string {
+    switch (codec) {
+      case "subrip":
+      case "srt":
+      case "mov_text":
+        return "SRT";
+      case "ass":
+      case "ssa":
+        return "ASS";
+      case "webvtt":
+        return "VTT";
+      default:
+        return codec.toUpperCase();
+    }
+  }
+
+  async function loadEmbeddedSubtitle(track: EmbeddedSubtitleTrack) {
+    const loadId = ++subtitleLoadId;
+    try {
+      const srtContent = await invoke<string>("extract_embedded_subtitle", {
+        videoPath: data.videoPath,
+        streamIndex: track.index,
+      });
+
+      // Ignore if another load has started while we were awaiting
+      if (loadId !== subtitleLoadId) {
+        return;
+      }
+
+      // Revoke previous blob URL to avoid memory leaks
+      if (subtitleSrc && subtitleSrc.startsWith("blob:")) {
+        URL.revokeObjectURL(subtitleSrc);
+      }
+
+      const vttContent = convertSrtToVtt(srtContent);
+      const blob = new Blob([vttContent], { type: "text/vtt;charset=utf-8" });
+      subtitleSrc = URL.createObjectURL(blob);
+      subtitleFileName = formatEmbeddedTrackLabel(track);
+      selectedEmbeddedLanguage = track.language ?? 'en';
+      subtitlesEnabled = true;
+    } catch (err) {
+      console.error("Failed to extract embedded subtitle:", err);
+      alert("Failed to load embedded subtitle: " + err);
     }
   }
 
@@ -389,6 +505,7 @@
   function togglePlay() {
     if (!videoElement) return;
     if (videoElement.paused) {
+      if (audioCtx?.state === "suspended") audioCtx.resume();
       videoElement.play();
       if (backgroundVideo) backgroundVideo.play();
       isPlaying = true;
@@ -418,6 +535,17 @@
     }
   }
 
+  function flashVolumeMenu() {
+    showControls = true;
+    clearTimeout(hideControlsTimeout);
+    showVolumeMenu = true;
+    clearTimeout(volumeMenuAutoTimer);
+    volumeMenuAutoTimer = setTimeout(() => {
+      showVolumeMenu = false;
+      showControls = false;
+    }, 1500);
+  }
+
   function toggleMute() {
     if (!videoElement) return;
     isMuted = !isMuted;
@@ -427,15 +555,20 @@
 
   function adjustVolume(delta: number) {
     if (!videoElement) return;
-    const newVolume = Math.max(0, Math.min(1, volume + delta));
+    const newVolume = Math.max(0, Math.min(2, volume + delta));
     volume = newVolume;
-    videoElement.volume = newVolume;
+    if (gainNode) {
+      gainNode.gain.value = newVolume;
+    } else {
+      videoElement.volume = Math.min(1, newVolume);
+    }
     appSettings.updateVolume(newVolume);
     if (isMuted) {
       isMuted = false;
       videoElement.muted = false;
       appSettings.updateMuted(false);
     }
+    flashVolumeMenu();
   }
 
   function startScrubbing(e: MouseEvent) {
@@ -629,6 +762,13 @@
     hideCloseButtonTimeout = setTimeout(() => {
       showCloseButton = false;
     }, 1000);
+
+    // Show controls whenever the mouse moves anywhere over the player
+    showControls = true;
+    clearTimeout(hideControlsTimeout);
+    hideControlsTimeout = setTimeout(() => {
+      showControls = false;
+    }, 2000);
   }
 
   function handleControlsEnter() {
@@ -739,13 +879,15 @@
     }
   }
 
-  function handleLoadedMetadata() {
+  async function handleLoadedMetadata() {
     if (!videoElement) return;
     duration = videoElement.duration;
 
-    // Try to restore watch progress
+    // Restore watch progress first, then play — avoids jumping from 0 to the
+    // saved position after playback has already started.
+    const videoPathBeforeAwait = currentVideoPath;
     if (currentVideoPath) {
-      invoke<WatchProgress | null>("get_watch_progress", {
+      await invoke<WatchProgress | null>("get_watch_progress", {
         videoPath: currentVideoPath,
       })
         .then((progress) => {
@@ -759,6 +901,9 @@
         .catch((err) => console.error("Failed to load watch progress:", err));
     }
 
+    // Bail if component unmounted or video changed during await
+    if (!videoElement || currentVideoPath !== videoPathBeforeAwait) return;
+
     // Set up interval to save progress every 5 seconds
     if (progressSaveInterval) {
       clearInterval(progressSaveInterval);
@@ -769,7 +914,9 @@
       }
     }, 5000);
 
-    // Auto-play when video loads
+    // Set up Web Audio API for volume boost, then auto-play
+    setupAudioContext();
+    if (audioCtx?.state === "suspended") audioCtx.resume();
     videoElement.play().catch((err) => {
       console.log("Auto-play prevented:", err);
     });
@@ -881,9 +1028,36 @@
     if (!videoElement) return;
 
     try {
-      // @ts-ignore - setSinkId is not in TS types but supported in browsers
-      if (typeof videoElement.setSinkId !== "undefined") {
-        await videoElement.setSinkId(deviceId);
+      let routed = false;
+      if (audioCtx) {
+        // When the Web Audio graph is active, route through AudioContext
+        // @ts-ignore - setSinkId is not yet in all TS typings
+        if (typeof (audioCtx as any).setSinkId !== "undefined") {
+          await (audioCtx as any).setSinkId(deviceId);
+          console.debug("Audio output routed via AudioContext.setSinkId");
+          routed = true;
+        } else if (typeof videoElement.setSinkId !== "undefined") {
+          // Fallback: route on the video element (best-effort when AudioContext
+          // setSinkId is unavailable, e.g. older WebKit builds)
+          // @ts-ignore
+          await videoElement.setSinkId(deviceId);
+          console.debug("Audio output routed via videoElement.setSinkId (AudioContext.setSinkId unavailable)");
+          routed = true;
+        } else {
+          console.warn("Audio routing unavailable: neither AudioContext nor videoElement supports setSinkId");
+        }
+      } else {
+        // No AudioContext yet — route directly on the video element
+        // @ts-ignore - setSinkId is not in TS types but supported in browsers
+        if (typeof videoElement.setSinkId !== "undefined") {
+          await videoElement.setSinkId(deviceId);
+          console.debug("Audio output routed via videoElement.setSinkId (no AudioContext)");
+          routed = true;
+        } else {
+          console.warn("Audio routing unavailable: videoElement does not support setSinkId");
+        }
+      }
+      if (routed) {
         selectedAudioDevice = deviceId;
         appSettings.updateAudioDevice(deviceId);
         showAudioMenu = false;
@@ -893,7 +1067,63 @@
     }
   }
 
+  function setupAudioContext() {
+    if (!videoElement) return;
+    // If we have a live context with a source already attached, nothing to do.
+    // If the context was closed externally, reset and recreate.
+    if (audioSourceConnected && audioCtx?.state !== "closed") return;
+    if (audioCtx?.state === "closed") {
+      audioCtx = null;
+      gainNode = null;
+      audioSourceConnected = false;
+    }
+    try {
+      audioCtx = new AudioContext();
+      const source = audioCtx.createMediaElementSource(videoElement);
+      gainNode = audioCtx.createGain();
+      gainNode.gain.value = volume;
+      source.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      // Native volume stays at 1 so the gain node has headroom for boost;
+      // mute is applied via videoElement.muted to match toggleMute's mechanism.
+      videoElement.volume = 1;
+      videoElement.muted = isMuted;
+      audioSourceConnected = true;
+      // Reapply persisted output device — the new AudioContext always starts
+      // routing to the default sink, so we need to re-route if the user had
+      // previously selected a non-default device.
+      if (selectedAudioDevice && selectedAudioDevice !== "default") {
+        // @ts-ignore - setSinkId is not yet in all TS typings
+        if (typeof (audioCtx as any).setSinkId !== "undefined") {
+          (audioCtx as any).setSinkId(selectedAudioDevice).catch((err: unknown) => {
+            console.warn("Failed to reapply audio device via AudioContext.setSinkId:", err);
+          });
+        // @ts-ignore
+        } else if (typeof videoElement.setSinkId !== "undefined") {
+          // @ts-ignore
+          videoElement.setSinkId(selectedAudioDevice).catch((err: unknown) => {
+            console.warn("Failed to reapply audio device via videoElement.setSinkId:", err);
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Failed to setup audio context:", err);
+      // Clean up any partially-created context so the next call can retry
+      // cleanly and doesn't leak a dangling AudioContext.
+      if (audioCtx) {
+        audioCtx.close().catch(() => {});
+        audioCtx = null;
+      }
+      gainNode = null;
+      audioSourceConnected = false;
+      // Sync persisted volume/mute to the native element as a fallback.
+      videoElement.volume = Math.min(1, volume);
+      videoElement.muted = isMuted;
+    }
+  }
+
   function toggleVolumeMenu() {
+    clearTimeout(volumeMenuAutoTimer);
     showVolumeMenu = !showVolumeMenu;
   }
 
@@ -1034,7 +1264,7 @@
           bind:this={trackElement}
           kind="subtitles"
           src={subtitleSrc}
-          srclang="en"
+          srclang={selectedEmbeddedLanguage || undefined}
           label="Subtitles"
           default
           onload={handleTrackLoad}
@@ -1156,7 +1386,7 @@
             >
               {#if isMuted}
                 <VolumeX size={20} />
-              {:else if volume < 0.5}
+              {:else if volume < 1}
                 <Volume1 size={20} />
               {:else}
                 <Volume2 size={20} />
@@ -1168,7 +1398,7 @@
                   type="range"
                   class="volume-slider-vertical"
                   min="0"
-                  max="1"
+                  max="2"
                   step="0.01"
                   aria-label="Volume"
                   aria-orientation="vertical"
@@ -1177,7 +1407,11 @@
                     if (videoElement) {
                       const newVolume = (e.target as HTMLInputElement)
                         .valueAsNumber;
-                      videoElement.volume = newVolume;
+                      if (gainNode) {
+                        gainNode.gain.value = newVolume;
+                      } else {
+                        videoElement.volume = Math.min(1, newVolume);
+                      }
                       appSettings.updateVolume(newVolume);
                       if (isMuted) {
                         isMuted = false;
@@ -1187,6 +1421,9 @@
                     }
                   }}
                 />
+                <span class="volume-percent">
+                  {Math.round(volume * 100)}%
+                </span>
                 <button
                   class="mute-toggle"
                   onclick={toggleMute}
@@ -1238,6 +1475,21 @@
                   <span class="model-name">Generate with AI</span>
                   <span class="model-desc">Auto-generate using Whisper AI</span>
                 </button>
+                {#if embeddedSubtitleTracks.length > 0}
+                  <div class="subtitle-menu-divider"></div>
+                  {#each embeddedSubtitleTracks as track}
+                    <button
+                      class="model-option"
+                      onclick={() => {
+                        showSubtitleMenu = false;
+                        loadEmbeddedSubtitle(track);
+                      }}
+                    >
+                      <span class="model-name">{formatEmbeddedTrackLabel(track)}</span>
+                      <span class="model-desc">Embedded · {formatCodecLabel(track.codec_name)}{track.language ? ` · ${track.language}` : ""}</span>
+                    </button>
+                  {/each}
+                {/if}
                 {#if subtitleFileName}
                   <div class="subtitle-menu-divider"></div>
                   <button class="model-option" onclick={toggleSubtitles}>
@@ -1970,6 +2222,13 @@
 
   .volume-slider-vertical::-moz-range-thumb:hover {
     transform: scale(1.2);
+  }
+
+  .volume-percent {
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+    color: rgba(255, 255, 255, 0.6);
+    letter-spacing: 0.02em;
   }
 
   .mute-toggle {

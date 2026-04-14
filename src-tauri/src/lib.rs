@@ -8,6 +8,18 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use std::time::SystemTime;
+
+const VIDEO_EXTENSIONS: &[&str] = &[
+    "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
+];
+const AUDIO_EXTENSIONS: &[&str] = &[
+    "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "aiff", "wma",
+];
+/// All media extensions recognised by the app (video + audio).
+const MEDIA_EXTENSIONS: &[&str] = &[
+    "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
+    "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "aiff", "wma",
+];
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use tauri::RunEvent;
 use tauri::{Emitter, Manager};
@@ -97,12 +109,8 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, Strin
     let file_path = app
         .dialog()
         .file()
-        .add_filter(
-            "Video Files",
-            &[
-                "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
-            ],
-        )
+        .add_filter("Video Files", VIDEO_EXTENSIONS)
+        .add_filter("Audio Files", AUDIO_EXTENSIONS)
         .blocking_pick_file();
 
     match file_path {
@@ -384,6 +392,138 @@ fn find_subtitle_for_video(video_path: String) -> Result<Option<String>, String>
     Ok(None)
 }
 
+// Return the list of text-based subtitle streams embedded in a video file.
+// Bitmap formats (PGS, VobSub, DVB) are silently skipped because they cannot
+// be converted to a text format that the browser can render.
+#[tauri::command]
+async fn get_embedded_subtitle_tracks(
+    video_path: String,
+) -> Result<Vec<EmbeddedSubtitleTrack>, String> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    let task = tokio::task::spawn_blocking(move || {
+        const SUPPORTED: &[&str] =
+            &["subrip", "ass", "ssa", "webvtt", "mov_text", "srt", "text"];
+
+        let output = create_hidden_command("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "s",
+                "-show_entries",
+                "stream=index,codec_name:stream_tags=language,title",
+                "-of",
+                "json",
+                &video_path,
+            ])
+            .output()
+            .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
+
+        if !output.status.success() {
+            return Ok(vec![]);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
+            Ok(v) => v,
+            Err(_) => return Ok(vec![]),
+        };
+
+        let streams = match parsed["streams"].as_array() {
+            Some(s) => s,
+            None => return Ok(vec![]),
+        };
+
+        let mut tracks = Vec::new();
+        for stream in streams {
+            let codec_name = stream["codec_name"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
+
+            if !SUPPORTED.contains(&codec_name.as_str()) {
+                continue;
+            }
+
+            let Some(index) = stream["index"].as_i64() else {
+                continue;
+            };
+            tracks.push(EmbeddedSubtitleTrack {
+                index,
+                codec_name,
+                language: stream["tags"]["language"].as_str().map(|s| s.to_string()),
+                title: stream["tags"]["title"].as_str().map(|s| s.to_string()),
+            });
+        }
+
+        #[cfg(debug_assertions)]
+        println!(
+            "Found {} embedded subtitle track(s) in: {}",
+            tracks.len(),
+            video_path
+        );
+
+        Ok::<Vec<EmbeddedSubtitleTrack>, String>(tracks)
+    });
+
+    tokio::time::timeout(TIMEOUT, task)
+        .await
+        .map_err(|_| "ffprobe timed out after 30 seconds".to_string())?
+        .map_err(|e| format!("Task panicked: {}", e))?
+}
+
+// Extract a single subtitle stream from a video file and return its content as
+// an SRT string. FFmpeg handles codec conversion (e.g. ASS → SRT) automatically
+// when the output format is forced to `srt`.  Sending output to `pipe:1` means
+// no temp file is written to disk.
+#[tauri::command]
+async fn extract_embedded_subtitle(
+    video_path: String,
+    stream_index: i64,
+) -> Result<String, String> {
+    if stream_index < 0 {
+        return Err(format!("Invalid stream index: {}", stream_index));
+    }
+
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    let task = tokio::task::spawn_blocking(move || {
+        #[cfg(debug_assertions)]
+        println!(
+            "Extracting embedded subtitle stream {} from: {}",
+            stream_index, video_path
+        );
+
+        let output = create_hidden_command("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-i",
+                &video_path,
+                "-map",
+                &format!("0:{}", stream_index),
+                "-f",
+                "srt",
+                "pipe:1",
+            ])
+            .output()
+            .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("FFmpeg failed to extract subtitle: {}", stderr));
+        }
+
+        Ok::<String, String>(String::from_utf8_lossy(&output.stdout).to_string())
+    });
+
+    tokio::time::timeout(TIMEOUT, task)
+        .await
+        .map_err(|_| "ffmpeg timed out after 30 seconds".to_string())?
+        .map_err(|e| format!("Task panicked: {}", e))?
+}
+
 #[derive(Serialize, Clone)]
 struct VideoFile {
     path: String,
@@ -434,6 +574,14 @@ struct ConversionProgress {
 struct VideoInfo {
     format: String,
     size_mb: f64,
+}
+
+#[derive(Serialize, Clone)]
+struct EmbeddedSubtitleTrack {
+    index: i64,
+    codec_name: String,
+    language: Option<String>,
+    title: Option<String>,
 }
 
 // Get video duration using FFmpeg
@@ -1387,9 +1535,6 @@ fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchPro
 
 #[tauri::command]
 fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
-    let video_extensions = vec![
-        "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
-    ];
     let mut videos = Vec::new();
 
     // Check if ffprobe is available once at the start
@@ -1428,7 +1573,7 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
                         if metadata.is_file() {
                             if let Some(ext) = entry.path().extension() {
                                 if let Some(ext_str) = ext.to_str() {
-                                    if video_extensions.contains(&ext_str.to_lowercase().as_str()) {
+                                    if MEDIA_EXTENSIONS.contains(&ext_str.to_lowercase().as_str()) {
                                         if let Ok(modified) = metadata.modified() {
                                             if let Ok(duration) =
                                                 modified.duration_since(SystemTime::UNIX_EPOCH)
@@ -1575,9 +1720,6 @@ pub fn run() {
                 #[cfg(debug_assertions)]
                 println!("*** LAUNCHED WITH ARGUMENTS - POTENTIAL FILE ASSOCIATION ***");
 
-                let video_extensions = vec![
-                    "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
-                ];
                 let mut video_files: Vec<String> = Vec::new();
 
                 for arg in &args[1..] {
@@ -1587,7 +1729,7 @@ pub fn run() {
                     println!("Processing argument: {} -> {}", arg, clean_arg);
 
                     let lower = clean_arg.to_lowercase();
-                    for ext in &video_extensions {
+                    for ext in MEDIA_EXTENSIONS {
                         if lower.ends_with(&format!(".{}", ext)) {
                             video_files.push(clean_arg.clone());
                             #[cfg(debug_assertions)]
@@ -1619,6 +1761,8 @@ pub fn run() {
             frontend_ready,
             exit_app,
             find_subtitle_for_video,
+            get_embedded_subtitle_tracks,
+            extract_embedded_subtitle,
             generate_subtitles,
             check_ffmpeg_installed,
             check_installed_models,
@@ -1651,10 +1795,6 @@ pub fn run() {
                         println!("Received opened event with URLs: {:?}", urls);
                     }
 
-                    let video_extensions = vec![
-                        "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg",
-                        "ogv",
-                    ];
                     let mut video_files: Vec<String> = Vec::new();
 
                     for url in urls {
@@ -1670,7 +1810,7 @@ pub fn run() {
                             println!("Decoded path: {}", decoded_path);
 
                             let lower = decoded_path.to_lowercase();
-                            for ext in &video_extensions {
+                            for ext in MEDIA_EXTENSIONS {
                                 if lower.ends_with(&format!(".{}", ext)) {
                                     video_files.push(decoded_path.to_string());
                                     #[cfg(debug_assertions)]
