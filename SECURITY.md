@@ -27,7 +27,7 @@ Instead, please report them via one of these methods:
    - Fill out the form with details
 
 2. **Email**
-   - Send an email to: [reach@rudi.engineer](mailto:reach@rudi.engineer)
+   - Send an email to: [hello@doubl.one](mailto:hello@doubl.one)
    - If this email is not available, create a private GitHub issue and tag the maintainers
 
 ### What to Include

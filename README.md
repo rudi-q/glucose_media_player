@@ -4,7 +4,7 @@
 _A Sleek & Lightweight VLC Alternative with On-Device AI Subtitle<br>_
 
 
-[![License: MPL](https://img.shields.io/badge/License-MPL%20v2.0-1a1a1a?style=for-the-badge&logo=opensourceinitiative&logoColor=white&labelColor=0a0a0a)](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12)
+[![License: EUPL](https://img.shields.io/badge/License-EUPL%201.2-1a1a1a?style=for-the-badge&logo=opensourceinitiative&logoColor=white&labelColor=0a0a0a)](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12)
 [![Built with Tauri](https://img.shields.io/badge/Built%20with-Tauri-1a1a1a?style=for-the-badge&logo=tauri&logoColor=white&labelColor=0a0a0a)](https://tauri.app)
 [![Svelte](https://img.shields.io/badge/Frontend-Svelte-1a1a1a?style=for-the-badge&logo=svelte&logoColor=white&labelColor=0a0a0a)](https://svelte.dev)
 [![Rust](https://img.shields.io/badge/Backend-Rust-1a1a1a?style=for-the-badge&logo=rust&logoColor=white&labelColor=0a0a0a)](https://rust-lang.org)
@@ -156,11 +156,19 @@ pnpm preview          # Preview production build locally
 
 ## 📄 License
 
-Mozilla Public License 2.0 (MPL-2.0)
+European Union Public Licence 1.2 (EUPL-1.2)
 
-This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+This Source Code Form is subject to the terms of the European Union Public Licence, v. 1.2. 
 
-Copyright (c) 2025 glucose
+For a copy of the EUPL, You can obtain one at https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12 or see the [LICENSE](LICENSE) file. 
+
+A Finnish translation is also available in [LICENSE.FI](LICENSE.FI).
+
+Copyright (c) 2026 [DoublOne Studios Limited](https://doubl.one).
+
+Pursuant to Article 15 of the EUPL, this Licence is governed by the laws of the Republic of Finland.
+
+Refer to our terms of use at [https://glucose.media/terms](https://glucose.media/terms) for more information.
 
 ---
 

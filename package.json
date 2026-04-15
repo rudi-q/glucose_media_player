@@ -14,7 +14,7 @@
     "tauri:build": "tauri build",
     "tauri:check": "cargo check --manifest-path=src-tauri/Cargo.toml"
   },
-  "license": "MPL",
+  "license": "EUPL",
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
