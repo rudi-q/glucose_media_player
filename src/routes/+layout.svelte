@@ -573,7 +573,9 @@
                     </div>
                   </div>
                   <div class="settings-item-action">
-                    <span class="about-version-pill">{getFormattedVersion()}</span>
+                    <span class="about-version-pill"
+                      >{getFormattedVersion()}</span
+                    >
                   </div>
                 </div>
 
@@ -700,95 +702,97 @@
                 </div>
               </div>
             </div>
-            {:else if selectedTab === "shortcuts"}
-              <div class="settings-section">
-                <div class="shortcuts-layout">
-                  <div class="shortcut-group">
-                    <div class="shortcut-category-title">Playback</div>
-                    <div class="shortcut-list">
-                      <div class="shortcut-item">
-                        <span class="shortcut-label">Play / Pause</span>
-                        <div class="shortcut-keys">
-                          <kbd class="key">Space</kbd>
-                          <span class="key-sep">or</span>
-                          <kbd class="key">K</kbd>
-                        </div>
-                      </div>
-                      <div class="shortcut-item">
-                        <span class="shortcut-label">Toggle Fullscreen</span>
-                        <kbd class="key">F</kbd>
-                      </div>
-                      <div class="shortcut-item">
-                        <span class="shortcut-label">Toggle View Mode (Fullscreen/PiP)</span>
-                        <kbd class="key">F</kbd>
-                      </div>
-                      <div class="shortcut-item">
-                        <span class="shortcut-label">Enter/Exit PiP</span>
-                        <kbd class="key">P</kbd>
+          {:else if selectedTab === "shortcuts"}
+            <div class="settings-section">
+              <div class="shortcuts-layout">
+                <div class="shortcut-group">
+                  <div class="shortcut-category-title">Playback</div>
+                  <div class="shortcut-list">
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">Play / Pause</span>
+                      <div class="shortcut-keys">
+                        <kbd class="key">Space</kbd>
+                        <span class="key-sep">or</span>
+                        <kbd class="key">K</kbd>
                       </div>
                     </div>
-                  </div>
-
-                  <div class="shortcut-group">
-                    <div class="shortcut-category-title">Seeking</div>
-                    <div class="shortcut-list">
-                      <div class="shortcut-item">
-                        <span class="shortcut-label">Skip Backward 5s</span>
-                        <kbd class="key">←</kbd>
-                      </div>
-                      <div class="shortcut-item">
-                        <span class="shortcut-label">Skip Forward 5s</span>
-                        <kbd class="key">→</kbd>
-                      </div>
-                      <div class="shortcut-item">
-                        <span class="shortcut-label">Jump to percentage</span>
-                        <kbd class="key">0-9</kbd>
-                      </div>
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">Toggle Fullscreen</span>
+                      <kbd class="key">F</kbd>
+                    </div>
+                    <div class="shortcut-item">
+                      <span class="shortcut-label"
+                        >Toggle View Mode (Fullscreen/PiP)</span
+                      >
+                      <kbd class="key">F</kbd>
+                    </div>
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">Enter/Exit PiP</span>
+                      <kbd class="key">P</kbd>
                     </div>
                   </div>
+                </div>
 
-                  <div class="shortcut-group">
-                    <div class="shortcut-category-title">Audio & Subtitles</div>
-                    <div class="shortcut-list">
-                      <div class="shortcut-item">
-                        <span class="shortcut-label">Increase Volume</span>
-                        <kbd class="key">↑</kbd>
-                      </div>
-                      <div class="shortcut-item">
-                        <span class="shortcut-label">Decrease Volume</span>
-                        <kbd class="key">↓</kbd>
-                      </div>
-                      <div class="shortcut-item">
-                        <span class="shortcut-label">Toggle Mute</span>
-                        <kbd class="key">M</kbd>
-                      </div>
-                      <div class="shortcut-item">
-                        <span class="shortcut-label">Toggle Subtitles</span>
-                        <div class="shortcut-keys">
-                          <kbd class="key">C</kbd>
-                          <span class="key-sep">or</span>
-                          <kbd class="key">S</kbd>
-                        </div>
-                      </div>
+                <div class="shortcut-group">
+                  <div class="shortcut-category-title">Seeking</div>
+                  <div class="shortcut-list">
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">Skip Backward 5s</span>
+                      <kbd class="key">←</kbd>
+                    </div>
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">Skip Forward 5s</span>
+                      <kbd class="key">→</kbd>
+                    </div>
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">Jump to percentage</span>
+                      <kbd class="key">0-9</kbd>
                     </div>
                   </div>
+                </div>
 
-                  <div class="shortcut-group">
-                    <div class="shortcut-category-title">General</div>
-                    <div class="shortcut-list">
-                      <div class="shortcut-item">
-                        <span class="shortcut-label">Go Back to Home</span>
-                        <kbd class="key">Backspace</kbd>
-                      </div>
-                      <div class="shortcut-item">
-                        <span class="shortcut-label">Close Application</span>
-                        <kbd class="key">Esc</kbd>
+                <div class="shortcut-group">
+                  <div class="shortcut-category-title">Audio & Subtitles</div>
+                  <div class="shortcut-list">
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">Increase Volume</span>
+                      <kbd class="key">↑</kbd>
+                    </div>
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">Decrease Volume</span>
+                      <kbd class="key">↓</kbd>
+                    </div>
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">Toggle Mute</span>
+                      <kbd class="key">M</kbd>
+                    </div>
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">Toggle Subtitles</span>
+                      <div class="shortcut-keys">
+                        <kbd class="key">C</kbd>
+                        <span class="key-sep">or</span>
+                        <kbd class="key">S</kbd>
                       </div>
                     </div>
                   </div>
                 </div>
+
+                <div class="shortcut-group">
+                  <div class="shortcut-category-title">General</div>
+                  <div class="shortcut-list">
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">Go Back to Home</span>
+                      <kbd class="key">Backspace</kbd>
+                    </div>
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">Close Application</span>
+                      <kbd class="key">Esc</kbd>
+                    </div>
+                  </div>
+                </div>
               </div>
-            {:else if selectedTab === "about"}
+            </div>
+          {:else if selectedTab === "about"}
             <!-- About Section -->
             <div class="settings-section about-section">
               <div class="about-hero">
@@ -811,9 +815,15 @@
                   class="credit-card"
                   onclick={() => openUrl("https://doubl.one")}
                 >
-                  <div class="credit-label">Developed by</div>
-                  <div class="credit-value">DoublOne Studios</div>
-                  <div class="credit-sub">Main Contributor: Rudi K</div>
+                  <div class="credit-label">Maintained by</div>
+                  <div class="credit-value">
+                    <img
+                      src="/doublone-studios-logo.png"
+                      alt="DoublOne Studios"
+                      class="credit-logo"
+                    />
+                  </div>
+                  <div class="credit-sub">Created by <span class="serif-name">Rudi K</span></div>
                 </div>
               </div>
 
@@ -1324,16 +1334,12 @@
     gap: 1rem;
   }
 
-
-
   .about-logo {
     width: 112px;
     height: auto;
     filter: drop-shadow(0 0 20px rgba(192, 101, 182, 0.3));
     margin-top: 1rem;
   }
-
-
 
   .about-version-pill {
     font-size: 0.75rem;
@@ -1353,7 +1359,6 @@
     max-width: 440px;
     margin: 0;
   }
-
 
   .about-credits-area {
     display: flex;
@@ -1386,16 +1391,31 @@
   }
 
   .credit-value {
-    font-size: 1.125rem;
-    font-weight: 700;
-    color: #fff;
-    margin-bottom: 0.25rem;
+    margin: 0.5rem 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .credit-logo {
+    height: 18px;
+    width: auto;
+    filter: brightness(0) invert(1);
+    opacity: 0.9;
   }
 
   .credit-sub {
     font-size: 0.8125rem;
     color: #c065b6;
     font-weight: 500;
+  }
+
+  .serif-name {
+    font-family: "Instrument Serif", serif;
+    font-style: italic;
+    font-size: 1rem;
+    opacity: 0.95;
+    letter-spacing: 0.01em;
   }
 
   .about-links-grid {
@@ -1863,7 +1883,6 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     transition: all 0.2s ease;
   }
-
 
   .model-radio {
     display: flex;

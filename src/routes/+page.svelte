@@ -314,8 +314,7 @@
       <div class="library-header">
         <img src="/logo-dark.svg" alt="glucose" class="logo" />
         <div class="header-buttons">
-          <Button variant="outline" onclick={openFileDialog}>
-            <FolderOpen size={18} />
+          <Button variant="white" onclick={openFileDialog}>
             Open Video
           </Button>
           <Button variant="secondary" onclick={() => showSettings()}>

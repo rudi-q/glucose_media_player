@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { Loader2 } from "lucide-svelte";
+  import { Loader2 } from "lucide-svelte"; // Refined variants
   import type { Snippet } from "svelte";
 
   interface Props {
-    variant?: 'primary' | 'secondary' | 'outline';
+    variant?: 'primary' | 'secondary' | 'outline' | 'white';
     size?: 'sm' | 'md' | 'lg';
     disabled?: boolean;
     loading?: boolean;
@@ -55,6 +55,7 @@
     border: 1px solid transparent;
     outline: none;
     line-height: 1;
+    box-sizing: border-box;
   }
 
   .btn:disabled {
@@ -109,6 +110,17 @@
   .secondary:hover:not(:disabled) {
     background: rgba(255, 255, 255, 0.1);
     border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .white {
+    background: #fff;
+    color: #000;
+  }
+
+  .white:hover:not(:disabled) {
+    background: #f0f0f0;
+    transform: translateY(-1.5px);
+    box-shadow: 0 4px 15px rgba(255, 255, 255, 0.2);
   }
 
   .outline {
