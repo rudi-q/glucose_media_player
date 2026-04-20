@@ -228,10 +228,9 @@
   }
   
   function handleGalleryContextMenu(e: MouseEvent) {
+    e.preventDefault();
     const target = e.target as HTMLElement;
     if (target.closest('.video-card')) return;
-    
-    e.preventDefault();
     galleryContextMenuPosition = { x: e.clientX, y: e.clientY };
     showGalleryContextMenu = true;
   }
@@ -271,13 +270,14 @@
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
   onmousemove={handleMainContainerMouseMove}
+  oncontextmenu={handleGalleryContextMenu}
 >
   <button class="close-button" class:visible={showCloseButton} onclick={closeApp} title="Close (Esc)">
     <X size={16} />
   </button>
   
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="empty-state" class:dragging={isDragging} oncontextmenu={handleGalleryContextMenu}>
+  <div class="empty-state" class:dragging={isDragging}>
     <div class="library-container">
       <div class="library-header">
         <img src="/logo-dark.svg" alt="glucose" class="logo" />
@@ -379,6 +379,10 @@
 </main>
 
 <style>
+  .player-container {
+    user-select: none;
+  }
+
   .player-container:has(.empty-state) {
     background: rgba(0, 0, 0, 0.9);
     backdrop-filter: blur(40px);

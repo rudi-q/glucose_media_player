@@ -1205,6 +1205,9 @@
 <main
   class="player-container video-player"
   onmousemove={handleMainContainerMouseMove}
+  oncontextmenu={handleContextMenu}
+  ondragover={(e) => e.preventDefault()}
+  ondrop={(e) => e.preventDefault()}
 >
   {#if viewMode !== "pip"}
     <button
@@ -1738,6 +1741,7 @@
 
 <style>
   .player-container.video-player {
+    user-select: none;
     background: rgba(0, 0, 0, 0.85);
     backdrop-filter: blur(40px);
     -webkit-backdrop-filter: blur(40px);
