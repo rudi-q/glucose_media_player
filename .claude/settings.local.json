@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm check:*)",
+      "Bash(grep -n 'viewMode\\\\|pip\\\\|fullscreen\\\\|cinematic\\\\|searchParams\\\\|$page\\\\b' 'C:/Projects/OpenSource/glucose/src/routes/player/[videoPath]/+page.svelte')",
+      "Bash(xargs grep *)",
+      "Bash(python3 *)",
+      "Bash(node *)"
+    ]
+  }
+}

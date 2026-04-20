@@ -13,6 +13,7 @@
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
   import type { VideoFile } from "$lib/types/video";
   import { formatDuration } from "$lib/utils/time";
+  import Button from "$lib/components/Button.svelte";
   
   // Module-level cache that persists across component remounts
   let cachedVideos: VideoFile[] = [];
@@ -295,24 +296,31 @@
   onmousemove={handleMainContainerMouseMove}
   oncontextmenu={handleGalleryContextMenu}
 >
-  <button class="close-button" class:visible={showCloseButton} onclick={closeApp} title="Close (Esc)">
-    <X size={16} />
-  </button>
+  <div class="close-button-wrapper" class:visible={showCloseButton}>
+    <Button
+      variant="secondary"
+      size="sm"
+      onclick={closeApp}
+      title="Close (Esc)"
+    >
+      <X size={16} />
+    </Button>
+  </div>
   
+
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="empty-state" class:dragging={isDragging}>
     <div class="library-container">
       <div class="library-header">
         <img src="/logo-dark.svg" alt="glucose" class="logo" />
         <div class="header-buttons">
-          <button class="open-button" onclick={openFileDialog}>
+          <Button variant="outline" onclick={openFileDialog}>
             <FolderOpen size={18} />
             Open Video
-          </button>
-          <button class="open-button" onclick={() => showSettings()}>
-            <Settings size={18} />
+          </Button>
+          <Button variant="secondary" onclick={() => showSettings()}>
             Settings
-          </button>
+          </Button>
         </div>
       </div>
       
@@ -647,30 +655,25 @@
     opacity: 0.5;
   }
 
-  .open-button {
-    background: #fff;
-    color: #000;
-    border: none;
-    padding: 0.75rem 1.5rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    letter-spacing: 0.01em;
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
+  .close-button-wrapper {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    z-index: 1000;
   }
 
-  .open-button:hover {
-    background: rgba(255, 255, 255, 0.9);
-    transform: translateY(-1px);
+  .close-button-wrapper.visible {
+    opacity: 1;
   }
 
-  .open-button:active {
-    transform: translateY(0);
+  :global(.close-button-wrapper .btn) {
+    min-width: 32px !important;
+    width: 32px;
+    padding: 0 !important;
   }
+
   
   /* Context Menu */
   .context-menu {
