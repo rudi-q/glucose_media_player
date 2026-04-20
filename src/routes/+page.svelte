@@ -62,11 +62,12 @@
       }
     })();
     
-    // Keyboard shortcuts for gallery
     document.addEventListener("keydown", handleKeyPress);
-    
+    document.addEventListener("click", handleClickOutside);
+
     return () => {
       document.removeEventListener("keydown", handleKeyPress);
+      document.removeEventListener("click", handleClickOutside);
     };
   });
   
@@ -280,12 +281,6 @@
     isDragging = false;
   }
   
-  onMount(() => {
-    document.addEventListener("click", handleClickOutside);
-    return () => {
-      document.removeEventListener("click", handleClickOutside);
-    };
-  });
 </script>
 
 <main 

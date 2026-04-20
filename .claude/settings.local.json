@@ -5,7 +5,9 @@
       "Bash(grep -n 'viewMode\\\\|pip\\\\|fullscreen\\\\|cinematic\\\\|searchParams\\\\|$page\\\\b' 'C:/Projects/OpenSource/glucose/src/routes/player/[videoPath]/+page.svelte')",
       "Bash(xargs grep *)",
       "Bash(python3 *)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(awk '/showSetupDialog.*true|if showSetupDialog/{found=1} found && /settings-item/{print NR\": \"$0} /\\\\/if.*showSetupDialog|{\\\\/if}/{if\\(found\\)found=0}' \"C:/Projects/OpenSource/glucose/src/routes/+layout.svelte\")",
+      "Bash(awk *)"
     ]
   }
 }

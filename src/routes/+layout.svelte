@@ -64,7 +64,7 @@
   let downloadProgress = $state(0);
   let downloadMessage = $state("");
   let isCheckingForUpdates = $state(false);
-  let selectedTab = $state("ai"); // 'ai', 'updates', 'about'
+  let selectedTab = $state("ai"); // 'ai' | 'shortcuts' | 'updates' | 'community' | 'about'
   let modelsExpanded = $state(false);
 
   // Update manager
@@ -717,12 +717,8 @@
                       </div>
                     </div>
                     <div class="shortcut-item">
-                      <span class="shortcut-label">Toggle Fullscreen</span>
-                      <kbd class="key">F</kbd>
-                    </div>
-                    <div class="shortcut-item">
                       <span class="shortcut-label"
-                        >Toggle View Mode (Fullscreen/PiP)</span
+                        >Toggle View Mode (cinematic/fullscreen/pip)</span
                       >
                       <kbd class="key">F</kbd>
                     </div>
@@ -1873,15 +1869,6 @@
     flex-direction: column;
     gap: 0.75rem;
     margin-top: 1rem;
-  }
-
-  .settings-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 1.5rem;
-    padding: 1.25rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    transition: all 0.2s ease;
   }
 
   .model-radio {
