@@ -326,7 +326,7 @@
         </div>
       {:else}
         <div class="recent-section">
-          <h2>Recent Videos</h2>
+          <h2>Recents</h2>
           <div class="video-grid">
             {#each recentVideos as video, index}
               <button
@@ -406,6 +406,10 @@
       class="context-menu"
       style="left: {cardContextMenuPosition.x}px; top: {cardContextMenuPosition.y}px;"
     >
+      <button class="context-menu-item" onclick={() => { loadVideo(cardContextMenuVideo!.path); showCardContextMenu = false; }}>
+        <Play size={16} />
+        <span>Play</span>
+      </button>
       <button class="context-menu-item" onclick={() => openContainingFolder(cardContextMenuVideo!.path)}>
         <FolderOpen size={16} />
         <span>Open Containing Folder</span>
