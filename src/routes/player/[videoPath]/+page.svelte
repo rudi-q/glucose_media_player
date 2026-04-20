@@ -138,6 +138,18 @@
         videoSrc = src;
         currentVideoPath = data.videoPath;
 
+        // Apply initial view mode from URL query param
+        if (data.initialMode === 'fullscreen') {
+          viewMode = 'fullscreen';
+        } else if (data.initialMode === 'pip') {
+          try {
+            await invoke('enter_pip_mode');
+            viewMode = 'pip';
+          } catch (err) {
+            console.error('Failed to enter PiP mode:', err);
+          }
+        }
+
         // Auto-detect subtitles: external file first, then embedded tracks.
         // These are split into separate try/catch blocks so a failure in the
         // external lookup doesn't prevent embedded tracks from being discovered.

@@ -3,7 +3,8 @@
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { X, Settings, FolderOpen, Play, Music2 } from "lucide-svelte";
+  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2 } from "lucide-svelte";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
   const AUDIO_EXT = new Set(['mp3','flac','wav','aac','ogg','opus','m4a','aiff','wma']);
   function isAudio(path: string) {
@@ -26,6 +27,9 @@
   let hideCloseButtonTimeout: ReturnType<typeof setTimeout>;
   let showGalleryContextMenu = $state(false);
   let galleryContextMenuPosition = $state({ x: 0, y: 0 });
+  let showCardContextMenu = $state(false);
+  let cardContextMenuPosition = $state({ x: 0, y: 0 });
+  let cardContextMenuVideo = $state<VideoFile | null>(null);
   let isDragging = $state(false);
   
   // Get context functions from layout
@@ -127,10 +131,16 @@
     }
   }
   
-  async function loadVideo(path: string) {
+  async function loadVideo(path: string, mode?: string) {
     const encodedPath = encodeURIComponent(path);
     const ext = path.split('.').pop()?.toLowerCase() ?? '';
-    await goto(AUDIO_EXT.has(ext) ? `/audio/${encodedPath}` : `/player/${encodedPath}`);
+    const modeParam = mode ? `?mode=${mode}` : '';
+    await goto(AUDIO_EXT.has(ext) ? `/audio/${encodedPath}` : `/player/${encodedPath}${modeParam}`);
+  }
+
+  async function openContainingFolder(path: string) {
+    showCardContextMenu = false;
+    await revealItemInDir(path);
   }
   
   async function closeApp() {
@@ -230,15 +240,28 @@
   function handleGalleryContextMenu(e: MouseEvent) {
     e.preventDefault();
     const target = e.target as HTMLElement;
-    if (target.closest('.video-card')) return;
+    const card = target.closest('.video-card');
+    if (card) {
+      const index = parseInt((card as HTMLElement).dataset.index ?? '-1', 10);
+      const video = recentVideos[index];
+      if (video) {
+        cardContextMenuVideo = video;
+        cardContextMenuPosition = { x: e.clientX, y: e.clientY };
+        showCardContextMenu = true;
+        showGalleryContextMenu = false;
+      }
+      return;
+    }
+    showCardContextMenu = false;
     galleryContextMenuPosition = { x: e.clientX, y: e.clientY };
     showGalleryContextMenu = true;
   }
   
   function handleClickOutside(e: MouseEvent) {
     const target = e.target as HTMLElement;
-    if (showGalleryContextMenu && !target.closest('.context-menu')) {
+    if (!target.closest('.context-menu')) {
       showGalleryContextMenu = false;
+      showCardContextMenu = false;
     }
   }
   
@@ -306,9 +329,10 @@
           <h2>Recent Videos</h2>
           <div class="video-grid">
             {#each recentVideos as video, index}
-              <button 
-                class="video-card" 
+              <button
+                class="video-card"
                 class:selected={selectedVideoIndex === index}
+                data-index={index}
                 onclick={() => loadVideo(video.path)}
               >
                 <div class="video-thumbnail" class:audio-card={isAudio(video.path)}>
@@ -362,8 +386,8 @@
   
   <!-- Gallery Context Menu -->
   {#if showGalleryContextMenu}
-    <div 
-      class="context-menu" 
+    <div
+      class="context-menu"
       style="left: {galleryContextMenuPosition.x}px; top: {galleryContextMenuPosition.y}px;"
     >
       <button class="context-menu-item" onclick={() => { openFileDialog(); showGalleryContextMenu = false; }}>
@@ -374,6 +398,29 @@
         <Settings size={16} />
         <span>Settings</span>
       </button>
+    </div>
+  {/if}
+
+  {#if showCardContextMenu && cardContextMenuVideo}
+    <div
+      class="context-menu"
+      style="left: {cardContextMenuPosition.x}px; top: {cardContextMenuPosition.y}px;"
+    >
+      <button class="context-menu-item" onclick={() => openContainingFolder(cardContextMenuVideo!.path)}>
+        <FolderOpen size={16} />
+        <span>Open Containing Folder</span>
+      </button>
+      {#if !isAudio(cardContextMenuVideo.path)}
+        <div class="context-menu-separator"></div>
+        <button class="context-menu-item" onclick={() => { loadVideo(cardContextMenuVideo!.path, 'fullscreen'); showCardContextMenu = false; }}>
+          <Maximize2 size={16} />
+          <span>Open in Fullscreen</span>
+        </button>
+        <button class="context-menu-item" onclick={() => { loadVideo(cardContextMenuVideo!.path, 'pip'); showCardContextMenu = false; }}>
+          <PictureInPicture2 size={16} />
+          <span>Open in PiP</span>
+        </button>
+      {/if}
     </div>
   {/if}
 </main>
@@ -652,5 +699,11 @@
   
   .context-menu-item:hover {
     background: rgba(255, 255, 255, 0.1);
+  }
+
+  .context-menu-separator {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.08);
+    margin: 0.25rem 0;
   }
 </style>
