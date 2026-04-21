@@ -54,6 +54,13 @@
         "role": "Viewer",
         "rank": "Owner",
         "description": "Glucose Video File"
+      },
+      {
+        "name": "Glucose Audio File",
+        "ext": ["mp3", "wav", "flac", "aac", "m4a", "ogg", "opus", "aiff", "wma"],
+        "role": "Viewer",
+        "rank": "Owner",
+        "description": "Glucose Audio File"
       }
     ]
   },
