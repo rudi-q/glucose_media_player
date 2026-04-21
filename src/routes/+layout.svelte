@@ -34,24 +34,13 @@
   } from "$lib/components/UpdateManager.svelte";
   import UpdateNotification from "$lib/components/UpdateNotification.svelte";
   import { getFormattedVersion } from "$lib/utils/version";
+  import { AUDIO_EXTENSIONS } from "$lib/utils/mediaType";
   import {
     appSettings,
     setupStore,
     type SetupStatus,
   } from "$lib/stores/appStore";
   import { watchProgressStore } from "$lib/stores/watchProgressStore";
-
-  const AUDIO_EXTENSIONS = new Set([
-    "mp3",
-    "flac",
-    "wav",
-    "aac",
-    "ogg",
-    "opus",
-    "m4a",
-    "aiff",
-    "wma",
-  ]);
 
   let { children } = $props();
 
@@ -808,11 +797,12 @@
                     for seamless playback and accessibility.
                   </p>
                 </div>
-                <div class="about-version-pill">{getFormattedVersion()}</div>
+                <span class="about-version-pill">{getFormattedVersion()}</span>
               </div>
 
               <div class="about-credits-area">
-                <div
+                <button
+                  type="button"
                   class="credit-card"
                   onclick={() => openUrl("https://doubl.one")}
                 >
@@ -826,7 +816,7 @@
                   </div>
                   <div class="credit-sub">Created by <span class="serif-name">Rudi K</span></div>
                   <div class="credit-location">Maintained in Finland 🤍</div>
-                </div>
+                </button>
               </div>
 
               <div class="about-links-grid">
@@ -1374,6 +1364,9 @@
   }
 
   .credit-card {
+    appearance: none;
+    font: inherit;
+    color: inherit;
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 12px;

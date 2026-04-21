@@ -5,11 +5,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2 } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
-
-  const AUDIO_EXT = new Set(['mp3','flac','wav','aac','ogg','opus','m4a','aiff','wma']);
-  function isAudio(path: string) {
-    return AUDIO_EXT.has(path.split('.').pop()?.toLowerCase() ?? '');
-  }
+  import { AUDIO_EXTENSIONS, isAudio } from "$lib/utils/mediaType";
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
   import type { VideoFile } from "$lib/types/video";
   import { formatDuration } from "$lib/utils/time";
@@ -133,7 +129,7 @@
     const encodedPath = encodeURIComponent(path);
     const ext = path.split('.').pop()?.toLowerCase() ?? '';
     const modeParam = mode ? `?mode=${mode}` : '';
-    await goto(AUDIO_EXT.has(ext) ? `/audio/${encodedPath}` : `/player/${encodedPath}${modeParam}`);
+    await goto(AUDIO_EXTENSIONS.has(ext) ? `/audio/${encodedPath}` : `/player/${encodedPath}${modeParam}`);
   }
 
   async function openContainingFolder(path: string) {
