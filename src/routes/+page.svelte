@@ -3,15 +3,13 @@
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { X, Settings, FolderOpen, Play, Music2 } from "lucide-svelte";
-
-  const AUDIO_EXT = new Set(['mp3','flac','wav','aac','ogg','opus','m4a','aiff','wma']);
-  function isAudio(path: string) {
-    return AUDIO_EXT.has(path.split('.').pop()?.toLowerCase() ?? '');
-  }
+  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2 } from "lucide-svelte";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import { isAudio } from "$lib/utils/mediaType";
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
   import type { VideoFile } from "$lib/types/video";
   import { formatDuration } from "$lib/utils/time";
+  import Button from "$lib/components/Button.svelte";
   
   // Module-level cache that persists across component remounts
   let cachedVideos: VideoFile[] = [];
@@ -26,42 +24,42 @@
   let hideCloseButtonTimeout: ReturnType<typeof setTimeout>;
   let showGalleryContextMenu = $state(false);
   let galleryContextMenuPosition = $state({ x: 0, y: 0 });
+  let showCardContextMenu = $state(false);
+  let cardContextMenuPosition = $state({ x: 0, y: 0 });
+  let cardContextMenuVideo = $state<VideoFile | null>(null);
   let isDragging = $state(false);
   
   // Get context functions from layout
   const showSettings = getContext<() => void>('showSettings');
   
   onMount(() => {
-    // Only load if not already loaded
-    if (videosLoaded) {
+    document.addEventListener("keydown", handleKeyPress);
+    document.addEventListener("click", handleClickOutside);
+
+    if (!videosLoaded) {
+      (async () => {
+        try {
+          const videos = await invoke<VideoFile[]>("get_recent_videos");
+          recentVideos = videos;
+          cachedVideos = videos;
+          videosLoaded = true;
+
+          const progressData = await invoke<Record<string, WatchProgress>>("get_all_watch_progress");
+          watchProgressStore.loadAllProgress(progressData);
+        } catch (err) {
+          console.error("Failed to load recent videos:", err);
+        } finally {
+          loadingRecent = false;
+        }
+      })();
+    } else {
       recentVideos = cachedVideos;
       loadingRecent = false;
-      return;
     }
-    
-    // Load recent videos
-    (async () => {
-      try {
-        const videos = await invoke<VideoFile[]>("get_recent_videos");
-        recentVideos = videos;
-        cachedVideos = videos;
-        videosLoaded = true;
-        
-        // Load watch progress for all videos
-        const progressData = await invoke<Record<string, WatchProgress>>("get_all_watch_progress");
-        watchProgressStore.loadAllProgress(progressData);
-      } catch (err) {
-        console.error("Failed to load recent videos:", err);
-      } finally {
-        loadingRecent = false;
-      }
-    })();
-    
-    // Keyboard shortcuts for gallery
-    document.addEventListener("keydown", handleKeyPress);
-    
+
     return () => {
       document.removeEventListener("keydown", handleKeyPress);
+      document.removeEventListener("click", handleClickOutside);
     };
   });
   
@@ -127,10 +125,19 @@
     }
   }
   
-  async function loadVideo(path: string) {
+  async function loadVideo(path: string, mode?: string) {
     const encodedPath = encodeURIComponent(path);
-    const ext = path.split('.').pop()?.toLowerCase() ?? '';
-    await goto(AUDIO_EXT.has(ext) ? `/audio/${encodedPath}` : `/player/${encodedPath}`);
+    const modeParam = mode ? `?mode=${encodeURIComponent(mode)}` : '';
+    await goto(isAudio(path) ? `/audio/${encodedPath}` : `/player/${encodedPath}${modeParam}`);
+  }
+
+  async function openContainingFolder(path: string) {
+    showCardContextMenu = false;
+    try {
+      await revealItemInDir(path);
+    } catch (err) {
+      console.error("Failed to reveal item in directory:", err);
+    }
   }
   
   async function closeApp() {
@@ -228,18 +235,30 @@
   }
   
   function handleGalleryContextMenu(e: MouseEvent) {
-    const target = e.target as HTMLElement;
-    if (target.closest('.video-card')) return;
-    
     e.preventDefault();
+    const target = e.target as HTMLElement;
+    const card = target.closest('.video-card');
+    if (card) {
+      const index = parseInt((card as HTMLElement).dataset.index ?? '-1', 10);
+      const video = recentVideos[index];
+      if (video) {
+        cardContextMenuVideo = video;
+        cardContextMenuPosition = { x: e.clientX, y: e.clientY };
+        showCardContextMenu = true;
+        showGalleryContextMenu = false;
+      }
+      return;
+    }
+    showCardContextMenu = false;
     galleryContextMenuPosition = { x: e.clientX, y: e.clientY };
     showGalleryContextMenu = true;
   }
   
   function handleClickOutside(e: MouseEvent) {
     const target = e.target as HTMLElement;
-    if (showGalleryContextMenu && !target.closest('.context-menu')) {
+    if (!target.closest('.context-menu')) {
       showGalleryContextMenu = false;
+      showCardContextMenu = false;
     }
   }
   
@@ -257,12 +276,6 @@
     isDragging = false;
   }
   
-  onMount(() => {
-    document.addEventListener("click", handleClickOutside);
-    return () => {
-      document.removeEventListener("click", handleClickOutside);
-    };
-  });
 </script>
 
 <main 
@@ -271,25 +284,32 @@
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
   onmousemove={handleMainContainerMouseMove}
+  oncontextmenu={handleGalleryContextMenu}
 >
-  <button class="close-button" class:visible={showCloseButton} onclick={closeApp} title="Close (Esc)">
-    <X size={16} />
-  </button>
+  <div class="close-button-wrapper" class:visible={showCloseButton}>
+    <Button
+      variant="secondary"
+      size="sm"
+      onclick={closeApp}
+      title="Close (Esc)"
+    >
+      <X size={16} />
+    </Button>
+  </div>
   
+
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="empty-state" class:dragging={isDragging} oncontextmenu={handleGalleryContextMenu}>
+  <div class="empty-state" class:dragging={isDragging}>
     <div class="library-container">
       <div class="library-header">
         <img src="/logo-dark.svg" alt="glucose" class="logo" />
         <div class="header-buttons">
-          <button class="open-button" onclick={openFileDialog}>
-            <FolderOpen size={18} />
+          <Button variant="white" onclick={openFileDialog}>
             Open Video
-          </button>
-          <button class="open-button" onclick={() => showSettings()}>
-            <Settings size={18} />
+          </Button>
+          <Button variant="secondary" onclick={() => showSettings()}>
             Settings
-          </button>
+          </Button>
         </div>
       </div>
       
@@ -303,12 +323,13 @@
         </div>
       {:else}
         <div class="recent-section">
-          <h2>Recent Videos</h2>
+          <h2>Recents</h2>
           <div class="video-grid">
             {#each recentVideos as video, index}
-              <button 
-                class="video-card" 
+              <button
+                class="video-card"
                 class:selected={selectedVideoIndex === index}
+                data-index={index}
                 onclick={() => loadVideo(video.path)}
               >
                 <div class="video-thumbnail" class:audio-card={isAudio(video.path)}>
@@ -362,8 +383,8 @@
   
   <!-- Gallery Context Menu -->
   {#if showGalleryContextMenu}
-    <div 
-      class="context-menu" 
+    <div
+      class="context-menu"
       style="left: {galleryContextMenuPosition.x}px; top: {galleryContextMenuPosition.y}px;"
     >
       <button class="context-menu-item" onclick={() => { openFileDialog(); showGalleryContextMenu = false; }}>
@@ -376,9 +397,40 @@
       </button>
     </div>
   {/if}
+
+  {#if showCardContextMenu && cardContextMenuVideo}
+    <div
+      class="context-menu"
+      style="left: {cardContextMenuPosition.x}px; top: {cardContextMenuPosition.y}px;"
+    >
+      <button class="context-menu-item" onclick={() => { loadVideo(cardContextMenuVideo!.path); showCardContextMenu = false; }}>
+        <Play size={16} />
+        <span>Play</span>
+      </button>
+      <button class="context-menu-item" onclick={() => openContainingFolder(cardContextMenuVideo!.path)}>
+        <FolderOpen size={16} />
+        <span>Open Containing Folder</span>
+      </button>
+      {#if !isAudio(cardContextMenuVideo.path)}
+        <div class="context-menu-separator"></div>
+        <button class="context-menu-item" onclick={() => { loadVideo(cardContextMenuVideo!.path, 'fullscreen'); showCardContextMenu = false; }}>
+          <Maximize2 size={16} />
+          <span>Open in Fullscreen</span>
+        </button>
+        <button class="context-menu-item" onclick={() => { loadVideo(cardContextMenuVideo!.path, 'pip'); showCardContextMenu = false; }}>
+          <PictureInPicture2 size={16} />
+          <span>Open in PiP</span>
+        </button>
+      {/if}
+    </div>
+  {/if}
 </main>
 
 <style>
+  .player-container {
+    user-select: none;
+  }
+
   .player-container:has(.empty-state) {
     background: rgba(0, 0, 0, 0.9);
     backdrop-filter: blur(40px);
@@ -592,30 +644,25 @@
     opacity: 0.5;
   }
 
-  .open-button {
-    background: #fff;
-    color: #000;
-    border: none;
-    padding: 0.75rem 1.5rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    letter-spacing: 0.01em;
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
+  .close-button-wrapper {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    z-index: 1000;
   }
 
-  .open-button:hover {
-    background: rgba(255, 255, 255, 0.9);
-    transform: translateY(-1px);
+  .close-button-wrapper.visible {
+    opacity: 1;
   }
 
-  .open-button:active {
-    transform: translateY(0);
+  :global(.close-button-wrapper .btn) {
+    min-width: 32px !important;
+    width: 32px;
+    padding: 0 !important;
   }
+
   
   /* Context Menu */
   .context-menu {
@@ -648,5 +695,11 @@
   
   .context-menu-item:hover {
     background: rgba(255, 255, 255, 0.1);
+  }
+
+  .context-menu-separator {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.08);
+    margin: 0.25rem 0;
   }
 </style>

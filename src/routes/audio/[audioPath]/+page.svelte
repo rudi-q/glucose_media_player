@@ -627,6 +627,9 @@
   class="root"
   onmousemove={handleMouseMove}
   onmouseleave={() => { showCloseBtn = false; }}
+  oncontextmenu={(e) => e.preventDefault()}
+  ondragover={(e) => e.preventDefault()}
+  ondrop={(e) => e.preventDefault()}
 >
   <!-- Close button -->
   <button class="close-btn" class:visible={showCloseBtn} tabindex={showCloseBtn ? 0 : -1} onclick={closeApp} onfocus={() => { showCloseBtn = true; clearTimeout(hideCloseBtnTimer); hideCloseBtnTimer = setTimeout(() => { showCloseBtn = false; }, 1200); }} title="Close (Esc)">
