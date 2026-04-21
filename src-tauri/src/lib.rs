@@ -584,6 +584,154 @@ struct EmbeddedSubtitleTrack {
     title: Option<String>,
 }
 
+#[derive(Serialize, Clone)]
+struct EmbeddedAudioTrack {
+    index: i64,
+    codec_name: String,
+    language: Option<String>,
+    title: Option<String>,
+    channels: Option<i64>,
+}
+
+#[tauri::command]
+async fn get_embedded_audio_tracks(
+    video_path: String,
+) -> Result<Vec<EmbeddedAudioTrack>, String> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    let task = tokio::task::spawn_blocking(move || {
+        let output = create_hidden_command("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=index,codec_name,channels:stream_tags=language,title",
+                "-of",
+                "json",
+                &video_path,
+            ])
+            .output()
+            .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
+
+        if !output.status.success() {
+            return Ok(vec![]);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
+            Ok(v) => v,
+            Err(_) => return Ok(vec![]),
+        };
+
+        let streams = match parsed["streams"].as_array() {
+            Some(s) => s,
+            None => return Ok(vec![]),
+        };
+
+        let mut tracks = Vec::new();
+        for stream in streams {
+            let Some(index) = stream["index"].as_i64() else {
+                continue;
+            };
+            let codec_name = stream["codec_name"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
+            tracks.push(EmbeddedAudioTrack {
+                index,
+                codec_name,
+                language: stream["tags"]["language"].as_str().map(|s| s.to_string()),
+                title: stream["tags"]["title"].as_str().map(|s| s.to_string()),
+                channels: stream["channels"].as_i64(),
+            });
+        }
+
+        #[cfg(debug_assertions)]
+        println!(
+            "Found {} embedded audio track(s) in: {}",
+            tracks.len(),
+            video_path
+        );
+
+        Ok::<Vec<EmbeddedAudioTrack>, String>(tracks)
+    });
+
+    tokio::time::timeout(TIMEOUT, task)
+        .await
+        .map_err(|_| "ffprobe timed out after 30 seconds".to_string())?
+        .map_err(|e| format!("Task panicked: {}", e))?
+}
+
+// Re-mux the video retaining only the selected audio stream (stream copy — no
+// re-encoding).  Returns the path to a temp file that the frontend can load.
+#[tauri::command]
+async fn remux_with_audio_track(
+    video_path: String,
+    audio_stream_index: i64,
+) -> Result<String, String> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let temp_path = std::env::temp_dir()
+        .join(format!("glucose_audio_{}.mkv", timestamp));
+    let temp_path_str = temp_path.to_string_lossy().to_string();
+    let out = temp_path_str.clone();
+
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+    let task = tokio::task::spawn_blocking(move || {
+        #[cfg(debug_assertions)]
+        println!(
+            "Remuxing audio stream {} from: {} -> {}",
+            audio_stream_index, video_path, temp_path_str
+        );
+
+        let output = create_hidden_command("ffmpeg")
+            .args([
+                "-v", "error",
+                "-i", &video_path,
+                "-map", "0:v",
+                "-map", &format!("0:{}", audio_stream_index),
+                "-c", "copy",
+                "-y",
+                &temp_path_str,
+            ])
+            .output()
+            .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("FFmpeg remux failed: {}", stderr));
+        }
+
+        Ok::<(), String>(())
+    });
+
+    tokio::time::timeout(TIMEOUT, task)
+        .await
+        .map_err(|_| "ffmpeg remux timed out after 120 seconds".to_string())?
+        .map_err(|e| format!("Task panicked: {}", e))??;
+
+    Ok(out)
+}
+
+// Delete a file that must reside in the system temp directory.
+#[tauri::command]
+async fn delete_temp_file(path: String) -> Result<(), String> {
+    let temp_dir = std::env::temp_dir();
+    let p = std::path::Path::new(&path);
+    if !p.starts_with(&temp_dir) {
+        return Err("Only files inside the system temp directory may be deleted".to_string());
+    }
+    if p.exists() {
+        std::fs::remove_file(p).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 // Get video duration using FFmpeg
 // Note: Caller should verify ffprobe is available before calling this
 fn get_video_duration(video_path: &str) -> Option<f64> {
@@ -1763,6 +1911,9 @@ pub fn run() {
             find_subtitle_for_video,
             get_embedded_subtitle_tracks,
             extract_embedded_subtitle,
+            get_embedded_audio_tracks,
+            remux_with_audio_track,
+            delete_temp_file,
             generate_subtitles,
             check_ffmpeg_installed,
             check_installed_models,

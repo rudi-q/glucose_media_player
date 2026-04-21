@@ -84,6 +84,20 @@
   }
   let embeddedSubtitleTracks = $state<EmbeddedSubtitleTrack[]>([]);
   let selectedEmbeddedLanguage = $state('en');
+
+  // Embedded audio tracks
+  interface EmbeddedAudioTrack {
+    index: number;
+    codec_name: string;
+    language: string | null;
+    title: string | null;
+    channels: number | null;
+  }
+  let embeddedAudioTracks = $state<EmbeddedAudioTrack[]>([]);
+  let selectedAudioTrackIndex = $state<number | null>(null);
+  let audioRemuxPath = $state<string | null>(null);
+  let isRemuxingAudio = $state(false);
+  let pendingSeekTime = $state<number | null>(null);
   let isGeneratingSubtitles = $state(false);
   let generationProgress = $state(0);
   let generationMessage = $state("");
@@ -188,6 +202,20 @@
         } catch (err) {
           console.log("Embedded subtitle detection failed:", err);
         }
+
+        try {
+          const audioTracks = await invoke<EmbeddedAudioTrack[]>(
+            "get_embedded_audio_tracks",
+            { videoPath: data.videoPath },
+          );
+          if (disposed) return;
+          embeddedAudioTracks = audioTracks;
+          if (audioTracks.length > 0) {
+            selectedAudioTrackIndex = audioTracks[0].index;
+          }
+        } catch (err) {
+          console.log("Embedded audio track detection failed:", err);
+        }
       }
     })();
 
@@ -274,6 +302,11 @@
         } catch (err) {
           console.error("Failed to revoke subtitle blob URL:", err);
         }
+      }
+      // Clean up audio remux temp file
+      if (audioRemuxPath) {
+        invoke("delete_temp_file", { path: audioRemuxPath }).catch(() => {});
+        audioRemuxPath = null;
       }
       // Unregister event listeners
       for (const un of unsubs) {
@@ -895,10 +928,13 @@
     if (!videoElement) return;
     duration = videoElement.duration;
 
-    // Restore watch progress first, then play — avoids jumping from 0 to the
-    // saved position after playback has already started.
+    // When switching audio tracks, jump straight to the saved position.
+    // Otherwise restore watch progress from the database.
     const videoPathBeforeAwait = currentVideoPath;
-    if (currentVideoPath) {
+    if (pendingSeekTime !== null) {
+      videoElement.currentTime = pendingSeekTime;
+      pendingSeekTime = null;
+    } else if (currentVideoPath) {
       await invoke<WatchProgress | null>("get_watch_progress", {
         videoPath: currentVideoPath,
       })
@@ -1033,6 +1069,51 @@
       audioDevices = outputDevices;
     } catch (err) {
       console.error("Failed to load audio devices:", err);
+    }
+  }
+
+  function formatAudioTrackLabel(track: EmbeddedAudioTrack): string {
+    if (track.title) return track.title;
+    if (track.language) return track.language.toUpperCase();
+    return `Track ${track.index}`;
+  }
+
+  function formatChannelLabel(channels: number | null): string {
+    if (channels === null) return "";
+    if (channels === 1) return "Mono";
+    if (channels === 2) return "Stereo";
+    if (channels === 6) return "5.1";
+    if (channels === 8) return "7.1";
+    return `${channels}ch`;
+  }
+
+  async function switchEmbeddedAudioTrack(track: EmbeddedAudioTrack) {
+    if (!videoElement || !data.videoPath) return;
+    if (selectedAudioTrackIndex === track.index && audioRemuxPath !== null) return;
+
+    isRemuxingAudio = true;
+    const savedTime = videoElement.currentTime;
+
+    try {
+      if (audioRemuxPath) {
+        invoke("delete_temp_file", { path: audioRemuxPath }).catch(() => {});
+        audioRemuxPath = null;
+      }
+
+      const tempPath = await invoke<string>("remux_with_audio_track", {
+        videoPath: data.videoPath,
+        audioStreamIndex: track.index,
+      });
+
+      audioRemuxPath = tempPath;
+      selectedAudioTrackIndex = track.index;
+      pendingSeekTime = savedTime;
+      videoSrc = convertFileSrc(tempPath);
+    } catch (err) {
+      console.error("Failed to remux audio track:", err);
+      alert("Failed to switch audio track: " + err);
+    } finally {
+      isRemuxingAudio = false;
     }
   }
 
@@ -1450,6 +1531,27 @@
                     <Volume2 size={16} />
                   {/if}
                 </button>
+                {#if embeddedAudioTracks.length > 1}
+                  <div class="audio-tracks-divider"></div>
+                  <div class="audio-tracks-label">
+                    {isRemuxingAudio ? "Switching…" : "Audio Track"}
+                  </div>
+                  {#each embeddedAudioTracks as track}
+                    <button
+                      class="audio-track-option"
+                      class:selected={selectedAudioTrackIndex === track.index}
+                      disabled={isRemuxingAudio}
+                      onclick={() => switchEmbeddedAudioTrack(track)}
+                    >
+                      <span class="audio-track-name">{formatAudioTrackLabel(track)}</span>
+                      {#if track.channels}
+                        <span class="audio-track-desc">{formatChannelLabel(track.channels)} · {track.codec_name.toUpperCase()}</span>
+                      {:else}
+                        <span class="audio-track-desc">{track.codec_name.toUpperCase()}</span>
+                      {/if}
+                    </button>
+                  {/each}
+                {/if}
               </div>
             {/if}
           </div>
@@ -2269,6 +2371,58 @@
     background: rgba(255, 0, 0, 0.2);
     border-color: rgba(255, 0, 0, 0.3);
     color: #ff5555;
+  }
+
+  .audio-tracks-divider {
+    width: 100%;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.1);
+    margin: 0.25rem 0;
+  }
+
+  .audio-tracks-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.4);
+    padding: 0 0.25rem;
+    align-self: flex-start;
+  }
+
+  .audio-track-option {
+    width: 100%;
+    padding: 0.4rem 0.5rem;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    color: rgba(255, 255, 255, 0.85);
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    transition: all 0.15s ease;
+  }
+
+  .audio-track-option:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .audio-track-option.selected {
+    border-color: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .audio-track-name {
+    font-weight: 600;
+    color: #fff;
+  }
+
+  .audio-track-desc {
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.5);
   }
 
   /* Subtitle styling */
