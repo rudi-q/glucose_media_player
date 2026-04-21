@@ -37,33 +37,29 @@
   const showSettings = getContext<() => void>('showSettings');
   
   onMount(() => {
-    // Only load if not already loaded
-    if (videosLoaded) {
-      recentVideos = cachedVideos;
-      loadingRecent = false;
-      return;
-    }
-    
-    // Load recent videos
-    (async () => {
-      try {
-        const videos = await invoke<VideoFile[]>("get_recent_videos");
-        recentVideos = videos;
-        cachedVideos = videos;
-        videosLoaded = true;
-        
-        // Load watch progress for all videos
-        const progressData = await invoke<Record<string, WatchProgress>>("get_all_watch_progress");
-        watchProgressStore.loadAllProgress(progressData);
-      } catch (err) {
-        console.error("Failed to load recent videos:", err);
-      } finally {
-        loadingRecent = false;
-      }
-    })();
-    
     document.addEventListener("keydown", handleKeyPress);
     document.addEventListener("click", handleClickOutside);
+
+    if (!videosLoaded) {
+      (async () => {
+        try {
+          const videos = await invoke<VideoFile[]>("get_recent_videos");
+          recentVideos = videos;
+          cachedVideos = videos;
+          videosLoaded = true;
+
+          const progressData = await invoke<Record<string, WatchProgress>>("get_all_watch_progress");
+          watchProgressStore.loadAllProgress(progressData);
+        } catch (err) {
+          console.error("Failed to load recent videos:", err);
+        } finally {
+          loadingRecent = false;
+        }
+      })();
+    } else {
+      recentVideos = cachedVideos;
+      loadingRecent = false;
+    }
 
     return () => {
       document.removeEventListener("keydown", handleKeyPress);
@@ -142,7 +138,11 @@
 
   async function openContainingFolder(path: string) {
     showCardContextMenu = false;
-    await revealItemInDir(path);
+    try {
+      await revealItemInDir(path);
+    } catch (err) {
+      console.error("Failed to reveal item in directory:", err);
+    }
   }
   
   async function closeApp() {

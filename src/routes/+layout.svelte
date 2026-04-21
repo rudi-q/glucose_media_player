@@ -23,6 +23,7 @@
     Bug,
     Globe,
     Shield,
+    ScrollText,
     Users,
     Star,
     Keyboard,
@@ -404,12 +405,16 @@
                   (m) => m.id === selectedModelForSetup,
                 )}
 
-                <!-- svelte-ignore a11y_click_events_have_key_events -->
-                <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div
                   class="models-collapsible-card"
                   class:expanded={modelsExpanded}
                   onclick={() => (modelsExpanded = !modelsExpanded)}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+                      e.preventDefault();
+                      modelsExpanded = !modelsExpanded;
+                    }
+                  }}
                   role="button"
                   tabindex="0"
                 >
@@ -569,7 +574,7 @@
                   <div class="settings-item-label">
                     <div class="settings-item-title">Current Version</div>
                     <div class="settings-item-desc">
-                      You are running version {getFormattedVersion()}
+                      Check if you are running the latest version
                     </div>
                   </div>
                   <div class="settings-item-action">
@@ -811,7 +816,7 @@
                   class="credit-card"
                   onclick={() => openUrl("https://doubl.one")}
                 >
-                  <div class="credit-label">Maintained by</div>
+                  <div class="credit-label">Brought to you by</div>
                   <div class="credit-value">
                     <img
                       src="/doublone-studios-logo.png"
@@ -820,6 +825,7 @@
                     />
                   </div>
                   <div class="credit-sub">Created by <span class="serif-name">Rudi K</span></div>
+                  <div class="credit-location">Maintained in Finland 🤍</div>
                 </div>
               </div>
 
@@ -844,6 +850,12 @@
                     )}
                 >
                   <Info size={14} /> License
+                </button>
+                <button
+                  class="about-link-item"
+                  onclick={() => openUrl("https://glucose.media/terms")}
+                >
+                  <ScrollText size={14} /> Terms of Use
                 </button>
               </div>
             </div>
@@ -1404,6 +1416,13 @@
     font-size: 0.8125rem;
     color: #c065b6;
     font-weight: 500;
+  }
+
+  .credit-location {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.35);
+    font-weight: 400;
+    margin-top: 0.5rem;
   }
 
   .serif-name {
