@@ -40,7 +40,7 @@ Generate subtitles for any video without an internet connection using [Whisper](
 |-------|------|----------|
 | Tiny | ~75 MB | Fast results, shorter clips |
 | Small | ~466 MB | Good accuracy, most videos |
-| Large v3 Turbo | ~874 MB | Best accuracy, longer content |
+| Large v3 Turbo (q5_0) | ~574 MB | Best accuracy, longer content |
 
 Models are downloaded once and stored locally. No data ever leaves your device.
 

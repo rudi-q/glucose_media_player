@@ -435,6 +435,7 @@
                     <div
                       class="models-expanded-content"
                       onclick={(e) => e.stopPropagation()}
+                      onkeydown={(e) => e.stopPropagation()}
                     >
                       <div class="models-mgmt-list">
                         {#each models as model}
