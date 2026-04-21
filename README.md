@@ -1,7 +1,7 @@
 <div align="center">
   <a href="https://glucose.media"><img src="static/logo-dark.svg" alt="Glucose Media Player" width="400"></a>
 
-_A Sleek & Lightweight VLC Alternative with On-Device AI Subtitle<br>_
+_A Sleek & Lightweight VLC Alternative with On-Device AI Subtitles_
 
 
 [![License: MPL](https://img.shields.io/badge/License-MPL%20v2.0-1a1a1a?style=for-the-badge&logo=opensourceinitiative&logoColor=white&labelColor=0a0a0a)](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12)
@@ -11,7 +11,7 @@ _A Sleek & Lightweight VLC Alternative with On-Device AI Subtitle<br>_
 
 [![Version](https://img.shields.io/github/v/release/rudi-q/glucose_media_player?style=for-the-badge&labelColor=0a0a0a&color=1a1a1a&label=Version)](https://github.com/rudi-q/glucose_media_player/releases)
 [![Downloads](https://img.shields.io/github/downloads/rudi-q/glucose_media_player/total?style=for-the-badge&labelColor=0a0a0a&color=1a1a1a)](https://github.com/rudi-q/glucose_media_player/releases)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20-1a1a1a?style=for-the-badge&labelColor=0a0a0a)](https://github.com/rudi-q/glucose_media_player/releases)
+[![Platform](https://img.shields.io/badge/Platform-Windows-1a1a1a?style=for-the-badge&labelColor=0a0a0a)](https://github.com/rudi-q/glucose_media_player/releases)
 
 </div>
 
@@ -22,9 +22,39 @@ _A Sleek & Lightweight VLC Alternative with On-Device AI Subtitle<br>_
 ### 🎬 Cinematic Mode
 Enjoy your media with a beautifully blurred background and centered content for truly immersive viewing.
 
+### 🖥️ Picture-in-Picture Mode
+Pop the player into a compact, always-on-top window that snaps to the bottom-right corner of your screen — perfect for multitasking.
+
 ### 🖼️ Universal Media Support
-- **Videos**: MP4, MKV, AVI, MOV, WebM, WMV, FLV, M4V
+- **Videos**: MP4, MKV, AVI, MOV, WebM, WMV, FLV, M4V, MPG, MPEG, OGV
+- **Audio**: MP3, FLAC, WAV, AAC, OGG, Opus, M4A, AIFF, WMA
 - **Subtitles**: SRT, VTT, ASS, SSA, SUB
+
+### 🎵 Audio Player with Visualizer
+A dedicated audio mode with a real-time frequency visualizer powered by the Web Audio API — full playback controls, volume management, and progress saving included.
+
+### 🤖 On-Device AI Subtitles
+Generate subtitles for any video without an internet connection using [Whisper](https://github.com/ggerganov/whisper.cpp) running entirely on your machine. Three model sizes are available to balance speed and accuracy:
+
+| Model | Size | Best for |
+|-------|------|----------|
+| Tiny | ~75 MB | Fast results, shorter clips |
+| Small | ~466 MB | Good accuracy, most videos |
+| Large v3 Turbo | ~874 MB | Best accuracy, longer content |
+
+Models are downloaded once and stored locally. No data ever leaves your device.
+
+### 📝 Subtitle Support
+- Automatically loads external subtitle files (`.srt`, `.vtt`, `.ass`, `.ssa`, `.sub`) from the same folder as the video
+- Detects and extracts subtitle tracks embedded directly in MKV and MP4 files
+- Manually load any subtitle file from anywhere on disk
+- Toggle subtitles on/off during playback
+
+### 📂 Smart Gallery
+Automatically scans and displays your recent media in a beautiful grid layout, with per-file watch progress indicators so you can pick up where you left off.
+
+### ⏱️ Watch Progress & Resume
+Playback position is saved automatically for both video and audio files. Reopen any file and resume from exactly where you stopped.
 
 ### 🎯 Minimal by Design
 No clutter, no distractions. Just your content and elegant controls that appear when you need them.
@@ -35,16 +65,13 @@ Built with Rust and Tauri for native performance with a tiny footprint.
 ### 🎮 Keyboard-First
 Complete keyboard navigation for power users who value efficiency.
 
-### 📂 Smart Gallery
-Automatically scans and displays your recent videos in a beautiful grid layout.
-
 ### 🎨 Modern Interface
 - Frameless, transparent window design
 - Smooth animations and transitions
 - Audio output device selection
 - Volume control with visual feedback
-- Timeline scrubbing with video preview
-- Fullscreen and cinematic viewing modes
+- Timeline scrubbing with video preview thumbnails
+- Fullscreen, cinematic, and picture-in-picture viewing modes
 
 ---
 
@@ -52,9 +79,9 @@ Automatically scans and displays your recent videos in a beautiful grid layout.
 
 ### Pre-built Binaries
 
-Download the latest release for your platform:
+Download the latest release from the [Releases page](https://github.com/rudi-q/glucose_media_player/releases):
 
-- **Windows**: `glucose_0.2.0_x64_en-US.msi` or `.exe`
+- **Windows**: `glucose_3.1.0_x64_en-US.msi` or `.exe`
 
 ### Build from Source
 
@@ -63,10 +90,7 @@ Download the latest release for your platform:
 - [Node.js](https://nodejs.org/) (v18 or later)
 - [pnpm](https://pnpm.io/) (recommended) or npm
 - [Rust](https://www.rust-lang.org/tools/install) (latest stable)
-- Platform-specific requirements:
-  - **Windows**: [Microsoft Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-  - **macOS**: Xcode Command Line Tools
-  - **Linux**: `libwebkit2gtk-4.1-dev`, `build-essential`, `curl`, `wget`, `file`, `libssl-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`
+- [Microsoft Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
 
 #### Building
 
@@ -93,16 +117,16 @@ The built application will be available in `src-tauri/target/release/bundle/`.
 
 ### Opening Media Files
 
-glucose offers three convenient ways to open your media:
+glucose offers several convenient ways to open your media:
 
-1. **Drag & Drop** — Simply drag a video or image file into the glucose window
-2. **File Dialog** — Click the "Open Video" button in the gallery screen
-3. **File Association** — Set glucose as your default media player and open files directly from your file explorer
-4. **Recent Gallery** — Browse and play recently accessed videos from the home screen
+1. **Drag & Drop** — Drag a video or audio file into the glucose window
+2. **File Dialog** — Click the "Open" button in the gallery screen
+3. **File Association** — Set glucose as your default media player and open files directly from File Explorer
+4. **Recent Gallery** — Browse and play recently accessed files from the home screen
 
 ### Keyboard Shortcuts
 
-#### Playback Controls (Video Mode)
+#### Playback Controls
 | Key | Action |
 |-----|--------|
 | `Space` or `K` | Play/Pause |
@@ -111,28 +135,18 @@ glucose offers three convenient ways to open your media:
 | `↑` | Increase volume |
 | `↓` | Decrease volume |
 | `M` | Mute/Unmute |
-| `C` or `S` | Toggle subtitles on/off |
-| `F` | Toggle cinematic/fullscreen mode |
+| `C` or `S` | Toggle subtitles on/off (video) |
+| `F` | Cycle view modes (cinematic → fullscreen → PiP) |
+| `P` | Toggle Picture-in-Picture mode |
+| `0` – `9` | Jump to 0%–90% of the file |
 
 #### Navigation
 | Key | Action |
 |-----|--------|
 | `Backspace` | Return to gallery |
 | `Escape` | Close application |
-| `Arrow Keys` | Navigate gallery (when in home screen) |
-| `Enter` | Open selected video from gallery |
-
-### Advanced Features
-
-- **Subtitle Support**: 
-  - Automatically loads .srt files in the same folder as the video
-  - Manually load subtitle files from anywhere
-  - Toggle subtitles on/off during playback (C/S keys)
-- **Timeline Scrubbing**: Hover over the progress bar to see video preview thumbnails
-- **Audio Device Selection**: Click the audio device icon to switch between output devices
-- **Volume Popup**: Click the volume icon for a vertical volume slider
-- **Cinematic Mode**: Enjoy videos with an elegant blurred background
-- **Fullscreen Mode**: Press `F` to toggle fullscreen for maximum immersion
+| `Arrow Keys` | Navigate gallery (home screen) |
+| `Enter` | Open selected file from gallery |
 
 ---
 
@@ -167,6 +181,7 @@ Copyright (c) 2025 glucose
 ## 🙏 Acknowledgments
 
 - Built with [Tauri](https://tauri.app/) and [Svelte](https://svelte.dev/)
+- AI subtitles powered by [whisper-rs](https://github.com/tazz4843/whisper-rs) and [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
 - Inspired by minimalist design principles
 - Thanks to all contributors and users
 
@@ -182,8 +197,8 @@ Copyright (c) 2025 glucose
 <div align="center">
   <p>Made by the maker of <a href="https://github.com/rudi-q/leed_pdf_viewer">LeedPDF</a></p>
   <p>
-    <a href="https://github.com/yourusername/glucose">GitHub</a> •
-    <a href="https://github.com/yourusername/glucose/issues">Report Bug</a> •
-    <a href="https://github.com/yourusername/glucose/discussions">Request Feature</a>
+    <a href="https://github.com/rudi-q/glucose_media_player">GitHub</a> •
+    <a href="https://github.com/rudi-q/glucose_media_player/issues">Report Bug</a> •
+    <a href="https://github.com/rudi-q/glucose_media_player/discussions">Request Feature</a>
   </p>
 </div>

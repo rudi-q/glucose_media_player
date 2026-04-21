@@ -5,7 +5,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2 } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
-  import { AUDIO_EXTENSIONS, isAudio } from "$lib/utils/mediaType";
+  import { isAudio } from "$lib/utils/mediaType";
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
   import type { VideoFile } from "$lib/types/video";
   import { formatDuration } from "$lib/utils/time";
@@ -127,9 +127,8 @@
   
   async function loadVideo(path: string, mode?: string) {
     const encodedPath = encodeURIComponent(path);
-    const ext = path.split('.').pop()?.toLowerCase() ?? '';
-    const modeParam = mode ? `?mode=${mode}` : '';
-    await goto(AUDIO_EXTENSIONS.has(ext) ? `/audio/${encodedPath}` : `/player/${encodedPath}${modeParam}`);
+    const modeParam = mode ? `?mode=${encodeURIComponent(mode)}` : '';
+    await goto(isAudio(path) ? `/audio/${encodedPath}` : `/player/${encodedPath}${modeParam}`);
   }
 
   async function openContainingFolder(path: string) {

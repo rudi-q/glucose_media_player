@@ -34,7 +34,7 @@
   } from "$lib/components/UpdateManager.svelte";
   import UpdateNotification from "$lib/components/UpdateNotification.svelte";
   import { getFormattedVersion } from "$lib/utils/version";
-  import { AUDIO_EXTENSIONS } from "$lib/utils/mediaType";
+  import { isAudio } from "$lib/utils/mediaType";
   import {
     appSettings,
     setupStore,
@@ -96,9 +96,8 @@
       const results = await Promise.allSettled([
         listen<string>("open-file", async (event) => {
           const encodedPath = encodeURIComponent(event.payload);
-          const ext = event.payload.split(".").pop()?.toLowerCase() ?? "";
           await goto(
-            AUDIO_EXTENSIONS.has(ext)
+            isAudio(event.payload)
               ? `/audio/${encodedPath}`
               : `/player/${encodedPath}`,
           );
@@ -107,9 +106,8 @@
         listen<string[]>("tauri://drag-drop", async (event) => {
           if (event.payload && event.payload.length > 0) {
             const encodedPath = encodeURIComponent(event.payload[0]);
-            const ext = event.payload[0].split(".").pop()?.toLowerCase() ?? "";
             await goto(
-              AUDIO_EXTENSIONS.has(ext)
+              isAudio(event.payload[0])
                 ? `/audio/${encodedPath}`
                 : `/player/${encodedPath}`,
             );
@@ -443,16 +441,23 @@
                           {@const isInstalled =
                             setupStatus.models_installed.includes(model.id)}
                           {@const isActive = selectedModelForSetup === model.id}
-                          <!-- svelte-ignore a11y_click_events_have_key_events -->
-                          <!-- svelte-ignore a11y_no_static_element_interactions -->
+                          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
                           <div
                             class="model-mgmt-card"
                             class:active={isActive}
                             class:installed={isInstalled}
                             class:selectable={isInstalled && !isActive}
+                            role={isInstalled && !isActive ? "button" : undefined}
+                            tabindex={isInstalled && !isActive ? 0 : undefined}
                             onclick={() => {
                               if (isInstalled && !isActive)
                                 selectedModelForSetup = model.id;
+                            }}
+                            onkeydown={(e) => {
+                              if (isInstalled && !isActive && (e.key === "Enter" || e.key === " ")) {
+                                e.preventDefault();
+                                selectedModelForSetup = model.id;
+                              }
                             }}
                           >
                             <div class="model-mgmt-info">
@@ -806,16 +811,16 @@
                   class="credit-card"
                   onclick={() => openUrl("https://doubl.one")}
                 >
-                  <div class="credit-label">Brought to you by</div>
-                  <div class="credit-value">
+                  <span class="credit-label">Brought to you by</span>
+                  <span class="credit-value">
                     <img
                       src="/doublone-studios-logo.png"
                       alt="DoublOne Studios"
                       class="credit-logo"
                     />
-                  </div>
-                  <div class="credit-sub">Created by <span class="serif-name">Rudi K</span></div>
-                  <div class="credit-location">Maintained in Finland 🤍</div>
+                  </span>
+                  <span class="credit-sub">Created by <span class="serif-name">Rudi K</span></span>
+                  <span class="credit-location">Maintained in Finland 🤍</span>
                 </button>
               </div>
 
@@ -1383,6 +1388,7 @@
   }
 
   .credit-label {
+    display: block;
     font-size: 0.6875rem;
     font-weight: 700;
     color: rgba(255, 255, 255, 0.3);
@@ -1406,12 +1412,14 @@
   }
 
   .credit-sub {
+    display: block;
     font-size: 0.8125rem;
     color: #c065b6;
     font-weight: 500;
   }
 
   .credit-location {
+    display: block;
     font-size: 0.75rem;
     color: rgba(255, 255, 255, 0.35);
     font-weight: 400;
