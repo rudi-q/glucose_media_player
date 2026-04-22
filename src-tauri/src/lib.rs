@@ -663,13 +663,39 @@ async fn remux_with_audio_track(
     video_path: String,
     audio_stream_index: i64,
 ) -> Result<String, String> {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let temp_path = std::env::temp_dir()
-        .join(format!("glucose_audio_{}.mkv", timestamp));
-    let temp_path_str = temp_path.to_string_lossy().to_string();
+    let mut temp_path = std::env::temp_dir();
+    let mut temp_path_str = String::new();
+    let mut file_created = false;
+    
+    for i in 0..100 {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        
+        let filename = format!("glucose_audio_{}_{}.mkv", std::process::id(), timestamp + i as u128);
+        let candidate_path = std::env::temp_dir().join(&filename);
+        
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate_path)
+        {
+            Ok(_) => {
+                temp_path = candidate_path;
+                temp_path_str = temp_path.to_string_lossy().to_string();
+                file_created = true;
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("Failed to create temporary file: {}", e)),
+        }
+    }
+
+    if !file_created {
+        return Err("Failed to generate a unique temporary file path".to_string());
+    }
+
     let out = temp_path_str.clone();
 
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -691,17 +717,25 @@ async fn remux_with_audio_track(
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&temp_path);
+            format!("Failed to spawn ffmpeg: {}", e)
+        })?;
 
     match tokio::time::timeout(TIMEOUT, child.wait_with_output()).await {
         Ok(Ok(output)) => {
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
+                let _ = tokio::fs::remove_file(&temp_path).await;
                 return Err(format!("FFmpeg remux failed: {}", stderr));
             }
         }
-        Ok(Err(e)) => return Err(format!("Failed to wait for ffmpeg: {}", e)),
+        Ok(Err(e)) => {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(format!("Failed to wait for ffmpeg: {}", e));
+        }
         Err(_) => {
+            let _ = tokio::fs::remove_file(&temp_path).await;
             return Err("ffmpeg remux timed out after 120 seconds".to_string());
         }
     }
@@ -721,8 +755,10 @@ async fn delete_temp_file(path: String) -> Result<(), String> {
     if !p.starts_with(&temp_dir) {
         return Err("Only files inside the system temp directory may be deleted".to_string());
     }
-    if p.exists() {
-        let _ = std::fs::remove_file(p);
+    if let Err(e) = std::fs::remove_file(&p) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(format!("Failed to delete temp file: {}", e));
+        }
     }
     Ok(())
 }
