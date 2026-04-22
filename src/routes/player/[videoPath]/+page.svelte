@@ -926,6 +926,7 @@
 
   async function handleLoadedMetadata() {
     if (!videoElement) return;
+    const wasPaused = videoElement.paused;
     duration = videoElement.duration;
 
     // When switching audio tracks, jump straight to the saved position.
@@ -965,14 +966,19 @@
     // Set up Web Audio API for volume boost, then auto-play
     setupAudioContext();
     if (audioCtx?.state === "suspended") audioCtx.resume();
-    videoElement.play().catch((err) => {
-      console.log("Auto-play prevented:", err);
-    });
-    // Start background video
-    if (backgroundVideo) {
-      backgroundVideo.play().catch(() => {});
+    
+    if (!wasPaused) {
+      videoElement.play().catch((err) => {
+        console.log("Auto-play prevented:", err);
+      });
+      // Start background video
+      if (backgroundVideo) {
+        backgroundVideo.play().catch(() => {});
+      }
+      isPlaying = true;
+    } else {
+      isPlaying = false;
     }
-    isPlaying = true;
 
     // Show controls briefly when video loads
     showControls = true;
@@ -1095,15 +1101,14 @@
     const savedTime = videoElement.currentTime;
 
     try {
-      if (audioRemuxPath) {
-        invoke("delete_temp_file", { path: audioRemuxPath }).catch(() => {});
-        audioRemuxPath = null;
-      }
-
       const tempPath = await invoke<string>("remux_with_audio_track", {
         videoPath: data.videoPath,
         audioStreamIndex: track.index,
       });
+
+      if (audioRemuxPath) {
+        invoke("delete_temp_file", { path: audioRemuxPath }).catch(() => {});
+      }
 
       audioRemuxPath = tempPath;
       selectedAudioTrackIndex = track.index;

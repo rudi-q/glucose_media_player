@@ -400,77 +400,72 @@ async fn get_embedded_subtitle_tracks(
     video_path: String,
 ) -> Result<Vec<EmbeddedSubtitleTrack>, String> {
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    const SUPPORTED: &[&str] = &["subrip", "ass", "ssa", "webvtt", "mov_text", "srt", "text"];
 
-    let task = tokio::task::spawn_blocking(move || {
-        const SUPPORTED: &[&str] =
-            &["subrip", "ass", "ssa", "webvtt", "mov_text", "srt", "text"];
+    let child = tokio::process::Command::from(create_hidden_command("ffprobe"))
+        .args([
+            "-v", "error",
+            "-select_streams", "s",
+            "-show_entries", "stream=index,codec_name:stream_tags=language,title",
+            "-of", "json",
+            &video_path,
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("Failed to spawn ffprobe: {}", e))?;
 
-        let output = create_hidden_command("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "s",
-                "-show_entries",
-                "stream=index,codec_name:stream_tags=language,title",
-                "-of",
-                "json",
-                &video_path,
-            ])
-            .output()
-            .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
+    let output = match tokio::time::timeout(TIMEOUT, child.wait_with_output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => return Err(format!("Failed to wait for ffprobe: {}", e)),
+        Err(_) => {
+            return Err("ffprobe timed out after 30 seconds".to_string());
+        }
+    };
 
-        if !output.status.success() {
-            return Ok(vec![]);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("ffprobe failed: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
+        Ok(v) => v,
+        Err(e) => return Err(format!("Failed to parse ffprobe JSON: {} (stdout: {})", e, stdout)),
+    };
+
+    let streams = match parsed["streams"].as_array() {
+        Some(s) => s,
+        None => return Err("ffprobe JSON missing 'streams' array".to_string()),
+    };
+
+    let mut tracks = Vec::new();
+    for stream in streams {
+        let codec_name = stream["codec_name"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
+
+        if !SUPPORTED.contains(&codec_name.as_str()) {
+            continue;
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
-            Ok(v) => v,
-            Err(_) => return Ok(vec![]),
+        let Some(index) = stream["index"].as_i64() else {
+            continue;
         };
+        tracks.push(EmbeddedSubtitleTrack {
+            index,
+            codec_name,
+            language: stream["tags"]["language"].as_str().map(|s| s.to_string()),
+            title: stream["tags"]["title"].as_str().map(|s| s.to_string()),
+        });
+    }
 
-        let streams = match parsed["streams"].as_array() {
-            Some(s) => s,
-            None => return Ok(vec![]),
-        };
+    #[cfg(debug_assertions)]
+    println!("Found {} embedded subtitle track(s) in: {}", tracks.len(), video_path);
 
-        let mut tracks = Vec::new();
-        for stream in streams {
-            let codec_name = stream["codec_name"]
-                .as_str()
-                .unwrap_or("unknown")
-                .to_string();
-
-            if !SUPPORTED.contains(&codec_name.as_str()) {
-                continue;
-            }
-
-            let Some(index) = stream["index"].as_i64() else {
-                continue;
-            };
-            tracks.push(EmbeddedSubtitleTrack {
-                index,
-                codec_name,
-                language: stream["tags"]["language"].as_str().map(|s| s.to_string()),
-                title: stream["tags"]["title"].as_str().map(|s| s.to_string()),
-            });
-        }
-
-        #[cfg(debug_assertions)]
-        println!(
-            "Found {} embedded subtitle track(s) in: {}",
-            tracks.len(),
-            video_path
-        );
-
-        Ok::<Vec<EmbeddedSubtitleTrack>, String>(tracks)
-    });
-
-    tokio::time::timeout(TIMEOUT, task)
-        .await
-        .map_err(|_| "ffprobe timed out after 30 seconds".to_string())?
-        .map_err(|e| format!("Task panicked: {}", e))?
+    Ok(tracks)
 }
 
 // Extract a single subtitle stream from a video file and return its content as
@@ -488,40 +483,37 @@ async fn extract_embedded_subtitle(
 
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-    let task = tokio::task::spawn_blocking(move || {
-        #[cfg(debug_assertions)]
-        println!(
-            "Extracting embedded subtitle stream {} from: {}",
-            stream_index, video_path
-        );
+    #[cfg(debug_assertions)]
+    println!("Extracting embedded subtitle stream {} from: {}", stream_index, video_path);
 
-        let output = create_hidden_command("ffmpeg")
-            .args([
-                "-v",
-                "error",
-                "-i",
-                &video_path,
-                "-map",
-                &format!("0:{}", stream_index),
-                "-f",
-                "srt",
-                "pipe:1",
-            ])
-            .output()
-            .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+    let child = tokio::process::Command::from(create_hidden_command("ffmpeg"))
+        .args([
+            "-v", "error",
+            "-i", &video_path,
+            "-map", &format!("0:{}", stream_index),
+            "-f", "srt",
+            "pipe:1",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("FFmpeg failed to extract subtitle: {}", stderr));
+    let output = match tokio::time::timeout(TIMEOUT, child.wait_with_output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => return Err(format!("Failed to wait for ffmpeg: {}", e)),
+        Err(_) => {
+            return Err("ffmpeg timed out after 30 seconds".to_string());
         }
+    };
 
-        Ok::<String, String>(String::from_utf8_lossy(&output.stdout).to_string())
-    });
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("FFmpeg failed to extract subtitle: {}", stderr));
+    }
 
-    tokio::time::timeout(TIMEOUT, task)
-        .await
-        .map_err(|_| "ffmpeg timed out after 30 seconds".to_string())?
-        .map_err(|e| format!("Task panicked: {}", e))?
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 #[derive(Serialize, Clone)]
@@ -599,69 +591,66 @@ async fn get_embedded_audio_tracks(
 ) -> Result<Vec<EmbeddedAudioTrack>, String> {
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-    let task = tokio::task::spawn_blocking(move || {
-        let output = create_hidden_command("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "a",
-                "-show_entries",
-                "stream=index,codec_name,channels:stream_tags=language,title",
-                "-of",
-                "json",
-                &video_path,
-            ])
-            .output()
-            .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
+    let child = tokio::process::Command::from(create_hidden_command("ffprobe"))
+        .args([
+            "-v", "error",
+            "-select_streams", "a",
+            "-show_entries", "stream=index,codec_name,channels:stream_tags=language,title",
+            "-of", "json",
+            &video_path,
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("Failed to spawn ffprobe: {}", e))?;
 
-        if !output.status.success() {
-            return Ok(vec![]);
+    let output = match tokio::time::timeout(TIMEOUT, child.wait_with_output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => return Err(format!("Failed to wait for ffprobe: {}", e)),
+        Err(_) => {
+            return Err("ffprobe timed out after 30 seconds".to_string());
         }
+    };
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
-            Ok(v) => v,
-            Err(_) => return Ok(vec![]),
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("ffprobe failed: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
+        Ok(v) => v,
+        Err(e) => return Err(format!("Failed to parse ffprobe JSON: {} (stdout: {})", e, stdout)),
+    };
+
+    let streams = match parsed["streams"].as_array() {
+        Some(s) => s,
+        None => return Err("ffprobe JSON missing 'streams' array".to_string()),
+    };
+
+    let mut tracks = Vec::new();
+    for stream in streams {
+        let Some(index) = stream["index"].as_i64() else {
+            continue;
         };
+        let codec_name = stream["codec_name"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
+        tracks.push(EmbeddedAudioTrack {
+            index,
+            codec_name,
+            language: stream["tags"]["language"].as_str().map(|s| s.to_string()),
+            title: stream["tags"]["title"].as_str().map(|s| s.to_string()),
+            channels: stream["channels"].as_i64(),
+        });
+    }
 
-        let streams = match parsed["streams"].as_array() {
-            Some(s) => s,
-            None => return Ok(vec![]),
-        };
+    #[cfg(debug_assertions)]
+    println!("Found {} embedded audio track(s) in: {}", tracks.len(), video_path);
 
-        let mut tracks = Vec::new();
-        for stream in streams {
-            let Some(index) = stream["index"].as_i64() else {
-                continue;
-            };
-            let codec_name = stream["codec_name"]
-                .as_str()
-                .unwrap_or("unknown")
-                .to_string();
-            tracks.push(EmbeddedAudioTrack {
-                index,
-                codec_name,
-                language: stream["tags"]["language"].as_str().map(|s| s.to_string()),
-                title: stream["tags"]["title"].as_str().map(|s| s.to_string()),
-                channels: stream["channels"].as_i64(),
-            });
-        }
-
-        #[cfg(debug_assertions)]
-        println!(
-            "Found {} embedded audio track(s) in: {}",
-            tracks.len(),
-            video_path
-        );
-
-        Ok::<Vec<EmbeddedAudioTrack>, String>(tracks)
-    });
-
-    tokio::time::timeout(TIMEOUT, task)
-        .await
-        .map_err(|_| "ffprobe timed out after 30 seconds".to_string())?
-        .map_err(|e| format!("Task panicked: {}", e))?
+    Ok(tracks)
 }
 
 // Re-mux the video retaining only the selected audio stream (stream copy — no
@@ -682,38 +671,37 @@ async fn remux_with_audio_track(
 
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
-    let task = tokio::task::spawn_blocking(move || {
-        #[cfg(debug_assertions)]
-        println!(
-            "Remuxing audio stream {} from: {} -> {}",
-            audio_stream_index, video_path, temp_path_str
-        );
+    #[cfg(debug_assertions)]
+    println!("Remuxing audio stream {} from: {} -> {}", audio_stream_index, video_path, temp_path_str);
 
-        let output = create_hidden_command("ffmpeg")
-            .args([
-                "-v", "error",
-                "-i", &video_path,
-                "-map", "0:v",
-                "-map", &format!("0:{}", audio_stream_index),
-                "-c", "copy",
-                "-y",
-                &temp_path_str,
-            ])
-            .output()
-            .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+    let child = tokio::process::Command::from(create_hidden_command("ffmpeg"))
+        .args([
+            "-v", "error",
+            "-i", &video_path,
+            "-map", "0:v",
+            "-map", &format!("0:{}", audio_stream_index),
+            "-c", "copy",
+            "-y",
+            &temp_path_str,
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("FFmpeg remux failed: {}", stderr));
+    match tokio::time::timeout(TIMEOUT, child.wait_with_output()).await {
+        Ok(Ok(output)) => {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("FFmpeg remux failed: {}", stderr));
+            }
         }
-
-        Ok::<(), String>(())
-    });
-
-    tokio::time::timeout(TIMEOUT, task)
-        .await
-        .map_err(|_| "ffmpeg remux timed out after 120 seconds".to_string())?
-        .map_err(|e| format!("Task panicked: {}", e))??;
+        Ok(Err(e)) => return Err(format!("Failed to wait for ffmpeg: {}", e)),
+        Err(_) => {
+            return Err("ffmpeg remux timed out after 120 seconds".to_string());
+        }
+    }
 
     Ok(out)
 }
@@ -721,8 +709,8 @@ async fn remux_with_audio_track(
 // Delete a file that must reside in the system temp directory.
 #[tauri::command]
 async fn delete_temp_file(path: String) -> Result<(), String> {
-    let temp_dir = std::env::temp_dir();
-    let p = std::path::Path::new(&path);
+    let temp_dir = std::env::temp_dir().canonicalize().map_err(|e| e.to_string())?;
+    let p = std::path::Path::new(&path).canonicalize().map_err(|e| e.to_string())?;
     if !p.starts_with(&temp_dir) {
         return Err("Only files inside the system temp directory may be deleted".to_string());
     }
