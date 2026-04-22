@@ -712,13 +712,17 @@ async fn remux_with_audio_track(
 // Delete a file that must reside in the system temp directory.
 #[tauri::command]
 async fn delete_temp_file(path: String) -> Result<(), String> {
+    let target = std::path::Path::new(&path);
+    if !target.exists() {
+        return Ok(());
+    }
     let temp_dir = std::env::temp_dir().canonicalize().map_err(|e| e.to_string())?;
-    let p = std::path::Path::new(&path).canonicalize().map_err(|e| e.to_string())?;
+    let p = target.canonicalize().map_err(|e| e.to_string())?;
     if !p.starts_with(&temp_dir) {
         return Err("Only files inside the system temp directory may be deleted".to_string());
     }
     if p.exists() {
-        std::fs::remove_file(p).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(p);
     }
     Ok(())
 }
