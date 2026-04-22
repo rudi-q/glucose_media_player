@@ -96,8 +96,10 @@
   let embeddedAudioTracks = $state<EmbeddedAudioTrack[]>([]);
   let selectedAudioTrackIndex = $state<number | null>(null);
   let audioRemuxPath = $state<string | null>(null);
+  let pendingRemuxCleanupPaths = $state<string[]>([]);
   let isRemuxingAudio = $state(false);
   let pendingSeekTime = $state<number | null>(null);
+  let pendingPaused = $state<boolean | null>(null);
   let isGeneratingSubtitles = $state(false);
   let generationProgress = $state(0);
   let generationMessage = $state("");
@@ -303,11 +305,15 @@
           console.error("Failed to revoke subtitle blob URL:", err);
         }
       }
-      // Clean up audio remux temp file
+      // Clean up audio remux temp files
       if (audioRemuxPath) {
         invoke("delete_temp_file", { path: audioRemuxPath }).catch(() => {});
         audioRemuxPath = null;
       }
+      for (const path of pendingRemuxCleanupPaths) {
+        invoke("delete_temp_file", { path }).catch(() => {});
+      }
+      pendingRemuxCleanupPaths = [];
       // Unregister event listeners
       for (const un of unsubs) {
         try {
@@ -926,7 +932,8 @@
 
   async function handleLoadedMetadata() {
     if (!videoElement) return;
-    const wasPaused = videoElement.paused;
+    const wasPaused = pendingPaused !== null ? pendingPaused : videoElement.paused;
+    pendingPaused = null;
     duration = videoElement.duration;
 
     // When switching audio tracks, jump straight to the saved position.
@@ -1098,7 +1105,6 @@
     if (selectedAudioTrackIndex === track.index && audioRemuxPath !== null) return;
 
     isRemuxingAudio = true;
-    const savedTime = videoElement.currentTime;
 
     try {
       const tempPath = await invoke<string>("remux_with_audio_track", {
@@ -1106,14 +1112,29 @@
         audioStreamIndex: track.index,
       });
 
+      const preSwitchTime = videoElement.currentTime;
+      const preSwitchPaused = videoElement.paused;
+
       if (audioRemuxPath) {
-        invoke("delete_temp_file", { path: audioRemuxPath }).catch(() => {});
+        pendingRemuxCleanupPaths.push(audioRemuxPath);
       }
 
       audioRemuxPath = tempPath;
       selectedAudioTrackIndex = track.index;
-      pendingSeekTime = savedTime;
+      pendingSeekTime = preSwitchTime;
+      pendingPaused = preSwitchPaused;
       videoSrc = convertFileSrc(tempPath);
+
+      // Attempt cleanup of pending files
+      for (const path of [...pendingRemuxCleanupPaths]) {
+        try {
+          await invoke("delete_temp_file", { path });
+          pendingRemuxCleanupPaths = pendingRemuxCleanupPaths.filter(p => p !== path);
+        } catch (e) {
+          console.warn("Failed to delete remux temp file, will retry later:", path, e);
+        }
+      }
+
     } catch (err) {
       console.error("Failed to remux audio track:", err);
       alert("Failed to switch audio track: " + err);
