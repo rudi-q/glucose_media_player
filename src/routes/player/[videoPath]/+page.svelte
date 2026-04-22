@@ -92,6 +92,7 @@
     language: string | null;
     title: string | null;
     channels: number | null;
+    is_default: boolean;
   }
   let embeddedAudioTracks = $state<EmbeddedAudioTrack[]>([]);
   let selectedAudioTrackIndex = $state<number | null>(null);
@@ -213,7 +214,8 @@
           if (disposed) return;
           embeddedAudioTracks = audioTracks;
           if (audioTracks.length > 0) {
-            selectedAudioTrackIndex = audioTracks[0].index;
+            const defaultTrack = audioTracks.find((t) => t.is_default);
+            selectedAudioTrackIndex = defaultTrack ? defaultTrack.index : audioTracks[0].index;
           }
         } catch (err) {
           console.log("Embedded audio track detection failed:", err);
@@ -1102,15 +1104,21 @@
 
   async function switchEmbeddedAudioTrack(track: EmbeddedAudioTrack) {
     if (!videoElement || !data.videoPath) return;
-    if (selectedAudioTrackIndex === track.index && audioRemuxPath !== null) return;
+    if (selectedAudioTrackIndex === track.index) return;
 
     isRemuxingAudio = true;
+    const currentVideoPathAtCall = data.videoPath;
 
     try {
       const tempPath = await invoke<string>("remux_with_audio_track", {
         videoPath: data.videoPath,
         audioStreamIndex: track.index,
       });
+
+      if (!videoElement || data.videoPath !== currentVideoPathAtCall) {
+        invoke("delete_temp_file", { path: tempPath }).catch(() => {});
+        return;
+      }
 
       const preSwitchTime = videoElement.currentTime;
       const preSwitchPaused = videoElement.paused;
@@ -1125,15 +1133,18 @@
       pendingPaused = preSwitchPaused;
       videoSrc = convertFileSrc(tempPath);
 
-      // Attempt cleanup of pending files
-      for (const path of [...pendingRemuxCleanupPaths]) {
-        try {
-          await invoke("delete_temp_file", { path });
-          pendingRemuxCleanupPaths = pendingRemuxCleanupPaths.filter(p => p !== path);
-        } catch (e) {
-          console.warn("Failed to delete remux temp file, will retry later:", path, e);
-        }
-      }
+      // Attempt cleanup of pending files in the background without awaiting sequentially
+      const pathsToClean = [...pendingRemuxCleanupPaths];
+      pendingRemuxCleanupPaths = [];
+      
+      Promise.allSettled(
+        pathsToClean.map(path => 
+          invoke("delete_temp_file", { path }).catch((e) => {
+            console.warn("Failed to delete remux temp file, will retry later:", path, e);
+            pendingRemuxCleanupPaths.push(path);
+          })
+        )
+      );
 
     } catch (err) {
       console.error("Failed to remux audio track:", err);

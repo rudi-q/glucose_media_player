@@ -583,6 +583,7 @@ struct EmbeddedAudioTrack {
     language: Option<String>,
     title: Option<String>,
     channels: Option<i64>,
+    is_default: bool,
 }
 
 #[tauri::command]
@@ -595,7 +596,7 @@ async fn get_embedded_audio_tracks(
         .args([
             "-v", "error",
             "-select_streams", "a",
-            "-show_entries", "stream=index,codec_name,channels:stream_tags=language,title",
+            "-show_entries", "stream=index,codec_name,channels:stream_tags=language,title:stream_disposition=default",
             "-of", "json",
             &video_path,
         ])
@@ -638,12 +639,14 @@ async fn get_embedded_audio_tracks(
             .as_str()
             .unwrap_or("unknown")
             .to_string();
+        let is_default = stream["disposition"]["default"].as_i64().unwrap_or(0) == 1;
         tracks.push(EmbeddedAudioTrack {
             index,
             codec_name,
             language: stream["tags"]["language"].as_str().map(|s| s.to_string()),
             title: stream["tags"]["title"].as_str().map(|s| s.to_string()),
             channels: stream["channels"].as_i64(),
+            is_default,
         });
     }
 
