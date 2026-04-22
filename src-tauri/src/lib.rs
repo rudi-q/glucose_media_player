@@ -402,7 +402,7 @@ async fn get_embedded_subtitle_tracks(
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     const SUPPORTED: &[&str] = &["subrip", "ass", "ssa", "webvtt", "mov_text", "srt", "text"];
 
-    let child = tokio::process::Command::from(create_hidden_command("ffprobe"))
+    let mut child = tokio::process::Command::from(create_hidden_command("ffprobe"))
         .args([
             "-v", "error",
             "-select_streams", "s",
@@ -416,10 +416,30 @@ async fn get_embedded_subtitle_tracks(
         .spawn()
         .map_err(|e| format!("Failed to spawn ffprobe: {}", e))?;
 
-    let output = match tokio::time::timeout(TIMEOUT, child.wait_with_output()).await {
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+
+    let output_result = tokio::time::timeout(TIMEOUT, async {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let (status, _, _) = tokio::join!(
+            child.wait(),
+            tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut out),
+            tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut err)
+        );
+        std::io::Result::Ok(std::process::Output {
+            status: status?,
+            stdout: out,
+            stderr: err,
+        })
+    }).await;
+
+    let output = match output_result {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => return Err(format!("Failed to wait for ffprobe: {}", e)),
         Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
             return Err("ffprobe timed out after 30 seconds".to_string());
         }
     };
@@ -486,7 +506,7 @@ async fn extract_embedded_subtitle(
     #[cfg(debug_assertions)]
     println!("Extracting embedded subtitle stream {} from: {}", stream_index, video_path);
 
-    let child = tokio::process::Command::from(create_hidden_command("ffmpeg"))
+    let mut child = tokio::process::Command::from(create_hidden_command("ffmpeg"))
         .args([
             "-v", "error",
             "-i", &video_path,
@@ -500,10 +520,30 @@ async fn extract_embedded_subtitle(
         .spawn()
         .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
 
-    let output = match tokio::time::timeout(TIMEOUT, child.wait_with_output()).await {
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+
+    let output_result = tokio::time::timeout(TIMEOUT, async {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let (status, _, _) = tokio::join!(
+            child.wait(),
+            tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut out),
+            tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut err)
+        );
+        std::io::Result::Ok(std::process::Output {
+            status: status?,
+            stdout: out,
+            stderr: err,
+        })
+    }).await;
+
+    let output = match output_result {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => return Err(format!("Failed to wait for ffmpeg: {}", e)),
         Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
             return Err("ffmpeg timed out after 30 seconds".to_string());
         }
     };
@@ -592,7 +632,7 @@ async fn get_embedded_audio_tracks(
 ) -> Result<Vec<EmbeddedAudioTrack>, String> {
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-    let child = tokio::process::Command::from(create_hidden_command("ffprobe"))
+    let mut child = tokio::process::Command::from(create_hidden_command("ffprobe"))
         .args([
             "-v", "error",
             "-select_streams", "a",
@@ -606,10 +646,30 @@ async fn get_embedded_audio_tracks(
         .spawn()
         .map_err(|e| format!("Failed to spawn ffprobe: {}", e))?;
 
-    let output = match tokio::time::timeout(TIMEOUT, child.wait_with_output()).await {
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+
+    let output_result = tokio::time::timeout(TIMEOUT, async {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let (status, _, _) = tokio::join!(
+            child.wait(),
+            tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut out),
+            tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut err)
+        );
+        std::io::Result::Ok(std::process::Output {
+            status: status?,
+            stdout: out,
+            stderr: err,
+        })
+    }).await;
+
+    let output = match output_result {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => return Err(format!("Failed to wait for ffprobe: {}", e)),
         Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
             return Err("ffprobe timed out after 30 seconds".to_string());
         }
     };
@@ -663,6 +723,10 @@ async fn remux_with_audio_track(
     video_path: String,
     audio_stream_index: i64,
 ) -> Result<String, String> {
+    if audio_stream_index < 0 {
+        return Err(format!("Invalid audio stream index: {}", audio_stream_index));
+    }
+
     let mut temp_path = std::env::temp_dir();
     let mut temp_path_str = String::new();
     let mut file_created = false;
@@ -703,11 +767,11 @@ async fn remux_with_audio_track(
     #[cfg(debug_assertions)]
     println!("Remuxing audio stream {} from: {} -> {}", audio_stream_index, video_path, temp_path_str);
 
-    let child = tokio::process::Command::from(create_hidden_command("ffmpeg"))
+    let mut child = tokio::process::Command::from(create_hidden_command("ffmpeg"))
         .args([
             "-v", "error",
             "-i", &video_path,
-            "-map", "0:v",
+            "-map", "0:V?",
             "-map", &format!("0:{}", audio_stream_index),
             "-c", "copy",
             "-y",
@@ -722,12 +786,30 @@ async fn remux_with_audio_track(
             format!("Failed to spawn ffmpeg: {}", e)
         })?;
 
-    match tokio::time::timeout(TIMEOUT, child.wait_with_output()).await {
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+
+    let output_result = tokio::time::timeout(TIMEOUT, async {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let (status, _, _) = tokio::join!(
+            child.wait(),
+            tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut out),
+            tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut err)
+        );
+        std::io::Result::Ok(std::process::Output {
+            status: status?,
+            stdout: out,
+            stderr: err,
+        })
+    }).await;
+
+    match output_result {
         Ok(Ok(output)) => {
             if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stderr_str = String::from_utf8_lossy(&output.stderr);
                 let _ = tokio::fs::remove_file(&temp_path).await;
-                return Err(format!("FFmpeg remux failed: {}", stderr));
+                return Err(format!("FFmpeg remux failed: {}", stderr_str));
             }
         }
         Ok(Err(e)) => {
@@ -735,6 +817,8 @@ async fn remux_with_audio_track(
             return Err(format!("Failed to wait for ffmpeg: {}", e));
         }
         Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
             let _ = tokio::fs::remove_file(&temp_path).await;
             return Err("ffmpeg remux timed out after 120 seconds".to_string());
         }
@@ -754,6 +838,12 @@ async fn delete_temp_file(path: String) -> Result<(), String> {
     let p = target.canonicalize().map_err(|e| e.to_string())?;
     if !p.starts_with(&temp_dir) {
         return Err("Only files inside the system temp directory may be deleted".to_string());
+    }
+    let file_name = p.file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "Invalid file name".to_string())?;
+    if !file_name.starts_with("glucose_audio_") || !file_name.ends_with(".mkv") {
+        return Err("Only glucose_audio_*.mkv files may be deleted".to_string());
     }
     if let Err(e) = std::fs::remove_file(&p) {
         if e.kind() != std::io::ErrorKind::NotFound {
