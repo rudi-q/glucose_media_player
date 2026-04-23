@@ -23,6 +23,7 @@
     Bug,
     Globe,
     Shield,
+    ShieldAlert,
     ScrollText,
     Users,
     Star,
@@ -665,6 +666,24 @@
                         )}
                     >
                       <Bug size={14} /> Report Bug
+                    </Button>
+                  </div>
+                </div>
+
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">Report Subtitles</div>
+                    <div class="settings-item-desc">
+                      Report inappropriate AI-generated subtitles
+                    </div>
+                  </div>
+                  <div class="settings-item-action">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onclick={() => openUrl("mailto:support@glucose.media?subject=Report%20Inappropriate%20AI%20Subtitles")}
+                    >
+                      <ShieldAlert size={14} /> Report
                     </Button>
                   </div>
                 </div>
