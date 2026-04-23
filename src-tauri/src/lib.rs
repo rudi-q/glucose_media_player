@@ -706,6 +706,14 @@ async fn remux_with_audio_track(
         return Err(format!("Invalid audio stream index: {}", audio_stream_index));
     }
 
+    let audio_tracks = get_embedded_audio_tracks(video_path.clone()).await?;
+    if !audio_tracks.iter().any(|track| track.index == audio_stream_index) {
+        return Err(format!(
+            "Stream index {} is not a valid audio track for this video",
+            audio_stream_index
+        ));
+    }
+
     let temp_dir = std::env::temp_dir();
     let mut temp_path_opt: Option<std::path::PathBuf> = None;
     
