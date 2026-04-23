@@ -431,9 +431,10 @@ async fn run_with_timeout(
             tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut err)
         );
         
-        if let Err(e) = status_res {
-            return Err(format!("Failed to wait for {}: {}", label, e));
-        }
+        let status = match status_res {
+            Ok(s) => s,
+            Err(e) => return Err(format!("Failed to wait for {}: {}", label, e)),
+        };
         if let Err(e) = out_res {
             return Err(format!("Failed to read stdout for {}: {}", label, e));
         }
@@ -442,7 +443,7 @@ async fn run_with_timeout(
         }
         
         Ok(std::process::Output {
-            status: status_res.unwrap(),
+            status,
             stdout: out,
             stderr: err,
         })
@@ -792,7 +793,7 @@ async fn delete_temp_file(path: String) -> Result<(), String> {
     if !file_name.starts_with("glucose_audio_") || !file_name.ends_with(".mkv") {
         return Err("Only glucose_audio_*.mkv files may be deleted".to_string());
     }
-    if let Err(e) = std::fs::remove_file(&p) {
+    if let Err(e) = tokio::fs::remove_file(&p).await {
         if e.kind() != std::io::ErrorKind::NotFound {
             return Err(format!("Failed to delete temp file: {}", e));
         }
