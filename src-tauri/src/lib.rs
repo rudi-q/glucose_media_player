@@ -404,19 +404,45 @@ async fn run_with_timeout(
         .spawn()
         .map_err(|e| format!("Failed to spawn {}: {}", label, e))?;
 
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
+    let mut stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(format!("run_with_timeout: Failed to capture stdout for {}", label));
+        }
+    };
+
+    let mut stderr = match child.stderr.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(format!("run_with_timeout: Failed to capture stderr for {}", label));
+        }
+    };
 
     let output_result = tokio::time::timeout(timeout, async {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let (status, _, _) = tokio::join!(
+        let (status_res, out_res, err_res) = tokio::join!(
             child.wait(),
             tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut out),
             tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut err)
         );
-        std::io::Result::Ok(std::process::Output {
-            status: status?,
+        
+        if let Err(e) = status_res {
+            return Err(format!("Failed to wait for {}: {}", label, e));
+        }
+        if let Err(e) = out_res {
+            return Err(format!("Failed to read stdout for {}: {}", label, e));
+        }
+        if let Err(e) = err_res {
+            return Err(format!("Failed to read stderr for {}: {}", label, e));
+        }
+        
+        Ok(std::process::Output {
+            status: status_res.unwrap(),
             stdout: out,
             stderr: err,
         })
@@ -424,7 +450,11 @@ async fn run_with_timeout(
 
     match output_result {
         Ok(Ok(output)) => Ok(output),
-        Ok(Err(e)) => Err(format!("Failed to wait for {}: {}", label, e)),
+        Ok(Err(e)) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            Err(e)
+        }
         Err(_) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
