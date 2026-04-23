@@ -392,34 +392,22 @@ fn find_subtitle_for_video(video_path: String) -> Result<Option<String>, String>
     Ok(None)
 }
 
-// Return the list of text-based subtitle streams embedded in a video file.
-// Bitmap formats (PGS, VobSub, DVB) are silently skipped because they cannot
-// be converted to a text format that the browser can render.
-#[tauri::command]
-async fn get_embedded_subtitle_tracks(
-    video_path: String,
-) -> Result<Vec<EmbeddedSubtitleTrack>, String> {
-    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-    const SUPPORTED: &[&str] = &["subrip", "ass", "ssa", "webvtt", "mov_text", "srt", "text"];
-
-    let mut child = tokio::process::Command::from(create_hidden_command("ffprobe"))
-        .args([
-            "-v", "error",
-            "-select_streams", "s",
-            "-show_entries", "stream=index,codec_name:stream_tags=language,title",
-            "-of", "json",
-            &video_path,
-        ])
+async fn run_with_timeout(
+    cmd: std::process::Command,
+    timeout: std::time::Duration,
+    label: &str,
+) -> Result<std::process::Output, String> {
+    let mut child = tokio::process::Command::from(cmd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("Failed to spawn ffprobe: {}", e))?;
+        .map_err(|e| format!("Failed to spawn {}: {}", label, e))?;
 
     let mut stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();
 
-    let output_result = tokio::time::timeout(TIMEOUT, async {
+    let output_result = tokio::time::timeout(timeout, async {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let (status, _, _) = tokio::join!(
@@ -434,15 +422,37 @@ async fn get_embedded_subtitle_tracks(
         })
     }).await;
 
-    let output = match output_result {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => return Err(format!("Failed to wait for ffprobe: {}", e)),
+    match output_result {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(e)) => Err(format!("Failed to wait for {}: {}", label, e)),
         Err(_) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err("ffprobe timed out after 30 seconds".to_string());
+            Err(format!("{} timed out after {} seconds", label, timeout.as_secs()))
         }
-    };
+    }
+}
+
+// Return the list of text-based subtitle streams embedded in a video file.
+// Bitmap formats (PGS, VobSub, DVB) are silently skipped because they cannot
+// be converted to a text format that the browser can render.
+#[tauri::command]
+async fn get_embedded_subtitle_tracks(
+    video_path: String,
+) -> Result<Vec<EmbeddedSubtitleTrack>, String> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    const SUPPORTED: &[&str] = &["subrip", "ass", "ssa", "webvtt", "mov_text", "srt", "text"];
+
+    let mut cmd = create_hidden_command("ffprobe");
+    cmd.args([
+        "-v", "error",
+        "-select_streams", "s",
+        "-show_entries", "stream=index,codec_name:stream_tags=language,title",
+        "-of", "json",
+        &video_path,
+    ]);
+
+    let output = run_with_timeout(cmd, TIMEOUT, "ffprobe").await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -506,47 +516,16 @@ async fn extract_embedded_subtitle(
     #[cfg(debug_assertions)]
     println!("Extracting embedded subtitle stream {} from: {}", stream_index, video_path);
 
-    let mut child = tokio::process::Command::from(create_hidden_command("ffmpeg"))
-        .args([
-            "-v", "error",
-            "-i", &video_path,
-            "-map", &format!("0:{}", stream_index),
-            "-f", "srt",
-            "pipe:1",
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
+    let mut cmd = create_hidden_command("ffmpeg");
+    cmd.args([
+        "-v", "error",
+        "-i", &video_path,
+        "-map", &format!("0:{}", stream_index),
+        "-f", "srt",
+        "pipe:1",
+    ]);
 
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
-
-    let output_result = tokio::time::timeout(TIMEOUT, async {
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let (status, _, _) = tokio::join!(
-            child.wait(),
-            tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut out),
-            tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut err)
-        );
-        std::io::Result::Ok(std::process::Output {
-            status: status?,
-            stdout: out,
-            stderr: err,
-        })
-    }).await;
-
-    let output = match output_result {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => return Err(format!("Failed to wait for ffmpeg: {}", e)),
-        Err(_) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            return Err("ffmpeg timed out after 30 seconds".to_string());
-        }
-    };
+    let output = run_with_timeout(cmd, TIMEOUT, "ffmpeg").await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -632,47 +611,16 @@ async fn get_embedded_audio_tracks(
 ) -> Result<Vec<EmbeddedAudioTrack>, String> {
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-    let mut child = tokio::process::Command::from(create_hidden_command("ffprobe"))
-        .args([
-            "-v", "error",
-            "-select_streams", "a",
-            "-show_entries", "stream=index,codec_name,channels:stream_tags=language,title:stream_disposition=default",
-            "-of", "json",
-            &video_path,
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| format!("Failed to spawn ffprobe: {}", e))?;
+    let mut cmd = create_hidden_command("ffprobe");
+    cmd.args([
+        "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=index,codec_name,channels:stream_tags=language,title:stream_disposition=default",
+        "-of", "json",
+        &video_path,
+    ]);
 
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
-
-    let output_result = tokio::time::timeout(TIMEOUT, async {
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let (status, _, _) = tokio::join!(
-            child.wait(),
-            tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut out),
-            tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut err)
-        );
-        std::io::Result::Ok(std::process::Output {
-            status: status?,
-            stdout: out,
-            stderr: err,
-        })
-    }).await;
-
-    let output = match output_result {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => return Err(format!("Failed to wait for ffprobe: {}", e)),
-        Err(_) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            return Err("ffprobe timed out after 30 seconds".to_string());
-        }
-    };
+    let output = run_with_timeout(cmd, TIMEOUT, "ffprobe").await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -727,9 +675,8 @@ async fn remux_with_audio_track(
         return Err(format!("Invalid audio stream index: {}", audio_stream_index));
     }
 
-    let mut temp_path = std::env::temp_dir();
-    let mut temp_path_str = String::new();
-    let mut file_created = false;
+    let temp_dir = std::env::temp_dir();
+    let mut temp_path_opt: Option<std::path::PathBuf> = None;
     
     for i in 0..100 {
         let timestamp = std::time::SystemTime::now()
@@ -738,7 +685,7 @@ async fn remux_with_audio_track(
             .as_nanos();
         
         let filename = format!("glucose_audio_{}_{}.mkv", std::process::id(), timestamp + i as u128);
-        let candidate_path = std::env::temp_dir().join(&filename);
+        let candidate_path = temp_dir.join(&filename);
         
         match std::fs::OpenOptions::new()
             .write(true)
@@ -746,9 +693,7 @@ async fn remux_with_audio_track(
             .open(&candidate_path)
         {
             Ok(_) => {
-                temp_path = candidate_path;
-                temp_path_str = temp_path.to_string_lossy().to_string();
-                file_created = true;
+                temp_path_opt = Some(candidate_path);
                 break;
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -756,10 +701,8 @@ async fn remux_with_audio_track(
         }
     }
 
-    if !file_created {
-        return Err("Failed to generate a unique temporary file path".to_string());
-    }
-
+    let temp_path = temp_path_opt.ok_or_else(|| "Failed to generate a unique temporary file path".to_string())?;
+    let temp_path_str = temp_path.to_string_lossy().to_string();
     let out = temp_path_str.clone();
 
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -831,11 +774,15 @@ async fn remux_with_audio_track(
 #[tauri::command]
 async fn delete_temp_file(path: String) -> Result<(), String> {
     let target = std::path::Path::new(&path);
-    if !target.exists() {
-        return Ok(());
-    }
+    
+    let p = match target.canonicalize() {
+        Ok(p) => p,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+
     let temp_dir = std::env::temp_dir().canonicalize().map_err(|e| e.to_string())?;
-    let p = target.canonicalize().map_err(|e| e.to_string())?;
+    
     if !p.starts_with(&temp_dir) {
         return Err("Only files inside the system temp directory may be deleted".to_string());
     }
