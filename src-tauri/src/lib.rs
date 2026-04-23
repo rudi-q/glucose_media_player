@@ -441,7 +441,7 @@ async fn get_embedded_subtitle_tracks(
     video_path: String,
 ) -> Result<Vec<EmbeddedSubtitleTrack>, String> {
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-    const SUPPORTED: &[&str] = &["subrip", "ass", "ssa", "webvtt", "mov_text", "srt", "text"];
+    const SUPPORTED: &[&str] = &["subrip", "ass", "ssa", "webvtt", "mov_text", "text"];
 
     let mut cmd = create_hidden_command("ffprobe");
     cmd.args([
@@ -710,60 +710,30 @@ async fn remux_with_audio_track(
     #[cfg(debug_assertions)]
     println!("Remuxing audio stream {} from: {} -> {}", audio_stream_index, video_path, temp_path_str);
 
-    let mut child = tokio::process::Command::from(create_hidden_command("ffmpeg"))
-        .args([
-            "-v", "error",
-            "-i", &video_path,
-            "-map", "0:V?",
-            "-map", &format!("0:{}", audio_stream_index),
-            "-c", "copy",
-            "-y",
-            &temp_path_str,
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&temp_path);
-            format!("Failed to spawn ffmpeg: {}", e)
-        })?;
+    let mut cmd = create_hidden_command("ffmpeg");
+    cmd.args([
+        "-v", "error",
+        "-i", &video_path,
+        "-map", "0:V?",
+        "-map", &format!("0:{}", audio_stream_index),
+        "-c", "copy",
+        "-y",
+        &temp_path_str,
+    ]);
 
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
-
-    let output_result = tokio::time::timeout(TIMEOUT, async {
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let (status, _, _) = tokio::join!(
-            child.wait(),
-            tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut out),
-            tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut err)
-        );
-        std::io::Result::Ok(std::process::Output {
-            status: status?,
-            stdout: out,
-            stderr: err,
-        })
-    }).await;
+    let output_result = run_with_timeout(cmd, TIMEOUT, "ffmpeg").await;
 
     match output_result {
-        Ok(Ok(output)) => {
+        Ok(output) => {
             if !output.status.success() {
                 let stderr_str = String::from_utf8_lossy(&output.stderr);
                 let _ = tokio::fs::remove_file(&temp_path).await;
                 return Err(format!("FFmpeg remux failed: {}", stderr_str));
             }
         }
-        Ok(Err(e)) => {
+        Err(e) => {
             let _ = tokio::fs::remove_file(&temp_path).await;
-            return Err(format!("Failed to wait for ffmpeg: {}", e));
-        }
-        Err(_) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            let _ = tokio::fs::remove_file(&temp_path).await;
-            return Err("ffmpeg remux timed out after 120 seconds".to_string());
+            return Err(e);
         }
     }
 
