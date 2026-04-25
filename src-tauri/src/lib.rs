@@ -669,6 +669,23 @@ struct VideoFile {
     size: u64,
     modified: u64,
     duration: Option<f64>,
+    is_cloud_only: bool,
+}
+
+#[cfg(target_os = "windows")]
+fn is_cloud_only_file(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    let attrs = metadata.file_attributes();
+    // Set by OneDrive, Google Drive for Desktop, and Dropbox for files not yet downloaded
+    const FILE_ATTRIBUTE_OFFLINE: u32 = 0x1000;
+    const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x40000;
+    const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x400000;
+    attrs & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS) != 0
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_cloud_only_file(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 #[derive(Serialize, Clone)]
@@ -1884,6 +1901,7 @@ fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
                 size: metadata.len(),
                 modified: mod_secs.as_secs(),
                 duration: None,
+                is_cloud_only: is_cloud_only_file(&metadata),
             });
         }
     }
@@ -1891,16 +1909,6 @@ fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
 
 #[tauri::command]
 fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
-    let ffprobe_available = create_hidden_command("ffprobe")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !ffprobe_available {
-        eprintln!("Warning: ffprobe not found in PATH. Video durations will not be extracted.");
-    }
-
     let search_dirs: Vec<std::path::PathBuf> = get_gallery_paths()
         .unwrap_or_else(|_| default_gallery_paths())
         .into_iter()
@@ -1912,17 +1920,37 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
         scan_dir_for_media(dir, &mut videos, 5);
     }
 
-    // Sort and cap BEFORE fetching durations so ffprobe only runs on the final set
     videos.sort_by(|a, b| b.modified.cmp(&a.modified));
     videos.truncate(100);
 
-    if ffprobe_available {
-        for video in &mut videos {
-            video.duration = get_video_duration(&video.path);
-        }
-    }
-
     Ok(videos)
+}
+
+#[derive(Serialize, Clone)]
+struct VideoDurationUpdate {
+    path: String,
+    duration: Option<f64>,
+}
+
+#[tauri::command]
+async fn fetch_video_durations(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let ffprobe_available = create_hidden_command("ffprobe")
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !ffprobe_available {
+            return;
+        }
+
+        for path in paths {
+            let duration = get_video_duration(&path);
+            let _ = app_handle.emit("video-duration-ready", VideoDurationUpdate { path, duration });
+        }
+    });
+    Ok(())
 }
 
 // Function to process video files and emit events
@@ -2060,6 +2088,7 @@ pub fn run() {
             save_gallery_paths,
             convert_file_path,
             get_recent_videos,
+            fetch_video_durations,
             get_pending_file,
             mark_file_processed,
             frontend_ready,

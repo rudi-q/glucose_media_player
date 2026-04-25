@@ -12,6 +12,7 @@ export interface VideoFile {
 	size: number;
 	modified: number;
 	duration?: number;
+	is_cloud_only: boolean;
 }
 
 /**

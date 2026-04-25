@@ -1,9 +1,10 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2 } from "lucide-svelte";
+  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { isAudio } from "$lib/utils/mediaType";
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
@@ -42,6 +43,8 @@
       videosLoaded = true;
       const progressData = await invoke<Record<string, WatchProgress>>("get_all_watch_progress");
       watchProgressStore.loadAllProgress(progressData);
+      // Fetch durations in the background — gallery is already visible at this point
+      invoke("fetch_video_durations", { paths: videos.map(v => v.path) }).catch(console.error);
     } catch (err) {
       console.error("Failed to load recent videos:", err);
     } finally {
@@ -61,16 +64,31 @@
     document.addEventListener("keydown", handleKeyPress);
     document.addEventListener("click", handleClickOutside);
 
+    let unlistenDuration: (() => void) | undefined;
+    listen<{ path: string; duration: number | null }>("video-duration-ready", (event) => {
+      const { path, duration } = event.payload;
+      if (duration !== null) {
+        recentVideos = recentVideos.map(v => v.path === path ? { ...v, duration } : v);
+        cachedVideos = cachedVideos.map(v => v.path === path ? { ...v, duration } : v);
+      }
+    }).then(fn => { unlistenDuration = fn; });
+
     if (!videosLoaded) {
       loadVideos();
     } else {
       recentVideos = cachedVideos;
       loadingRecent = false;
+      // Re-fetch durations for any cached videos that are still missing them
+      const missing = cachedVideos.filter(v => !v.duration).map(v => v.path);
+      if (missing.length > 0) {
+        invoke("fetch_video_durations", { paths: missing }).catch(console.error);
+      }
     }
 
     return () => {
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
+      unlistenDuration?.();
     };
   });
   
@@ -334,7 +352,7 @@
         </div>
       {:else}
         <div class="recent-section">
-          <h2>Recents</h2>
+          <h2>Media</h2>
           <div class="video-grid">
             {#each recentVideos as video, index}
               <button
@@ -370,6 +388,11 @@
                         <div class="video-progress-fill" style="width: {progressPercent}%"></div>
                       </div>
                     {/if}
+                  {/if}
+                  {#if video.is_cloud_only}
+                    <div class="cloud-badge" title="Not downloaded — stored in cloud">
+                      <Cloud size={13} />
+                    </div>
                   {/if}
                 </div>
                 <div class="video-info">
@@ -582,6 +605,23 @@
     background: rgba(255, 255, 255, 0.9);
     transition: width 0.3s ease;
     box-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+  }
+
+  .cloud-badge {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    padding: 0.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.75);
+    z-index: 3;
   }
 
   .thumbnail-img {
