@@ -33,6 +33,7 @@
   let sortBy = $state<'added' | 'watched'>('added');
   let showSortMenu = $state(false);
   let sortMenuPos = $state({ top: 0, right: 0 });
+  let libraryHeaderHeight = $state(96);
 
   let sortedVideos = $derived(
     sortBy === 'watched'
@@ -398,7 +399,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="empty-state" class:dragging={isDragging}>
     <div class="library-container">
-      <div class="library-header">
+      <div class="library-header" bind:offsetHeight={libraryHeaderHeight}>
         <img src="/logo-dark.svg" alt="glucose" class="logo" />
         <div class="header-buttons">
           <button class="sort-toggle" onclick={toggleSortMenu} title="Sort" class:sort-active={sortBy === 'watched'}>
@@ -426,7 +427,7 @@
           {#each groupedVideos as group}
             <div class="section-group">
               {#if group.label}
-                <div class="section-header">{group.label}</div>
+                <div class="section-header" style="top: calc({libraryHeaderHeight}px - 1.5rem)">{group.label}</div>
               {/if}
               <div class="video-grid">
                 {#each group.videos as { video, index }}
@@ -638,7 +639,6 @@
 
   .section-header {
     position: sticky;
-    top: 6rem;
     z-index: 5;
     padding: 1.25rem 0 0.75rem;
     font-size: 0.6875rem;

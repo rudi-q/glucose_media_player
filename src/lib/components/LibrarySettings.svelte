@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
-  import { FolderOpen, Plus, Trash2 } from "lucide-svelte";
+  import { FolderOpen, Plus, ShieldCheck, Trash2 } from "lucide-svelte";
   import Button from "$lib/components/Button.svelte";
   import { galleryRefreshStore } from "$lib/stores/appStore";
 
@@ -42,11 +42,15 @@
 </script>
 
 <div class="settings-section">
-  <h3>Gallery Locations</h3>
+  <h3>Allowed Locations</h3>
   <p class="section-desc">
-    Videos and audio from these folders appear in the gallery. Subfolders are
-    scanned up to 5 levels deep.
+    Media in these folders appears in the gallery, including subfolders up to 5 levels deep.
   </p>
+
+  <div class="privacy-notice">
+    <ShieldCheck size={14} class="privacy-icon" />
+    <span><strong>Fully Offline & Private.</strong> Glucose never collects, uploads, or shares your data. You can safely add any personal folders to your gallery, knowing everything stays on your device.</span>
+  </div>
 
   <div class="actions">
     <Button variant="primary" size="sm" onclick={addFolder}>
@@ -97,6 +101,26 @@
     color: rgba(255, 255, 255, 0.5);
     line-height: 1.5;
     margin: -0.5rem 0 1.25rem;
+  }
+
+  .privacy-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.625rem 0.875rem;
+    background: rgba(74, 222, 128, 0.06);
+    border: 1px solid rgba(74, 222, 128, 0.15);
+    border-radius: 8px;
+    margin-bottom: 1.25rem;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.45);
+    line-height: 1.5;
+  }
+
+  :global(.privacy-icon) {
+    color: rgba(74, 222, 128, 0.6);
+    flex-shrink: 0;
+    margin-top: 1px;
   }
 
   .actions {
