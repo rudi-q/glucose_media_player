@@ -4,7 +4,7 @@
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud } from "lucide-svelte";
+  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { isAudio } from "$lib/utils/mediaType";
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
@@ -30,7 +30,20 @@
   let cardContextMenuPosition = $state({ x: 0, y: 0 });
   let cardContextMenuVideo = $state<VideoFile | null>(null);
   let isDragging = $state(false);
-  
+  let sortBy = $state<'added' | 'watched'>('added');
+  let showSortMenu = $state(false);
+  let sortMenuPos = $state({ top: 0, right: 0 });
+
+  let sortedVideos = $derived(
+    sortBy === 'watched'
+      ? [...recentVideos].sort((a, b) => {
+          const aTime = watchProgressMap.get(a.path)?.last_watched ?? 0;
+          const bTime = watchProgressMap.get(b.path)?.last_watched ?? 0;
+          return bTime - aTime;
+        })
+      : recentVideos
+  );
+
   // Get context functions from layout
   const showSettings = getContext<() => void>('showSettings');
   
@@ -101,7 +114,7 @@
     }
     
     // Gallery navigation
-    if (recentVideos.length > 0) {
+    if (sortedVideos.length > 0) {
       switch (e.key) {
         case "ArrowLeft":
           e.preventDefault();
@@ -110,7 +123,7 @@
           break;
         case "ArrowRight":
           e.preventDefault();
-          selectedVideoIndex = Math.min(recentVideos.length - 1, selectedVideoIndex + 1);
+          selectedVideoIndex = Math.min(sortedVideos.length - 1, selectedVideoIndex + 1);
           scrollSelectedVideoIntoView();
           break;
         case "ArrowUp":
@@ -120,14 +133,14 @@
           break;
         case "ArrowDown":
           e.preventDefault();
-          selectedVideoIndex = Math.min(recentVideos.length - 1, selectedVideoIndex + 4);
+          selectedVideoIndex = Math.min(sortedVideos.length - 1, selectedVideoIndex + 4);
           scrollSelectedVideoIntoView();
           break;
         case "Enter":
         case " ":
           e.preventDefault();
-          if (recentVideos[selectedVideoIndex]) {
-            loadVideo(recentVideos[selectedVideoIndex].path);
+          if (sortedVideos[selectedVideoIndex]) {
+            loadVideo(sortedVideos[selectedVideoIndex].path);
           }
           break;
       }
@@ -263,13 +276,20 @@
     }, 1000);
   }
   
+  function toggleSortMenu(e: MouseEvent) {
+    if (showSortMenu) { showSortMenu = false; return; }
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    sortMenuPos = { top: rect.bottom + 8, right: window.innerWidth - rect.right };
+    showSortMenu = true;
+  }
+
   function handleGalleryContextMenu(e: MouseEvent) {
     e.preventDefault();
     const target = e.target as HTMLElement;
     const card = target.closest('.video-card');
     if (card) {
       const index = parseInt((card as HTMLElement).dataset.index ?? '-1', 10);
-      const video = recentVideos[index];
+      const video = sortedVideos[index];
       if (video) {
         cardContextMenuVideo = video;
         cardContextMenuPosition = { x: e.clientX, y: e.clientY };
@@ -288,6 +308,9 @@
     if (!target.closest('.context-menu')) {
       showGalleryContextMenu = false;
       showCardContextMenu = false;
+    }
+    if (!target.closest('.sort-menu') && !target.closest('.sort-toggle')) {
+      showSortMenu = false;
     }
   }
   
@@ -333,6 +356,9 @@
       <div class="library-header">
         <img src="/logo-dark.svg" alt="glucose" class="logo" />
         <div class="header-buttons">
+          <button class="sort-toggle" onclick={toggleSortMenu} title="Sort" class:sort-active={sortBy === 'watched'}>
+            <ArrowUpDown size={15} />
+          </button>
           <Button variant="white" onclick={openFileDialog}>
             Open Video
           </Button>
@@ -344,7 +370,7 @@
       
       {#if loadingRecent}
         <div class="loading">Scanning for videos...</div>
-      {:else if recentVideos.length === 0}
+      {:else if sortedVideos.length === 0}
         <div class="empty-content">
           <Play size={64} strokeWidth={1.5} />
           <p>No recent videos found</p>
@@ -354,7 +380,7 @@
         <div class="recent-section">
           <h2>Media</h2>
           <div class="video-grid">
-            {#each recentVideos as video, index}
+            {#each sortedVideos as video, index}
               <button
                 class="video-card"
                 class:selected={selectedVideoIndex === index}
@@ -456,6 +482,18 @@
           <span>Open in PiP</span>
         </button>
       {/if}
+    </div>
+  {/if}
+
+  {#if showSortMenu}
+    <div class="sort-menu" style="top: {sortMenuPos.top}px; right: {sortMenuPos.right}px;">
+      <div class="sort-menu-label">Sort by</div>
+      <button class="sort-option" class:active={sortBy === 'added'} onclick={() => { sortBy = 'added'; showSortMenu = false; }}>
+        Last Added
+      </button>
+      <button class="sort-option" class:active={sortBy === 'watched'} onclick={() => { sortBy = 'watched'; showSortMenu = false; }}>
+        Last Watched
+      </button>
     </div>
   {/if}
 </main>
@@ -752,5 +790,76 @@
     height: 1px;
     background: rgba(255, 255, 255, 0.08);
     margin: 0.25rem 0;
+  }
+
+  .sort-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+  }
+
+  .sort-toggle:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+  }
+
+  .sort-toggle.sort-active {
+    background: rgba(192, 101, 182, 0.15);
+    border-color: rgba(192, 101, 182, 0.35);
+    color: #c065b6;
+  }
+
+  .sort-menu {
+    position: fixed;
+    background: rgba(18, 18, 18, 0.97);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 0.375rem;
+    min-width: 170px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    z-index: 1000;
+  }
+
+  .sort-menu-label {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.375rem 0.75rem 0.25rem;
+  }
+
+  .sort-option {
+    width: 100%;
+    padding: 0.625rem 0.75rem;
+    background: none;
+    border: none;
+    border-radius: 6px;
+    color: rgba(255, 255, 255, 0.75);
+    text-align: left;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .sort-option:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: #fff;
+  }
+
+  .sort-option.active {
+    color: #c065b6;
+    background: rgba(192, 101, 182, 0.1);
   }
 </style>
