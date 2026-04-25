@@ -39,6 +39,26 @@ fn create_hidden_command(program: &str) -> Command {
     cmd
 }
 
+// Resolves the ffmpeg binary path: bundled AppData location first, then system PATH
+fn get_ffmpeg_command() -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
+            let ffmpeg_exe = std::path::Path::new(&app_data)
+                .join("glucose")
+                .join("resources")
+                .join("ffmpeg")
+                .join("bin")
+                .join("ffmpeg.exe");
+            if ffmpeg_exe.exists() {
+                return create_hidden_command(ffmpeg_exe.to_str().unwrap_or("ffmpeg"));
+            }
+        }
+    }
+
+    create_hidden_command("ffmpeg")
+}
+
 // Global state to store pending file paths
 static PENDING_FILES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static FILE_PROCESSED: Mutex<bool> = Mutex::new(false);
@@ -547,7 +567,7 @@ async fn extract_embedded_subtitle(
     #[cfg(debug_assertions)]
     println!("Extracting embedded subtitle stream {} from: {}", stream_index, video_path);
 
-    let mut cmd = create_hidden_command("ffmpeg");
+    let mut cmd = get_ffmpeg_command();
     cmd.args([
         "-v", "error",
         "-i", &video_path,
@@ -749,7 +769,7 @@ async fn remux_with_audio_track(
     #[cfg(debug_assertions)]
     println!("Remuxing audio stream {} from: {} -> {}", audio_stream_index, video_path, temp_path_str);
 
-    let mut cmd = create_hidden_command("ffmpeg");
+    let mut cmd = get_ffmpeg_command();
     cmd.args([
         "-v", "error",
         "-i", &video_path,
@@ -1153,7 +1173,7 @@ fn extract_audio_from_video(video_path: &str, output_audio_path: &str) -> Result
     #[cfg(debug_assertions)]
     println!("Extracting audio from video: {}", video_path);
 
-    let output = create_hidden_command("ffmpeg")
+    let output = get_ffmpeg_command()
         .args([
             "-i",
             video_path,
@@ -1694,7 +1714,7 @@ fn convert_video_with_ffmpeg(
     );
 
     // Build FFmpeg command based on target format
-    let mut cmd = create_hidden_command("ffmpeg");
+    let mut cmd = get_ffmpeg_command();
     cmd.arg("-i").arg(input_path);
 
     match target_format {
