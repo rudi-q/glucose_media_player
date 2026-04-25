@@ -7,6 +7,7 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { isAudio } from "$lib/utils/mediaType";
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
+  import { galleryRefreshStore } from "$lib/stores/appStore";
   import type { VideoFile } from "$lib/types/video";
   import { formatDuration } from "$lib/utils/time";
   import Button from "$lib/components/Button.svelte";
@@ -32,26 +33,36 @@
   // Get context functions from layout
   const showSettings = getContext<() => void>('showSettings');
   
+  async function loadVideos() {
+    loadingRecent = true;
+    try {
+      const videos = await invoke<VideoFile[]>("get_recent_videos");
+      recentVideos = videos;
+      cachedVideos = videos;
+      videosLoaded = true;
+      const progressData = await invoke<Record<string, WatchProgress>>("get_all_watch_progress");
+      watchProgressStore.loadAllProgress(progressData);
+    } catch (err) {
+      console.error("Failed to load recent videos:", err);
+    } finally {
+      loadingRecent = false;
+    }
+  }
+
+  $effect(() => {
+    if ($galleryRefreshStore > 0) {
+      videosLoaded = false;
+      cachedVideos = [];
+      loadVideos();
+    }
+  });
+
   onMount(() => {
     document.addEventListener("keydown", handleKeyPress);
     document.addEventListener("click", handleClickOutside);
 
     if (!videosLoaded) {
-      (async () => {
-        try {
-          const videos = await invoke<VideoFile[]>("get_recent_videos");
-          recentVideos = videos;
-          cachedVideos = videos;
-          videosLoaded = true;
-
-          const progressData = await invoke<Record<string, WatchProgress>>("get_all_watch_progress");
-          watchProgressStore.loadAllProgress(progressData);
-        } catch (err) {
-          console.error("Failed to load recent videos:", err);
-        } finally {
-          loadingRecent = false;
-        }
-      })();
+      loadVideos();
     } else {
       recentVideos = cachedVideos;
       loadingRecent = false;

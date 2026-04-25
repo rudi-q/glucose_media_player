@@ -28,8 +28,10 @@
     Users,
     Star,
     Keyboard,
+    FolderOpen,
   } from "lucide-svelte";
   import Button from "$lib/components/Button.svelte";
+  import LibrarySettings from "$lib/components/LibrarySettings.svelte";
   import UpdateManager, {
     type UpdateManagerAPI,
   } from "$lib/components/UpdateManager.svelte";
@@ -301,6 +303,14 @@
           >
             <Cpu size={18} />
             <span>AI Settings</span>
+          </button>
+          <button
+            class="sidebar-tab"
+            class:active={selectedTab === "library"}
+            onclick={() => (selectedTab = "library")}
+          >
+            <FolderOpen size={18} />
+            <span>Library</span>
           </button>
           <button
             class="sidebar-tab"
@@ -721,6 +731,8 @@
                 </div>
               </div>
             </div>
+          {:else if selectedTab === "library"}
+            <LibrarySettings />
           {:else if selectedTab === "shortcuts"}
             <div class="settings-section">
               <div class="shortcuts-layout">

@@ -105,6 +105,82 @@ fn get_pip_constants() -> Result<PipWindowConfig, anyhow::Error> {
     Ok(constants.pip_window)
 }
 
+fn default_gallery_paths() -> Vec<String> {
+    let mut paths = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        for name in &["Videos", "Downloads", "Desktop", "Documents"] {
+            paths.push(home.join(name).to_string_lossy().to_string());
+        }
+    }
+    paths
+}
+
+#[tauri::command]
+fn get_gallery_paths() -> Result<Vec<String>, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let config_file = home.join(".glucose").join("config.json");
+
+    if !config_file.exists() {
+        return Ok(default_gallery_paths());
+    }
+
+    let content = fs::read_to_string(&config_file)
+        .map_err(|e| format!("Failed to read config: {}", e))?;
+    let config: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse config: {}", e))?;
+
+    if let Some(arr) = config.get("gallery_paths").and_then(|v| v.as_array()) {
+        let result: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        if !result.is_empty() {
+            return Ok(result);
+        }
+    }
+
+    Ok(default_gallery_paths())
+}
+
+#[tauri::command]
+fn save_gallery_paths(paths: Vec<String>) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let config_dir = home.join(".glucose");
+    let config_file = config_dir.join("config.json");
+
+    fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+
+    let mut config: serde_json::Value = if config_file.exists() {
+        let content = fs::read_to_string(&config_file)
+            .map_err(|e| format!("Failed to read config: {}", e))?;
+        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    config["gallery_paths"] = serde_json::json!(paths);
+
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(config_file, content)
+        .map_err(|e| format!("Failed to write config: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_folder_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let folder_path = app.dialog().file().blocking_pick_folder();
+
+    match folder_path {
+        Some(folder) => {
+            let path_buf = folder.into_path().map_err(|e| e.to_string())?;
+            Ok(Some(path_buf.to_string_lossy().to_string()))
+        }
+        None => Ok(None),
+    }
+}
+
 // Path sanitization function
 fn sanitize_path(path: &str) -> String {
     let mut clean_path = path.trim().to_string();
@@ -1778,11 +1854,43 @@ fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchPro
     Ok(progress_map)
 }
 
+fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
+    if depth == 0 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else { continue };
+        let path = entry.path();
+        if metadata.is_dir() {
+            scan_dir_for_media(&path, videos, depth - 1);
+        } else if metadata.is_file() {
+            let ext = match path.extension().and_then(|e| e.to_str()) {
+                Some(e) => e.to_lowercase(),
+                None => continue,
+            };
+            if !MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+                continue;
+            }
+            let Ok(modified) = metadata.modified() else { continue };
+            let Ok(mod_secs) = modified.duration_since(SystemTime::UNIX_EPOCH) else { continue };
+            videos.push(VideoFile {
+                path: path.to_string_lossy().to_string(),
+                name: name.to_string_lossy().to_string(),
+                size: metadata.len(),
+                modified: mod_secs.as_secs(),
+                duration: None,
+            });
+        }
+    }
+}
+
 #[tauri::command]
 fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
-    let mut videos = Vec::new();
-
-    // Check if ffprobe is available once at the start
     let ffprobe_available = create_hidden_command("ffprobe")
         .arg("-version")
         .output()
@@ -1793,78 +1901,26 @@ fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
         eprintln!("Warning: ffprobe not found in PATH. Video durations will not be extracted.");
     }
 
-    // Get common video directories
-    let mut search_dirs = Vec::new();
+    let search_dirs: Vec<std::path::PathBuf> = get_gallery_paths()
+        .unwrap_or_else(|_| default_gallery_paths())
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect();
 
-    if let Some(home) = dirs::home_dir() {
-        #[cfg(debug_assertions)]
-        println!("Home directory: {:?}", home);
-        search_dirs.push(home.join("Videos"));
-        search_dirs.push(home.join("Downloads"));
-        search_dirs.push(home.join("Desktop"));
-        search_dirs.push(home.join("Documents"));
+    let mut videos = Vec::new();
+    for dir in &search_dirs {
+        scan_dir_for_media(dir, &mut videos, 5);
     }
 
-    // Scan directories
-    for dir in &search_dirs {
-        #[cfg(debug_assertions)]
-        println!("Checking directory: {:?} (exists: {})", dir, dir.exists());
-        if dir.exists() {
-            #[cfg(debug_assertions)]
-            let mut dir_video_count = 0;
-            if let Ok(entries) = fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    if let Ok(metadata) = entry.metadata() {
-                        if metadata.is_file() {
-                            if let Some(ext) = entry.path().extension() {
-                                if let Some(ext_str) = ext.to_str() {
-                                    if MEDIA_EXTENSIONS.contains(&ext_str.to_lowercase().as_str()) {
-                                        if let Ok(modified) = metadata.modified() {
-                                            if let Ok(duration) =
-                                                modified.duration_since(SystemTime::UNIX_EPOCH)
-                                            {
-                                                let video_path =
-                                                    entry.path().to_string_lossy().to_string();
-                                                // Only try to get duration if ffprobe is available
-                                                let video_duration = if ffprobe_available {
-                                                    get_video_duration(&video_path)
-                                                } else {
-                                                    None
-                                                };
+    // Sort and cap BEFORE fetching durations so ffprobe only runs on the final set
+    videos.sort_by(|a, b| b.modified.cmp(&a.modified));
+    videos.truncate(100);
 
-                                                videos.push(VideoFile {
-                                                    path: video_path,
-                                                    name: entry
-                                                        .file_name()
-                                                        .to_string_lossy()
-                                                        .to_string(),
-                                                    size: metadata.len(),
-                                                    modified: duration.as_secs(),
-                                                    duration: video_duration,
-                                                });
-                                                #[cfg(debug_assertions)]
-                                                {
-                                                    dir_video_count += 1;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            #[cfg(debug_assertions)]
-            println!("Found {} videos in {:?}", dir_video_count, dir);
+    if ffprobe_available {
+        for video in &mut videos {
+            video.duration = get_video_duration(&video.path);
         }
     }
-
-    // Sort by modified time (most recent first)
-    videos.sort_by(|a, b| b.modified.cmp(&a.modified));
-
-    // Return top 20
-    videos.truncate(20);
 
     Ok(videos)
 }
@@ -1998,7 +2054,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_file_dialog,
+            open_folder_dialog,
             open_subtitle_dialog,
+            get_gallery_paths,
+            save_gallery_paths,
             convert_file_path,
             get_recent_videos,
             get_pending_file,
