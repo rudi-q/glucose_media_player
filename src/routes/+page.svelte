@@ -44,6 +44,51 @@
       : recentVideos
   );
 
+  type VideoGroup = { label: string | null; videos: { video: VideoFile; index: number }[] };
+
+  function getTimeGroup(timestampSecs: number): string {
+    if (timestampSecs === 0) return 'Older';
+    const date = new Date(timestampSecs * 1000);
+    const now = new Date();
+    const yr = now.getFullYear();
+    const mo = now.getMonth();
+    const dy = now.getDate();
+    if (date.getFullYear() === yr && date.getMonth() === mo && date.getDate() === dy) return 'Today';
+    const yesterday = new Date(now); yesterday.setDate(dy - 1);
+    if (date.getFullYear() === yesterday.getFullYear() && date.getMonth() === yesterday.getMonth() && date.getDate() === yesterday.getDate()) return 'Yesterday';
+    const nowSecs = Date.now() / 1000;
+    const daySecs = 86400;
+    if (timestampSecs >= nowSecs - 7 * daySecs) return 'This Week';
+    if (timestampSecs >= nowSecs - 14 * daySecs) return 'Last Week';
+    if (date.getFullYear() === yr && date.getMonth() === mo) return 'This Month';
+    const prevMo = mo === 0 ? 11 : mo - 1;
+    const prevMoYr = mo === 0 ? yr - 1 : yr;
+    if (date.getFullYear() === prevMoYr && date.getMonth() === prevMo) return 'Last Month';
+    if (date.getFullYear() === yr) return 'This Year';
+    if (date.getFullYear() === yr - 1) return 'Last Year';
+    return 'Older';
+  }
+
+  let groupedVideos = $derived.by((): VideoGroup[] => {
+    const order = ['Today', 'Yesterday', 'This Week', 'Last Week', 'This Month', 'Last Month', 'This Year', 'Last Year', 'Older'];
+    const buckets = new Map<string, VideoFile[]>();
+    for (const label of order) buckets.set(label, []);
+    for (const video of sortedVideos) {
+      const ts = sortBy === 'watched'
+        ? (watchProgressMap.get(video.path)?.last_watched ?? 0)
+        : video.modified;
+      buckets.get(getTimeGroup(ts))!.push(video);
+    }
+    const groups: VideoGroup[] = [];
+    for (const label of order) {
+      const vids = buckets.get(label)!;
+      if (vids.length > 0) {
+        groups.push({ label, videos: vids.map(video => ({ video, index: sortedVideos.indexOf(video) })) });
+      }
+    }
+    return groups;
+  });
+
   // Get context functions from layout
   const showSettings = getContext<() => void>('showSettings');
   
@@ -378,64 +423,70 @@
         </div>
       {:else}
         <div class="recent-section">
-          <h2>Media</h2>
-          <div class="video-grid">
-            {#each sortedVideos as video, index}
-              <button
-                class="video-card"
-                class:selected={selectedVideoIndex === index}
-                data-index={index}
-                onclick={() => loadVideo(video.path)}
-              >
-                <div class="video-thumbnail" class:audio-card={isAudio(video.path)}>
-                  {#if isAudio(video.path)}
-                    <div class="audio-thumb">
-                      <Music2 size={40} strokeWidth={1.2} />
-                    </div>
-                  {:else}
-                    {#await generateThumbnail(video.path)}
-                      <Play size={48} strokeWidth={1.5} />
-                    {:then thumbnail}
-                      {#if thumbnail}
-                        <img src={thumbnail} alt={video.name} class="thumbnail-img" />
+          {#each groupedVideos as group}
+            <div class="section-group">
+              {#if group.label}
+                <div class="section-header">{group.label}</div>
+              {/if}
+              <div class="video-grid">
+                {#each group.videos as { video, index }}
+                  <button
+                    class="video-card"
+                    class:selected={selectedVideoIndex === index}
+                    data-index={index}
+                    onclick={() => loadVideo(video.path)}
+                  >
+                    <div class="video-thumbnail" class:audio-card={isAudio(video.path)}>
+                      {#if isAudio(video.path)}
+                        <div class="audio-thumb">
+                          <Music2 size={40} strokeWidth={1.2} />
+                        </div>
                       {:else}
-                        <Play size={48} strokeWidth={1.5} />
+                        {#await generateThumbnail(video.path)}
+                          <Play size={48} strokeWidth={1.5} />
+                        {:then thumbnail}
+                          {#if thumbnail}
+                            <img src={thumbnail} alt={video.name} class="thumbnail-img" />
+                          {:else}
+                            <Play size={48} strokeWidth={1.5} />
+                          {/if}
+                        {/await}
                       {/if}
-                    {/await}
-                  {/if}
-                  <div class="play-overlay">
-                    <Play size={32} fill="white" stroke="none" />
-                  </div>
-                  {#if watchProgressMap.has(video.path)}
-                    {@const progress = watchProgressMap.get(video.path)}
-                    {@const progressPercent = progress && progress.duration > 0 ? (progress.current_time / progress.duration) * 100 : 0}
-                    {#if progressPercent > 0 && progressPercent < 100}
-                      <div class="video-progress-bar">
-                        <div class="video-progress-fill" style="width: {progressPercent}%"></div>
+                      <div class="play-overlay">
+                        <Play size={32} fill="white" stroke="none" />
                       </div>
-                    {/if}
-                  {/if}
-                  {#if video.is_cloud_only}
-                    <div class="cloud-badge" title="Not downloaded — stored in cloud">
-                      <Cloud size={13} />
+                      {#if watchProgressMap.has(video.path)}
+                        {@const progress = watchProgressMap.get(video.path)}
+                        {@const progressPercent = progress && progress.duration > 0 ? (progress.current_time / progress.duration) * 100 : 0}
+                        {#if progressPercent > 0 && progressPercent < 100}
+                          <div class="video-progress-bar">
+                            <div class="video-progress-fill" style="width: {progressPercent}%"></div>
+                          </div>
+                        {/if}
+                      {/if}
+                      {#if video.is_cloud_only}
+                        <div class="cloud-badge" title="Not downloaded — stored in cloud">
+                          <Cloud size={13} />
+                        </div>
+                      {/if}
                     </div>
-                  {/if}
-                </div>
-                <div class="video-info">
-                  <div class="video-name" title={video.name}>{video.name}</div>
-                  <div class="video-meta">
-                    {#if video.duration}
-                      <span class="video-duration">{formatDuration(video.duration)}</span>
-                      <span class="video-separator">•</span>
-                      <span class="video-remaining">{getRemainingTime(video.path, video.duration)}</span>
-                    {:else}
-                      <span>{(video.size / (1024 * 1024)).toFixed(1)} MB</span>
-                    {/if}
-                  </div>
-                </div>
-              </button>
-            {/each}
-          </div>
+                    <div class="video-info">
+                      <div class="video-name" title={video.name}>{video.name}</div>
+                      <div class="video-meta">
+                        {#if video.duration}
+                          <span class="video-duration">{formatDuration(video.duration)}</span>
+                          <span class="video-separator">•</span>
+                          <span class="video-remaining">{getRemainingTime(video.path, video.duration)}</span>
+                        {:else}
+                          <span>{(video.size / (1024 * 1024)).toFixed(1)} MB</span>
+                        {/if}
+                      </div>
+                    </div>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/each}
         </div>
       {/if}
     </div>
@@ -581,11 +632,23 @@
     font-size: 0.875rem;
   }
 
-  .recent-section h2 {
-    font-size: 1.25rem;
-    font-weight: 400;
-    margin-bottom: 1.5rem;
-    color: rgba(255, 255, 255, 0.9);
+  .section-group:not(:first-child) {
+    margin-top: 2.5rem;
+  }
+
+  .section-header {
+    position: sticky;
+    top: 6rem;
+    z-index: 5;
+    padding: 1.25rem 0 0.75rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    background: rgba(0, 0, 0, 0.9);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
   }
 
   .video-grid {
