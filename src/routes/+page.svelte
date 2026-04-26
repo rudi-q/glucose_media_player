@@ -4,7 +4,7 @@
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown, Volume2, VolumeX } from "lucide-svelte";
+  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown, Volume2, VolumeX, ListFilter } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { isAudio } from "$lib/utils/mediaType";
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
@@ -39,22 +39,45 @@
   );
   let showSortMenu = $state(false);
   let sortMenuPos = $state({ top: 0, right: 0 });
+
+  const AUDIO_EXTS = new Set(['mp3','flac','wav','aac','ogg','opus','m4a','aiff','wma']);
+  const _savedFilter = localStorage.getItem('glucose_filter');
+  let filterBy = $state<'all' | 'video' | 'audio'>(
+    _savedFilter === 'video' || _savedFilter === 'audio' ? _savedFilter : 'all'
+  );
+  let showFilterMenu = $state(false);
+  let filterMenuPos = $state({ top: 0, right: 0 });
+
   let libraryHeaderHeight = $state(96);
+
+  let filteredVideos = $derived(
+    filterBy === 'all'
+      ? recentVideos
+      : recentVideos.filter(v => {
+          const ext = v.path.split('.').pop()?.toLowerCase() ?? '';
+          return filterBy === 'audio' ? AUDIO_EXTS.has(ext) : !AUDIO_EXTS.has(ext);
+        })
+  );
 
   let sortedVideos = $derived(
     sortBy === 'watched'
-      ? [...recentVideos].sort((a, b) => {
+      ? [...filteredVideos].sort((a, b) => {
           const aTime = watchProgressMap.get(a.path)?.last_watched ?? 0;
           const bTime = watchProgressMap.get(b.path)?.last_watched ?? 0;
           return bTime - aTime;
         })
-      : recentVideos
+      : filteredVideos
   );
 
   $effect(() => {
     localStorage.setItem('glucose_sort', sortBy);
     // Reset keyboard focus when sort order changes (watching sortBy, not sortedVideos, to
     // avoid resetting on every duration update which also replaces the recentVideos array)
+    selectedVideoIndex = 0;
+  });
+
+  $effect(() => {
+    localStorage.setItem('glucose_filter', filterBy);
     selectedVideoIndex = 0;
   });
 
@@ -468,6 +491,15 @@
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     sortMenuPos = { top: rect.bottom + 8, right: window.innerWidth - rect.right };
     showSortMenu = true;
+    showFilterMenu = false;
+  }
+
+  function toggleFilterMenu(e: MouseEvent) {
+    if (showFilterMenu) { showFilterMenu = false; return; }
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    filterMenuPos = { top: rect.bottom + 8, right: window.innerWidth - rect.right };
+    showFilterMenu = true;
+    showSortMenu = false;
   }
 
   function handleGalleryContextMenu(e: MouseEvent) {
@@ -498,6 +530,9 @@
     }
     if (!target.closest('.sort-menu') && !target.closest('.sort-toggle')) {
       showSortMenu = false;
+    }
+    if (!target.closest('.filter-menu') && !target.closest('.filter-toggle')) {
+      showFilterMenu = false;
     }
   }
   
@@ -546,6 +581,9 @@
           <button class="sort-toggle" onclick={toggleSortMenu} title="Sort" class:sort-active={sortBy === 'watched'}>
             <ArrowUpDown size={15} />
           </button>
+          <button class="sort-toggle filter-toggle" onclick={toggleFilterMenu} title="Filter" class:sort-active={filterBy !== 'all'}>
+            <ListFilter size={15} />
+          </button>
           <Button variant="white" onclick={openFileDialog}>
             Open File
           </Button>
@@ -561,7 +599,7 @@
         <div class="empty-content">
           <Play size={64} strokeWidth={1.5} />
           <p>No recent videos found</p>
-          <p class="hint">Drop a video file or click Open Video above</p>
+          <p class="hint">Drop a file or click Open File above</p>
         </div>
       {:else}
         <div class="recent-section">
@@ -674,7 +712,7 @@
     >
       <button class="context-menu-item" onclick={() => { openFileDialog(); showGalleryContextMenu = false; }}>
         <FolderOpen size={16} />
-        <span>Open Video</span>
+        <span>Open File</span>
       </button>
       <button class="context-menu-item" onclick={() => { showSettings(); showGalleryContextMenu = false; }}>
         <Settings size={16} />
@@ -718,6 +756,21 @@
       </button>
       <button class="sort-option" class:active={sortBy === 'watched'} onclick={() => { sortBy = 'watched'; showSortMenu = false; }}>
         Last Watched
+      </button>
+    </div>
+  {/if}
+
+  {#if showFilterMenu}
+    <div class="sort-menu" style="top: {filterMenuPos.top}px; right: {filterMenuPos.right}px;">
+      <div class="sort-menu-label">Show</div>
+      <button class="sort-option" class:active={filterBy === 'all'} onclick={() => { filterBy = 'all'; showFilterMenu = false; }}>
+        All Files
+      </button>
+      <button class="sort-option" class:active={filterBy === 'video'} onclick={() => { filterBy = 'video'; showFilterMenu = false; }}>
+        Videos Only
+      </button>
+      <button class="sort-option" class:active={filterBy === 'audio'} onclick={() => { filterBy = 'audio'; showFilterMenu = false; }}>
+        Audio Only
       </button>
     </div>
   {/if}

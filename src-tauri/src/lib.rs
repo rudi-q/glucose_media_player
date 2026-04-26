@@ -219,11 +219,11 @@ fn sanitize_path(path: &str) -> String {
 async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
+    let all_exts: Vec<&str> = VIDEO_EXTENSIONS.iter().chain(AUDIO_EXTENSIONS.iter()).copied().collect();
     let file_path = app
         .dialog()
         .file()
-        .add_filter("Video Files", VIDEO_EXTENSIONS)
-        .add_filter("Audio Files", AUDIO_EXTENSIONS)
+        .add_filter("Media Files", &all_exts)
         .blocking_pick_file();
 
     match file_path {
