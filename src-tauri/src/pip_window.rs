@@ -95,17 +95,6 @@ pub(crate) fn enter_pip_mode(app_handle: AppHandle) -> Result<(), String> {
         .is_always_on_top()
         .map_err(|e| format!("Failed to get always-on-top state: {}", e))?;
 
-    if fullscreen {
-        window
-            .set_fullscreen(false)
-            .map_err(|e| format!("Failed to leave fullscreen before PiP: {}", e))?;
-    }
-    if maximized {
-        window
-            .unmaximize()
-            .map_err(|e| format!("Failed to unmaximize before PiP: {}", e))?;
-    }
-
     let work_area = work_area_for_window(&window);
     let saved_layout = load_saved_pip_layout()?;
     let fallback_size = PhysicalSize::new(config.width, config.height);
@@ -117,13 +106,61 @@ pub(crate) fn enter_pip_mode(app_handle: AppHandle) -> Result<(), String> {
         .map(|layout| PhysicalPosition::new(layout.x, layout.y))
         .unwrap_or_else(|| default_pip_position(pip_size, &work_area, &config));
     let pip_position = snap_and_clamp_position(pip_position, pip_size, &work_area, &config);
-
     let normal_min_size = PhysicalSize::new(config.normal_min_width, config.normal_min_height);
+
+    let mutate = || -> Result<(), String> {
+        if fullscreen {
+            window
+                .set_fullscreen(false)
+                .map_err(|e| format!("Failed to leave fullscreen before PiP: {}", e))?;
+        }
+        if maximized {
+            window
+                .unmaximize()
+                .map_err(|e| format!("Failed to unmaximize before PiP: {}", e))?;
+        }
+        window
+            .set_decorations(false)
+            .map_err(|e| format!("Failed to enable frameless PiP: {}", e))?;
+        window
+            .set_resizable(true)
+            .map_err(|e| format!("Failed to enable PiP resizing: {}", e))?;
+        window
+            .set_min_size(Some(PhysicalSize::new(config.min_width, config.min_height)))
+            .map_err(|e| format!("Failed to set PiP minimum size: {}", e))?;
+        window
+            .set_max_size(None::<PhysicalSize<u32>>)
+            .map_err(|e| format!("Failed to clear PiP maximum size: {}", e))?;
+        window
+            .set_size(pip_size)
+            .map_err(|e| format!("Failed to set PiP size: {}", e))?;
+        window
+            .set_position(pip_position)
+            .map_err(|e| format!("Failed to set PiP position: {}", e))?;
+        window
+            .set_always_on_top(true)
+            .map_err(|e| format!("Failed to set PiP always-on-top: {}", e))?;
+        Ok(())
+    };
+
+    if let Err(err) = mutate() {
+        let _ = window.set_always_on_top(always_on_top);
+        let _ = window.set_decorations(decorations_enabled);
+        let _ = window.set_resizable(resizable);
+        let _ = window.set_min_size(Some(normal_min_size));
+        let _ = window.set_size(normal_size);
+        let _ = window.set_position(normal_position);
+        if fullscreen {
+            let _ = window.set_fullscreen(true);
+        }
+        if maximized {
+            let _ = window.maximize();
+        }
+        return Err(err);
+    }
+
     {
         let mut state = WINDOW_STATE.lock().unwrap_or_else(|e| e.into_inner());
-        if state.is_some() {
-            return Ok(());
-        }
         *state = Some(WindowState {
             size: normal_size,
             position: normal_position,
@@ -136,28 +173,6 @@ pub(crate) fn enter_pip_mode(app_handle: AppHandle) -> Result<(), String> {
             pip_size,
         });
     }
-
-    window
-        .set_decorations(false)
-        .map_err(|e| format!("Failed to enable frameless PiP: {}", e))?;
-    window
-        .set_resizable(true)
-        .map_err(|e| format!("Failed to enable PiP resizing: {}", e))?;
-    window
-        .set_min_size(Some(PhysicalSize::new(config.min_width, config.min_height)))
-        .map_err(|e| format!("Failed to set PiP minimum size: {}", e))?;
-    window
-        .set_max_size(None::<PhysicalSize<u32>>)
-        .map_err(|e| format!("Failed to clear PiP maximum size: {}", e))?;
-    window
-        .set_size(pip_size)
-        .map_err(|e| format!("Failed to set PiP size: {}", e))?;
-    window
-        .set_position(pip_position)
-        .map_err(|e| format!("Failed to set PiP position: {}", e))?;
-    window
-        .set_always_on_top(true)
-        .map_err(|e| format!("Failed to set PiP always-on-top: {}", e))?;
 
     #[cfg(debug_assertions)]
     println!("Entered PiP mode at {:?} {:?}", pip_position, pip_size);
