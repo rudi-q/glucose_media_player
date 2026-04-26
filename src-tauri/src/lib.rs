@@ -1974,6 +1974,9 @@ async fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
             scan_dir_for_media(dir, &mut videos, 6);
         }
 
+        let mut seen = std::collections::HashSet::new();
+        videos.retain(|v| seen.insert(v.path.clone()));
+
         videos.sort_by(|a, b| b.modified.cmp(&a.modified));
         videos.truncate(100);
 
@@ -2117,8 +2120,12 @@ pub fn run() {
                     #[cfg(debug_assertions)]
                     println!("Processing argument: {} -> {}", arg, clean_arg);
 
-                    let lower = clean_arg.to_lowercase();
-                    if VIDEO_EXTENSIONS.iter().chain(AUDIO_EXTENSIONS.iter()).any(|ext| lower.ends_with(&format!(".{}", ext))) {
+                    let is_media = std::path::Path::new(&clean_arg)
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .map(|ext| is_media_extension(&ext.to_lowercase()))
+                        .unwrap_or(false);
+                    if is_media {
                         video_files.push(clean_arg.clone());
                         #[cfg(debug_assertions)]
                         println!("Found video file: {}", clean_arg);

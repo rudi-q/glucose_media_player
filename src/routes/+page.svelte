@@ -244,6 +244,16 @@
   }
   
   function handleKeyPress(e: KeyboardEvent) {
+    const target = e.target as HTMLElement;
+    const tag = target.tagName;
+    if (
+      tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' ||
+      tag === 'TEXTAREA' || tag === 'SELECT' ||
+      target.getAttribute('role') === 'button' ||
+      target.isContentEditable ||
+      (target.tabIndex > 0 && tag !== 'DIV')
+    ) return;
+
     // Close app
     if (e.key === "Escape") {
       e.preventDefault();

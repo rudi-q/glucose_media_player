@@ -16,7 +16,6 @@
   // DOM refs
   let audioEl: HTMLAudioElement;
   let canvas: HTMLCanvasElement;
-  let containerEl: HTMLDivElement;
 
   // Web Audio API
   let audioCtx: AudioContext | null = null;
@@ -271,12 +270,14 @@
       ctx.lineTo(Math.cos(angleR) * (innerR + h), Math.sin(angleR) * (innerR + h));
       ctx.stroke();
 
-      // Left side (mirrored)
-      let angleL = -i * barAngle - Math.PI / 2;
-      ctx.beginPath();
-      ctx.moveTo(Math.cos(angleL) * innerR, Math.sin(angleL) * innerR);
-      ctx.lineTo(Math.cos(angleL) * (innerR + h), Math.sin(angleL) * (innerR + h));
-      ctx.stroke();
+      // Left side (mirrored) — skip i === 0 to avoid doubling the top-center bar
+      if (i > 0) {
+        let angleL = -i * barAngle - Math.PI / 2;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(angleL) * innerR, Math.sin(angleL) * innerR);
+        ctx.lineTo(Math.cos(angleL) * (innerR + h), Math.sin(angleL) * (innerR + h));
+        ctx.stroke();
+      }
     }
     ctx.shadowBlur = 0; // Reset blur
 
@@ -663,7 +664,7 @@
   </button>
 
   <!-- Visualizer fills the entire screen -->
-  <div class="viz-area" bind:this={containerEl}>
+  <div class="viz-area">
     <canvas bind:this={canvas}></canvas>
 
     <!-- Song title overlay (centered perfectly in the inner circle) -->
