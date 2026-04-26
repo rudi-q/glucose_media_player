@@ -1893,9 +1893,9 @@
 <style>
   .player-container.video-player {
     user-select: none;
-    background: rgba(0, 0, 0, 0.85);
-    backdrop-filter: blur(40px);
-    -webkit-backdrop-filter: blur(40px);
+    background: var(--surface-overlay);
+    backdrop-filter: blur(var(--blur-lg));
+    -webkit-backdrop-filter: blur(var(--blur-lg));
   }
 
   .player-container:has(.video-container.fullscreen) {
@@ -2324,10 +2324,10 @@
     left: 50%;
     transform: translateX(-50%);
     margin-bottom: 0.5rem;
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface-panel);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 1rem 0.75rem;
     display: flex;
@@ -2509,10 +2509,10 @@
     bottom: 100%;
     right: 0;
     margin-bottom: 0.5rem;
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface-panel);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 0.75rem 0;
     min-width: 260px;
@@ -2531,10 +2531,10 @@
     bottom: 100%;
     right: 0;
     margin-bottom: 0.5rem;
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface-panel);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 0.75rem 0;
     min-width: 220px;
@@ -2596,9 +2596,9 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.85);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: var(--surface-overlay);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2702,10 +2702,10 @@
   /* Context Menu */
   .context-menu {
     position: fixed;
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface-panel);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 0.5rem 0;
     min-width: 200px;
@@ -2758,10 +2758,10 @@
     left: 100%;
     top: 0;
     margin-left: 0.5rem;
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface-panel);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 0.5rem 0;
     min-width: 180px;

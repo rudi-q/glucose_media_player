@@ -1,6 +1,32 @@
 <script lang="ts">
   import "$lib/styles/global.css";
+  import theme from "$lib/theme.json";
   import { invoke } from "@tauri-apps/api/core";
+
+  // Inject design tokens as CSS custom properties (no SSR, document is available)
+  {
+    const tokens: Record<string, string> = {
+      "--blur-sm":                 theme.blur.sm,
+      "--blur-md":                 theme.blur.md,
+      "--blur-lg":                 theme.blur.lg,
+      "--surface-gallery":         theme.surface.gallery,
+      "--surface-overlay":         theme.surface.overlay,
+      "--surface-panel":           theme.surface.panel,
+      "--surface-badge":           theme.surface.badge,
+      "--color-accent":            theme.color.accent,
+      "--color-accent-subtle":     theme.color.accentSubtle,
+      "--color-accent-border":     theme.color.accentBorder,
+      "--color-border":            theme.color.border,
+      "--color-border-strong":     theme.color.borderStrong,
+      "--color-interactive":       theme.color.interactive,
+      "--color-interactive-hover": theme.color.interactiveHover,
+      "--color-text":              theme.color.text,
+      "--color-text-muted":        theme.color.textMuted,
+      "--color-text-subtle":       theme.color.textSubtle,
+    };
+    const root = document.documentElement;
+    for (const [k, v] of Object.entries(tokens)) root.style.setProperty(k, v);
+  }
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, setContext } from "svelte";

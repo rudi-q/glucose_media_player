@@ -986,10 +986,10 @@
     left: 50%;
     transform: translateX(-50%);
     margin-bottom: 0.5rem;
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface-panel);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 1rem 0.75rem;
     display: flex;

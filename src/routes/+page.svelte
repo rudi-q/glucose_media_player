@@ -30,8 +30,9 @@
   let cardContextMenuPosition = $state({ x: 0, y: 0 });
   let cardContextMenuVideo = $state<VideoFile | null>(null);
   let isDragging = $state(false);
+  const _savedSort = localStorage.getItem('glucose_sort');
   let sortBy = $state<'added' | 'watched'>(
-    (localStorage.getItem('glucose_sort') as 'added' | 'watched') ?? 'added'
+    _savedSort === 'added' || _savedSort === 'watched' ? _savedSort : 'added'
   );
   let showSortMenu = $state(false);
   let sortMenuPos = $state({ top: 0, right: 0 });
@@ -291,7 +292,8 @@
   }
   
   async function generateThumbnail(videoPath: string, seekTime?: number): Promise<string> {
-    const cacheKey = seekTime ? `${videoPath}@${Math.floor(seekTime)}` : videoPath;
+    const hasSeek = seekTime != null && seekTime > 0;
+    const cacheKey = hasSeek ? `${videoPath}@${Math.floor(seekTime!)}` : videoPath;
     if (thumbnailCache.has(cacheKey)) {
       return thumbnailCache.get(cacheKey)!;
     }
@@ -311,7 +313,7 @@
       video.crossOrigin = 'anonymous';
 
       video.onloadedmetadata = () => {
-        video.currentTime = seekTime ?? Math.min(1, video.duration * 0.1);
+        video.currentTime = hasSeek ? seekTime! : Math.min(1, video.duration * 0.1);
       };
       
       video.onseeked = () => {
@@ -581,7 +583,7 @@
   }
 
   .player-container:has(.empty-state) {
-    background: rgb(8, 8, 11);
+    background: var(--surface-gallery);
   }
 
   .empty-state {
@@ -733,16 +735,16 @@
     position: absolute;
     top: 0.5rem;
     right: 0.5rem;
-    background: rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: var(--surface-badge);
+    backdrop-filter: blur(var(--blur-sm));
+    -webkit-backdrop-filter: blur(var(--blur-sm));
+    border: 1px solid var(--color-border);
     border-radius: 6px;
     padding: 0.25rem;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(255, 255, 255, 0.75);
+    color: var(--color-text-muted);
     z-index: 3;
   }
 
@@ -840,10 +842,10 @@
   /* Context Menu */
   .context-menu {
     position: fixed;
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface-panel);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 0.5rem 0;
     min-width: 200px;
@@ -856,7 +858,7 @@
     padding: 0.75rem 1rem;
     background: none;
     border: none;
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--color-text);
     text-align: left;
     cursor: pointer;
     font-size: 0.875rem;
@@ -865,14 +867,14 @@
     align-items: center;
     gap: 0.75rem;
   }
-  
+
   .context-menu-item:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--color-interactive-hover);
   }
 
   .context-menu-separator {
     height: 1px;
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--color-interactive);
     margin: 0.25rem 0;
   }
 
@@ -882,32 +884,32 @@
     justify-content: center;
     width: 34px;
     height: 34px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-interactive);
+    border: 1px solid var(--color-border);
     border-radius: 8px;
-    color: rgba(255, 255, 255, 0.6);
+    color: var(--color-text-muted);
     cursor: pointer;
     transition: all 0.2s ease;
     flex-shrink: 0;
   }
 
   .sort-toggle:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--color-interactive-hover);
     color: #fff;
   }
 
   .sort-toggle.sort-active {
-    background: rgba(192, 101, 182, 0.15);
-    border-color: rgba(192, 101, 182, 0.35);
-    color: #c065b6;
+    background: var(--color-accent-subtle);
+    border-color: var(--color-accent-border);
+    color: var(--color-accent);
   }
 
   .sort-menu {
     position: fixed;
-    background: rgba(18, 18, 18, 0.97);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface-panel);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    border: 1px solid var(--color-border);
     border-radius: 10px;
     padding: 0.375rem;
     min-width: 170px;
