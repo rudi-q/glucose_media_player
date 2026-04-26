@@ -725,6 +725,43 @@
     gap: 0.75rem;
   }
 
+  .header-buttons :global(.btn) {
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    letter-spacing: 0.025em;
+    font-weight: 500;
+  }
+
+  /* Open Video — prominent frosted glass */
+  .header-buttons :global(.white) {
+    background: rgba(255, 255, 255, 0.11);
+    border-color: rgba(255, 255, 255, 0.22);
+    color: #fff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    transform: none;
+  }
+
+  .header-buttons :global(.white:hover:not(:disabled)) {
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.38);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 4px 24px rgba(255, 255, 255, 0.07);
+    transform: translateY(-1px);
+  }
+
+  /* Settings — subdued ghost */
+  .header-buttons :global(.secondary) {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.09);
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .header-buttons :global(.secondary:hover:not(:disabled)) {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.16);
+    color: rgba(255, 255, 255, 0.9);
+    transform: translateY(-1px);
+  }
+
   .loading {
     text-align: center;
     padding: 4rem 0;
