@@ -17,8 +17,8 @@ export interface StopTransitionOptions extends PlaybackTransitionOptions {
   resetTime?: boolean;
 }
 
-const DEFAULT_FADE_IN_MS = 450;
-const DEFAULT_FADE_OUT_MS = 350;
+const DEFAULT_FADE_IN_MS = 800;
+const DEFAULT_FADE_OUT_MS = 800;
 const MIN_VOLUME_DELTA = 0.001;
 
 function clampVolume(volume: number) {
