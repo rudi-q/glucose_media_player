@@ -687,9 +687,11 @@
                           </button>
                         {/if}
                       {/if}
-                      <div class="play-overlay">
-                        <Play size={32} fill="white" stroke="none" />
-                      </div>
+                      {#if previewPlayingPath !== video.path}
+                        <div class="play-overlay">
+                          <Play size={32} fill="white" stroke="none" />
+                        </div>
+                      {/if}
                       {#if watchProgressMap.has(video.path)}
                         {@const progress = watchProgressMap.get(video.path)}
                         {@const progressPercent = progress && progress.duration > 0 ? (progress.current_time / progress.duration) * 100 : 0}
