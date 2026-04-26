@@ -24,12 +24,21 @@
     setupStore,
     type SetupStatus,
   } from "$lib/stores/appStore";
+  import PipWindowFrame from "$lib/components/PipWindowFrame.svelte";
   import {
     watchProgressStore,
     type WatchProgress,
   } from "$lib/stores/watchProgressStore";
   import type { VideoInfo } from "$lib/types/video";
   import { createFadedMediaPlayback } from "$lib/utils/fadedMediaPlayback";
+  import {
+    applyPipVideoMode,
+    createPipWindowSettler,
+    enterNativePipWindow,
+    exitNativePipWindow,
+    resetPipBodyBackground,
+    savePipWindowLayout,
+  } from "$lib/utils/pipWindow";
   import { loadSubtitleFile, convertSrtToVtt } from "$lib/utils/subtitles";
   import {
     formatTime,
@@ -60,6 +69,7 @@
   let showCloseButton = $state(false);
   let hideCloseButtonTimeout: ReturnType<typeof setTimeout>;
   type ViewMode = "cinematic" | "fullscreen" | "pip";
+  type NonPipViewMode = Exclude<ViewMode, "pip">;
   let viewMode = $state<ViewMode>("cinematic");
 
   // Scrubbing/seeking state
@@ -185,12 +195,7 @@
         if (data.initialMode === 'fullscreen') {
           viewMode = 'fullscreen';
         } else if (data.initialMode === 'pip') {
-          try {
-            await invoke('enter_pip_mode');
-            viewMode = 'pip';
-          } catch (err) {
-            console.error('Failed to enter PiP mode:', err);
-          }
+          await enterPipMode();
         }
 
         // Auto-detect subtitles: external file first, then embedded tracks.
@@ -288,6 +293,7 @@
             }
           },
         ),
+        createPipWindowSettler(() => viewMode === "pip"),
       ]);
 
       for (const r of results) {
@@ -352,6 +358,10 @@
       }
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
+      if (viewMode === "pip") {
+        savePipWindowLayout().catch(() => {});
+        resetPipBodyBackground();
+      }
       // Clear volume menu auto-hide timer
       clearTimeout(volumeMenuAutoTimer);
       clearTimeout(hideControlsTimeout);
@@ -567,12 +577,20 @@
       clearInterval(progressSaveInterval);
     }
 
+    if (viewMode === "pip") {
+      await exitPipMode("cinematic");
+    }
+
     await goto("/");
   }
 
   async function closeApp() {
     if (videoElement && isPlaying) {
       await fadedPlayback.pause();
+    }
+
+    if (viewMode === "pip") {
+      await savePipWindowLayout().catch(() => {});
     }
 
     try {
@@ -711,63 +729,9 @@
 
   async function togglePipMode() {
     if (viewMode === "pip") {
-      // Exit PiP mode - return to cinematic
-      try {
-        await invoke("exit_pip_mode");
-
-        // Change mode immediately
-        viewMode = "cinematic";
-
-        // Restore transparent background
-        document.body.style.background = "transparent";
-
-        // Wait for window resize, then restore video
-        await new Promise((resolve) => setTimeout(resolve, 150));
-
-        // Remove PiP video styling
-        if (videoElement) {
-          const wasPlaying = isPlaying;
-          videoElement.classList.remove("pip-video-active");
-          videoElement.style.cssText = ""; // Clear any inline styles
-          void videoElement.offsetHeight; // Force reflow
-
-          // Restore playback state
-          if (wasPlaying) {
-            fadedPlayback.play({ fade: false }).catch(() => {});
-          }
-        }
-      } catch (err) {
-        console.error("Failed to exit PiP mode:", err);
-      }
+      await exitPipMode("cinematic");
     } else {
-      // Enter PiP mode from any other mode
-      try {
-        await invoke("enter_pip_mode");
-
-        // Change mode immediately
-        viewMode = "pip";
-
-        // Force solid background for PiP (transparency causes black screen)
-        document.body.style.background = "#000";
-
-        // Wait a moment for window resize, then trigger video reflow
-        await new Promise((resolve) => setTimeout(resolve, 150));
-
-        if (videoElement) {
-          const wasPlaying = isPlaying;
-
-          // Apply PiP video styling via CSS class
-          videoElement.classList.add("pip-video-active");
-          void videoElement.offsetHeight; // Force reflow
-
-          // Restore playback state
-          if (wasPlaying) {
-            fadedPlayback.play({ fade: false }).catch(() => {});
-          }
-        }
-      } catch (err) {
-        console.error("Failed to enter PiP mode:", err);
-      }
+      await enterPipMode();
     }
   }
 
@@ -776,76 +740,47 @@
     const currentIndex = modes.indexOf(viewMode);
     const nextMode = modes[(currentIndex + 1) % modes.length];
 
-    // Handle PiP transitions
     if (viewMode === "pip") {
-      // Exiting PiP mode
-      try {
-        await invoke("exit_pip_mode");
-
-        // Change mode immediately
-        viewMode = nextMode;
-
-        // Restore transparent background
-        document.body.style.background = "transparent";
-
-        // Wait for window resize, then restore video
-        await new Promise((resolve) => setTimeout(resolve, 150));
-
-        // Remove PiP video styling
-        if (videoElement) {
-          const wasPlaying = isPlaying;
-          videoElement.classList.remove("pip-video-active");
-          videoElement.style.cssText = ""; // Clear any inline styles
-          void videoElement.offsetHeight; // Force reflow
-
-          // Restore playback state
-          if (wasPlaying) {
-            fadedPlayback.play({ fade: false }).catch(() => {});
-          }
-        }
-
-        return; // Exit early since we already set viewMode
-      } catch (err) {
-        console.error("Failed to exit PiP mode:", err);
-        return;
-      }
+      await exitPipMode(nextMode as NonPipViewMode);
+      return;
     }
 
     if (nextMode === "pip") {
-      // Entering PiP mode
-      try {
-        await invoke("enter_pip_mode");
-
-        // Change mode immediately
-        viewMode = nextMode;
-
-        // Force solid background for PiP (transparency causes black screen)
-        document.body.style.background = "#000";
-
-        // Wait a moment for window resize, then trigger video reflow
-        await new Promise((resolve) => setTimeout(resolve, 150));
-
-        if (videoElement) {
-          const wasPlaying = isPlaying;
-
-          // Apply PiP video styling via CSS class (consistent with exit paths)
-          videoElement.classList.add("pip-video-active");
-          void videoElement.offsetHeight; // Force reflow
-
-          // Restore playback state
-          if (wasPlaying) {
-            fadedPlayback.play({ fade: false }).catch(() => {});
-          }
-        }
-
-        return; // Exit early since we already set viewMode
-      } catch (err) {
-        console.error("Failed to enter PiP mode:", err);
-        return; // Don't change mode if entering PiP failed
-      }
+      await enterPipMode();
+      return;
     }
 
     viewMode = nextMode;
+  }
+
+  async function enterPipMode() {
+    try {
+      const wasPlaying = isPlaying;
+      await enterNativePipWindow();
+      viewMode = "pip";
+      await applyPipVideoMode(videoElement, true, wasPlaying, () =>
+        fadedPlayback.play({ fade: false }),
+      );
+      return true;
+    } catch (err) {
+      console.error("Failed to enter PiP mode:", err);
+      return false;
+    }
+  }
+
+  async function exitPipMode(nextMode: NonPipViewMode) {
+    try {
+      const wasPlaying = isPlaying;
+      await exitNativePipWindow();
+      viewMode = nextMode;
+      await applyPipVideoMode(videoElement, false, wasPlaying, () =>
+        fadedPlayback.play({ fade: false }),
+      );
+      return true;
+    } catch (err) {
+      console.error("Failed to exit PiP mode:", err);
+      return false;
+    }
   }
 
   function handleMainContainerMouseMove() {
@@ -1389,13 +1324,8 @@
     </button>
   {/if}
 
-  <!-- Draggable header for PIP mode -->
   {#if viewMode === "pip"}
-    <div class="pip-drag-header">
-      <button class="pip-close-button" onclick={closeApp} title="Close (Esc)">
-        <X size={14} />
-      </button>
-    </div>
+    <PipWindowFrame onClose={closeApp} />
   {/if}
 
   <div
@@ -1940,52 +1870,6 @@
     -webkit-backdrop-filter: none;
     border-radius: 8px;
     overflow: hidden;
-  }
-
-  /* PIP mode draggable header */
-  .pip-drag-header {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 32px;
-    background: rgba(0, 0, 0, 0.7);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px 8px 0 0;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    padding: 0 8px;
-    z-index: 200;
-    -webkit-app-region: drag;
-    cursor: move;
-    opacity: 0;
-    transition: opacity 0.2s ease;
-  }
-
-  .player-container:hover .pip-drag-header {
-    opacity: 1;
-  }
-
-  .pip-close-button {
-    width: 24px;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 4px;
-    color: rgba(255, 255, 255, 0.7);
-    cursor: pointer;
-    transition: all 0.2s ease;
-    -webkit-app-region: no-drag;
-  }
-
-  .pip-close-button:hover {
-    background: rgba(255, 255, 255, 0.2);
-    border-color: rgba(255, 255, 255, 0.3);
-    color: #fff;
   }
 
   .video-container {
