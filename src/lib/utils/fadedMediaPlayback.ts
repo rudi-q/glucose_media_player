@@ -37,6 +37,10 @@ export function createFadedMediaPlayback(options: FadedMediaPlaybackOptions) {
   let transitionId = 0;
   let requestedPlaying = false;
   let activeFadeTarget: number | null = null;
+  // Resolver for the currently in-flight fadeTo() Promise (if any).
+  // cancelFade() must call this before clearing the animation frame so the
+  // Promise is always settled rather than left permanently pending.
+  let pendingFadeResolve: ((value: boolean) => void) | null = null;
 
   const fadeInMs = options.fadeInMs ?? DEFAULT_FADE_IN_MS;
   const fadeOutMs = options.fadeOutMs ?? DEFAULT_FADE_OUT_MS;
@@ -67,19 +71,28 @@ export function createFadedMediaPlayback(options: FadedMediaPlaybackOptions) {
   }
 
   function cancelFade() {
+    // Settle any pending fadeTo() Promise before cancelling the frame so
+    // callers that await fadeTo() are never left with an unresolved Promise.
+    const resolve = pendingFadeResolve;
+    pendingFadeResolve = null;
     transitionId += 1;
     activeFadeTarget = null;
     clearAnimationFrame();
+    resolve?.(false);
   }
 
   function fadeTo(targetVolume: number, durationMs: number) {
     const target = clampVolume(targetVolume);
     const start = getOutputVolume();
 
+    // Settle any previous in-flight fade before starting a new one.
+    const prevResolve = pendingFadeResolve;
+    pendingFadeResolve = null;
     transitionId += 1;
     const id = transitionId;
     activeFadeTarget = target;
     clearAnimationFrame();
+    prevResolve?.(false);
 
     if (durationMs <= 0 || Math.abs(start - target) <= MIN_VOLUME_DELTA) {
       setOutputVolume(target);
@@ -88,11 +101,12 @@ export function createFadedMediaPlayback(options: FadedMediaPlaybackOptions) {
     }
 
     return new Promise<boolean>((resolve) => {
+      pendingFadeResolve = resolve;
       const startedAt = performance.now();
 
       const step = (now: number) => {
         if (id !== transitionId) {
-          resolve(false);
+          // cancelFade() already resolved the Promise; nothing left to do.
           return;
         }
 
@@ -107,6 +121,7 @@ export function createFadedMediaPlayback(options: FadedMediaPlaybackOptions) {
 
         animationFrame = null;
         activeFadeTarget = null;
+        pendingFadeResolve = null;
         resolve(true);
       };
 

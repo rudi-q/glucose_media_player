@@ -185,18 +185,21 @@ fn sanitize_path(path: &str) -> String {
 async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let all_exts: Vec<&str> = VIDEO_EXTENSIONS
+    let all_exts: Vec<&'static str> = VIDEO_EXTENSIONS
         .iter()
         .chain(AUDIO_EXTENSIONS.iter())
         .copied()
         .collect();
-    let file_path = app
-        .dialog()
-        .file()
-        .add_filter("Media Files", &all_exts)
-        .blocking_pick_file();
+    let result = tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Media Files", &all_exts)
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
-    match file_path {
+    match result {
         Some(file) => {
             let path_buf = file.into_path().map_err(|e| e.to_string())?;
             let path = path_buf.to_string_lossy().to_string();
@@ -210,13 +213,16 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, Strin
 async fn open_subtitle_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let file_path = app
-        .dialog()
-        .file()
-        .add_filter("Subtitle Files", &["srt", "vtt", "ass", "ssa", "sub"])
-        .blocking_pick_file();
+    let result = tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Subtitle Files", &["srt", "vtt", "ass", "ssa", "sub"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
-    match file_path {
+    match result {
         Some(file) => {
             let path_buf = file.into_path().map_err(|e| e.to_string())?;
             let path = path_buf.to_string_lossy().to_string();

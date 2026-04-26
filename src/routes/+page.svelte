@@ -14,9 +14,14 @@
   import { formatDuration } from "$lib/utils/time";
   import Button from "$lib/components/Button.svelte";
   
-  // Module-level cache that persists across component remounts
+  // Per-instance cache that persists across remounts within the same component
+  // lifetime. These are intentionally instance-scoped (not module-level); the
+  // cache is valid as long as the component has not been destroyed.
   let cachedVideos: VideoFile[] = [];
   let videosLoaded = false;
+  // Set to true during the unmount cleanup path so any in-flight createThumbnail
+  // jobs know they must not store or expose new blob URLs.
+  let destroyed = false;
   
   let recentVideos = $state<VideoFile[]>([]);
   let loadingRecent = $state(true);
@@ -153,7 +158,7 @@
       recentVideos = videos;
       cachedVideos = videos;
       videosLoaded = true;
-      // Fetch durations in the background — gallery is already visible at this point
+      // Fetch durations in the background â€” gallery is already visible at this point
       invoke("fetch_video_durations", { paths: videos.filter(v => !v.is_cloud_only).map(v => v.path) }).catch(console.error);
     } catch (err) {
       console.error("Failed to load recent videos:", err);
@@ -213,6 +218,7 @@
 
     return () => {
       cancelled = true;
+      destroyed = true;
       if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
       if (previewFadeOutTimer !== null) { clearTimeout(previewFadeOutTimer); previewFadeOutTimer = null; }
       clearThumbnailCache();
@@ -224,9 +230,10 @@
 
   function onCardHoverEnter(video: VideoFile) {
     if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
-    if (previewFadeOutTimer !== null) { clearTimeout(previewFadeOutTimer); previewFadeOutTimer = null; }
     const progress = watchProgressMap.get(video.path);
     if (!progress || !(progress.current_time > 0) || video.is_cloud_only || isAudio(video.path)) return;
+    // Only cancel the fade-out timer when we know we're activating a new eligible preview.
+    if (previewFadeOutTimer !== null) { clearTimeout(previewFadeOutTimer); previewFadeOutTimer = null; }
     if (hoveredPath === video.path) {
       previewActivePath = video.path;
       return;
@@ -585,9 +592,17 @@
               settle('');
               return;
             }
-            const thumbnail = URL.createObjectURL(blob);
-            thumbnailCache.set(cacheKey, thumbnail);
-            settle(thumbnail);
+            const url = URL.createObjectURL(blob);
+            // Guard against post-unmount blob URL leaks: if the component was
+            // destroyed while this async job was in flight, immediately revoke
+            // the URL we just created and resolve with an empty string.
+            if (destroyed) {
+              URL.revokeObjectURL(url);
+              settle('');
+              return;
+            }
+            thumbnailCache.set(cacheKey, url);
+            settle(url);
           }, 'image/jpeg', 0.7);
         } catch (err) {
           if (import.meta.env.DEV) {
@@ -858,7 +873,7 @@
                         {/if}
                       {/if}
                       {#if video.is_cloud_only}
-                        <div class="cloud-badge" title="Not downloaded — stored in cloud">
+                        <div class="cloud-badge" title="Not downloaded â€” stored in cloud">
                           <Cloud size={13} />
                         </div>
                       {/if}
@@ -868,7 +883,7 @@
                       <div class="video-meta">
                         {#if video.duration}
                           <span class="video-duration">{formatDuration(video.duration)}</span>
-                          <span class="video-separator">•</span>
+                          <span class="video-separator">â€¢</span>
                           <span class="video-remaining">{getRemainingTime(video.path, video.duration)}</span>
                         {:else}
                           <span>{(video.size / (1024 * 1024)).toFixed(1)} MB</span>
@@ -1044,7 +1059,7 @@
     font-weight: 500;
   }
 
-  /* Open Video — prominent frosted glass */
+  /* Open Video â€” prominent frosted glass */
   .header-buttons :global(.white) {
     background: rgba(255, 255, 255, 0.11);
     border-color: rgba(255, 255, 255, 0.22);
@@ -1060,7 +1075,7 @@
     transform: translateY(-1px);
   }
 
-  /* Settings — subdued ghost */
+  /* Settings â€” subdued ghost */
   .header-buttons :global(.secondary) {
     background: rgba(255, 255, 255, 0.04);
     border-color: rgba(255, 255, 255, 0.09);

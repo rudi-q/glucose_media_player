@@ -1902,8 +1902,9 @@
     inset: -60px;
     z-index: 0;
     pointer-events: none;
-    filter: blur(3840px) brightness(0.05);
-    opacity: 0.9;
+    filter: blur(60px) brightness(0.12);
+    opacity: 0.92;
+    transform: scale(1.04);
   }
 
   .background-video {
