@@ -10,6 +10,7 @@
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
   import { galleryRefreshStore } from "$lib/stores/appStore";
   import type { VideoFile } from "$lib/types/video";
+  import { createFadedMediaPlayback } from "$lib/utils/fadedMediaPlayback";
   import { formatDuration } from "$lib/utils/time";
   import Button from "$lib/components/Button.svelte";
   
@@ -36,9 +37,11 @@
   let isDragging = $state(false);
   let logoReady = $state(false);
   let hoveredPath = $state<string | null>(null);
+  let previewActivePath = $state<string | null>(null);
   let previewPlayingPath = $state<string | null>(null);
   let previewTransformOrigin = $state('center center');
   let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+  let previewFadeOutTimer: ReturnType<typeof setTimeout> | null = null;
   const _previewMutedStored = localStorage.getItem('glucose_preview_muted');
   let previewMuted = $state(_previewMutedStored === null ? true : _previewMutedStored === 'true');
   const _savedSort = localStorage.getItem('glucose_sort');
@@ -211,6 +214,7 @@
     return () => {
       cancelled = true;
       if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
+      if (previewFadeOutTimer !== null) { clearTimeout(previewFadeOutTimer); previewFadeOutTimer = null; }
       clearThumbnailCache();
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
@@ -220,41 +224,81 @@
 
   function onCardHoverEnter(video: VideoFile) {
     if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
+    if (previewFadeOutTimer !== null) { clearTimeout(previewFadeOutTimer); previewFadeOutTimer = null; }
     const progress = watchProgressMap.get(video.path);
     if (!progress || !(progress.current_time > 0) || video.is_cloud_only || isAudio(video.path)) return;
-    hoverTimer = setTimeout(() => { hoveredPath = video.path; }, 400);
+    if (hoveredPath === video.path) {
+      previewActivePath = video.path;
+      return;
+    }
+    hoverTimer = setTimeout(() => {
+      hoveredPath = video.path;
+      previewActivePath = video.path;
+    }, 400);
   }
 
   function onCardHoverLeave() {
     if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
-    hoveredPath = null;
-    previewPlayingPath = null;
-    previewTransformOrigin = 'center center';
+    previewActivePath = null;
+    if (previewFadeOutTimer !== null) { clearTimeout(previewFadeOutTimer); previewFadeOutTimer = null; }
+
+    const fadingPath = hoveredPath;
+    if (!fadingPath) {
+      previewPlayingPath = null;
+      previewTransformOrigin = 'center center';
+      return;
+    }
+
+    previewFadeOutTimer = setTimeout(() => {
+      if (hoveredPath === fadingPath && previewActivePath === null) {
+        hoveredPath = null;
+        previewPlayingPath = null;
+        previewTransformOrigin = 'center center';
+      }
+      previewFadeOutTimer = null;
+    }, 800);
   }
 
-  function hoverPreview(node: HTMLVideoElement, startTime: number) {
+  type HoverPreviewOptions = {
+    startTime: number;
+    active: boolean;
+    muted: boolean;
+  };
+
+  function hoverPreview(node: HTMLVideoElement, options: HoverPreviewOptions) {
+    let currentOptions = options;
     let aborted = false;
     const safetyTimeout = setTimeout(() => { aborted = true; abort(); }, 4000);
     const seekEpsilon = 0.01;
+    const fadedPlayback = createFadedMediaPlayback({
+      getMediaElement: () => node,
+      getTargetVolume: () => currentOptions.muted ? 0 : 1,
+      getOutputVolume: () => node.volume,
+      setOutputVolume: (value) => {
+        node.volume = Math.min(1, Math.max(0, value));
+      },
+    });
 
     function abort() {
+      fadedPlayback.destroy();
       node.pause();
       try { node.removeAttribute('src'); node.load(); } catch {}
     }
 
     function startPlayback() {
-      if (aborted) return;
+      if (aborted || !currentOptions.active) return;
       clearTimeout(safetyTimeout);
-      node.play().catch(() => {});
+      node.muted = currentOptions.muted;
+      fadedPlayback.play().catch(() => {});
     }
 
     function onMeta() {
       if (aborted) return;
-      if (Math.abs(node.currentTime - startTime) < seekEpsilon) {
+      if (Math.abs(node.currentTime - currentOptions.startTime) < seekEpsilon) {
         startPlayback();
         return;
       }
-      try { node.currentTime = startTime; } catch { startPlayback(); }
+      try { node.currentTime = currentOptions.startTime; } catch { startPlayback(); }
     }
 
     function onSeeked() {
@@ -271,6 +315,22 @@
     node.addEventListener('error', () => { aborted = true; clearTimeout(safetyTimeout); abort(); }, { once: true });
 
     return {
+      update(nextOptions: HoverPreviewOptions) {
+        const wasActive = currentOptions.active;
+        currentOptions = nextOptions;
+        node.muted = currentOptions.muted;
+
+        if (aborted) return;
+
+        if (wasActive && !currentOptions.active) {
+          clearTimeout(safetyTimeout);
+          fadedPlayback.pause().catch(() => {});
+        } else if (!wasActive && currentOptions.active && node.readyState >= 2) {
+          startPlayback();
+        } else {
+          fadedPlayback.syncOutputVolume();
+        }
+      },
       destroy() {
         aborted = true;
         clearTimeout(safetyTimeout);
@@ -749,7 +809,11 @@
                             src={convertFileSrc(video.path)}
                             playsinline
                             bind:muted={previewMuted}
-                            use:hoverPreview={startTime}
+                            use:hoverPreview={{
+                              startTime,
+                              active: previewActivePath === video.path,
+                              muted: previewMuted,
+                            }}
                             onplaying={(e) => {
                               const card = (e.currentTarget as HTMLElement).closest('.video-card') as HTMLElement | null;
                               if (card) {

@@ -5,6 +5,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { appSettings } from '$lib/stores/appStore';
   import { watchProgressStore } from '$lib/stores/watchProgressStore';
+  import { createFadedMediaPlayback } from '$lib/utils/fadedMediaPlayback';
   import { formatDuration } from '$lib/utils/time';
   import { X, Play, Pause, Volume1, Volume2, VolumeX, Home } from 'lucide-svelte';
 
@@ -69,6 +70,30 @@
   let volumeMenuAutoTimer: ReturnType<typeof setTimeout>;
   let previousAudioPath = '';
 
+  function getAudioOutputVolume() {
+    if (gainNode) return gainNode.gain.value;
+    return audioEl?.volume ?? 0;
+  }
+
+  function setAudioOutputVolume(value: number) {
+    const safeValue = Math.max(0, value);
+    if (gainNode) {
+      gainNode.gain.value = safeValue;
+    } else if (audioEl) {
+      audioEl.volume = Math.min(1, safeValue);
+    }
+  }
+
+  const fadedPlayback = createFadedMediaPlayback({
+    getMediaElement: () => audioEl,
+    getTargetVolume: () => (isMuted ? 0 : volume),
+    getOutputVolume: getAudioOutputVolume,
+    setOutputVolume: setAudioOutputVolume,
+    onPlayingChange: (playing) => {
+      isPlaying = playing;
+    },
+  });
+
   // ── Audio context setup ─────────────────────────────────────────────────────
 
   function setupAudio() {
@@ -82,12 +107,13 @@
       analyser.smoothingTimeConstant = 0.8;
 
       gainNode = audioCtx.createGain();
-      gainNode.gain.value = isMuted ? 0 : volume;
+      gainNode.gain.value = isPlaying && !isMuted ? volume : 0;
 
       src.connect(analyser);
       analyser.connect(gainNode);
       gainNode.connect(audioCtx.destination);
       audioEl.volume = 1;
+      audioEl.muted = isMuted;
       sourceConnected = true;
 
       smoothed = new Float32Array(analyser.frequencyBinCount);
@@ -336,12 +362,12 @@
   async function togglePlay() {
     if (!audioEl) return;
     if (isPlaying) {
-      audioEl.pause();
+      await fadedPlayback.pause();
     } else {
       setupAudio(); // must run first — creates audioCtx
       if (audioCtx?.state === 'suspended') await audioCtx.resume();
       try {
-        await audioEl.play();
+        await fadedPlayback.play();
       } catch (err) {
         console.log('Play prevented:', err);
       }
@@ -349,12 +375,10 @@
   }
 
   function applyGain() {
-    if (gainNode) {
-      gainNode.gain.value = isMuted ? 0 : volume;
-    } else if (audioEl) {
-      audioEl.volume = Math.min(1, isMuted ? 0 : volume);
+    if (audioEl) {
       audioEl.muted = isMuted;
     }
+    fadedPlayback.syncOutputVolume();
     appSettings.updateVolume(volume);
     appSettings.updateMuted(isMuted);
   }
@@ -469,8 +493,8 @@
     }
   }
 
-  function goBack() {
-    if (isPlaying) audioEl?.pause();
+  async function goBack() {
+    if (isPlaying) await fadedPlayback.pause();
     goto('/');
   }
 
@@ -597,11 +621,13 @@
       window.removeEventListener('resize', resizeCanvas);
       window.removeEventListener('keydown', handleKey);
       clearInterval(progressSaveInterval);
+      fadedPlayback.destroy();
     };
   });
 
   onDestroy(() => {
     cancelAnimationFrame(animId);
+    fadedPlayback.destroy();
     audioCtx?.close();
     clearTimeout(hideCloseBtnTimer);
     clearTimeout(hideControlsTimer);
@@ -610,6 +636,10 @@
   });
 
   async function closeApp() {
+    if (isPlaying) {
+      await fadedPlayback.pause();
+    }
+
     const pos = audioEl?.currentTime ?? currentTime;
     if (duration > 0 && pos > 2) {
       await invoke('save_watch_progress', {
@@ -768,7 +798,7 @@
         bind:this={audioEl}
         src={convertFileSrc(audioPath)}
         crossorigin="anonymous"
-        onplay={() => { isPlaying = true; audioCtx?.resume(); showControls(); }}
+        onplay={() => { audioCtx?.resume(); showControls(); }}
         onpause={() => { isPlaying = false; saveProgress(); }}
         ontimeupdate={() => { if (!isScrubbing) currentTime = audioEl.currentTime; }}
         onloadedmetadata={async () => {
@@ -780,9 +810,9 @@
     if (pendingRestoreTime !== null) {
       audioEl.currentTime = pendingRestoreTime;
     }
-    audioEl.play().catch((err) => console.log('Auto-play prevented:', err));
+    fadedPlayback.play().catch((err) => console.log('Auto-play prevented:', err));
   }}
-        onended={() => { isPlaying = false; saveProgress(); }}
+        onended={() => { fadedPlayback.pauseNow(); saveProgress(); }}
         preload="metadata"
 ></audio>
 
