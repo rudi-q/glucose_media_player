@@ -131,9 +131,7 @@ fn get_gallery_paths() -> Result<Vec<String>, String> {
 
     if let Some(arr) = config.get("gallery_paths").and_then(|v| v.as_array()) {
         let result: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-        if !result.is_empty() {
-            return Ok(result);
-        }
+        return Ok(result);
     }
 
     Ok(default_gallery_paths())
@@ -170,9 +168,13 @@ fn save_gallery_paths(paths: Vec<String>) -> Result<(), String> {
 async fn open_folder_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let folder_path = app.dialog().file().blocking_pick_folder();
+    let result = tokio::task::spawn_blocking(move || {
+        app.dialog().file().blocking_pick_folder()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
-    match folder_path {
+    match result {
         Some(folder) => {
             let path_buf = folder.into_path().map_err(|e| e.to_string())?;
             Ok(Some(path_buf.to_string_lossy().to_string()))
@@ -686,6 +688,10 @@ fn is_cloud_only_file(metadata: &fs::Metadata) -> bool {
 #[cfg(not(target_os = "windows"))]
 fn is_cloud_only_file(_metadata: &fs::Metadata) -> bool {
     false
+}
+
+fn is_cloud_only_path(path: &str) -> bool {
+    fs::metadata(path).map(|m| is_cloud_only_file(&m)).unwrap_or(false)
 }
 
 #[derive(Serialize, Clone)]
@@ -1881,11 +1887,15 @@ fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
         if name.to_string_lossy().starts_with('.') {
             continue;
         }
-        let Ok(metadata) = entry.metadata() else { continue };
+        let Ok(file_type) = entry.file_type() else { continue };
+        // Skip symlinks: avoids loops for directories and duplicates for files
+        if file_type.is_symlink() {
+            continue;
+        }
         let path = entry.path();
-        if metadata.is_dir() {
+        if file_type.is_dir() {
             scan_dir_for_media(&path, videos, depth - 1);
-        } else if metadata.is_file() {
+        } else if file_type.is_file() {
             let ext = match path.extension().and_then(|e| e.to_str()) {
                 Some(e) => e.to_lowercase(),
                 None => continue,
@@ -1893,6 +1903,8 @@ fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
             if !MEDIA_EXTENSIONS.contains(&ext.as_str()) {
                 continue;
             }
+            // Fetch metadata only after confirming it's a regular file
+            let Ok(metadata) = entry.metadata() else { continue };
             let Ok(modified) = metadata.modified() else { continue };
             let Ok(mod_secs) = modified.duration_since(SystemTime::UNIX_EPOCH) else { continue };
             videos.push(VideoFile {
@@ -1908,22 +1920,26 @@ fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
 }
 
 #[tauri::command]
-fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
-    let search_dirs: Vec<std::path::PathBuf> = get_gallery_paths()
-        .unwrap_or_else(|_| default_gallery_paths())
-        .into_iter()
-        .map(std::path::PathBuf::from)
-        .collect();
+async fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
+    tokio::task::spawn_blocking(|| {
+        let search_dirs: Vec<std::path::PathBuf> = get_gallery_paths()
+            .unwrap_or_else(|_| default_gallery_paths())
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
 
-    let mut videos = Vec::new();
-    for dir in &search_dirs {
-        scan_dir_for_media(dir, &mut videos, 5);
-    }
+        let mut videos = Vec::new();
+        for dir in &search_dirs {
+            scan_dir_for_media(dir, &mut videos, 6);
+        }
 
-    videos.sort_by(|a, b| b.modified.cmp(&a.modified));
-    videos.truncate(100);
+        videos.sort_by(|a, b| b.modified.cmp(&a.modified));
+        videos.truncate(100);
 
-    Ok(videos)
+        Ok(videos)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize, Clone)]
@@ -1946,6 +1962,9 @@ async fn fetch_video_durations(app_handle: tauri::AppHandle, paths: Vec<String>)
         }
 
         for path in paths {
+            if is_cloud_only_path(&path) {
+                continue;
+            }
             let duration = get_video_duration(&path);
             let _ = app_handle.emit("video-duration-ready", VideoDurationUpdate { path, duration });
         }

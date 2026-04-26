@@ -45,6 +45,13 @@
       : recentVideos
   );
 
+  $effect(() => {
+    // Reset keyboard focus when sort order changes (watching sortBy, not sortedVideos, to
+    // avoid resetting on every duration update which also replaces the recentVideos array)
+    void sortBy;
+    selectedVideoIndex = 0;
+  });
+
   type VideoGroup = { label: string | null; videos: { video: VideoFile; index: number }[] };
 
   function getTimeGroup(timestampSecs: number): string {
@@ -72,19 +79,19 @@
 
   let groupedVideos = $derived.by((): VideoGroup[] => {
     const order = ['Today', 'Yesterday', 'This Week', 'Last Week', 'This Month', 'Last Month', 'This Year', 'Last Year', 'Older'];
-    const buckets = new Map<string, VideoFile[]>();
+    const buckets = new Map<string, { video: VideoFile; index: number }[]>();
     for (const label of order) buckets.set(label, []);
-    for (const video of sortedVideos) {
+    sortedVideos.forEach((video, index) => {
       const ts = sortBy === 'watched'
         ? (watchProgressMap.get(video.path)?.last_watched ?? 0)
         : video.modified;
-      buckets.get(getTimeGroup(ts))!.push(video);
-    }
+      buckets.get(getTimeGroup(ts))!.push({ video, index });
+    });
     const groups: VideoGroup[] = [];
     for (const label of order) {
       const vids = buckets.get(label)!;
       if (vids.length > 0) {
-        groups.push({ label, videos: vids.map(video => ({ video, index: sortedVideos.indexOf(video) })) });
+        groups.push({ label, videos: vids });
       }
     }
     return groups;
@@ -103,7 +110,7 @@
       const progressData = await invoke<Record<string, WatchProgress>>("get_all_watch_progress");
       watchProgressStore.loadAllProgress(progressData);
       // Fetch durations in the background — gallery is already visible at this point
-      invoke("fetch_video_durations", { paths: videos.map(v => v.path) }).catch(console.error);
+      invoke("fetch_video_durations", { paths: videos.filter(v => !v.is_cloud_only).map(v => v.path) }).catch(console.error);
     } catch (err) {
       console.error("Failed to load recent videos:", err);
     } finally {
@@ -124,25 +131,30 @@
     document.addEventListener("click", handleClickOutside);
 
     let unlistenDuration: (() => void) | undefined;
-    listen<{ path: string; duration: number | null }>("video-duration-ready", (event) => {
-      const { path, duration } = event.payload;
-      if (duration !== null) {
-        recentVideos = recentVideos.map(v => v.path === path ? { ...v, duration } : v);
-        cachedVideos = cachedVideos.map(v => v.path === path ? { ...v, duration } : v);
-      }
-    }).then(fn => { unlistenDuration = fn; });
 
-    if (!videosLoaded) {
-      loadVideos();
-    } else {
-      recentVideos = cachedVideos;
-      loadingRecent = false;
-      // Re-fetch durations for any cached videos that are still missing them
-      const missing = cachedVideos.filter(v => !v.duration).map(v => v.path);
-      if (missing.length > 0) {
-        invoke("fetch_video_durations", { paths: missing }).catch(console.error);
+    // Await listener registration before triggering any duration fetches so no
+    // "video-duration-ready" events are dropped between invoke and handler setup
+    (async () => {
+      unlistenDuration = await listen<{ path: string; duration: number | null }>("video-duration-ready", (event) => {
+        const { path, duration } = event.payload;
+        if (duration !== null) {
+          recentVideos = recentVideos.map(v => v.path === path ? { ...v, duration } : v);
+          cachedVideos = cachedVideos.map(v => v.path === path ? { ...v, duration } : v);
+        }
+      });
+
+      if (!videosLoaded) {
+        loadVideos();
+      } else {
+        recentVideos = cachedVideos;
+        loadingRecent = false;
+        // Re-fetch durations for any cached videos that are still missing them
+        const missing = cachedVideos.filter(v => !v.duration && !v.is_cloud_only).map(v => v.path);
+        if (missing.length > 0) {
+          invoke("fetch_video_durations", { paths: missing }).catch(console.error);
+        }
       }
-    }
+    })();
 
     return () => {
       document.removeEventListener("keydown", handleKeyPress);

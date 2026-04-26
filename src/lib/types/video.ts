@@ -3,8 +3,9 @@
  * @property {string} path - Absolute filesystem path to the video file
  * @property {string} name - Filename (e.g., "video.mp4")
  * @property {number} size - File size in bytes
- * @property {number} modified - Last modified timestamp in epoch milliseconds
+ * @property {number} modified - Last modified timestamp in seconds since epoch (multiply by 1000 for Date)
  * @property {number} [duration] - Video duration in seconds (optional)
+ * @property {boolean} is_cloud_only - true if the file is a cloud-only placeholder (not locally materialized)
  */
 export interface VideoFile {
 	path: string;

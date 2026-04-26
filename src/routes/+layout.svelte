@@ -57,7 +57,7 @@
   let downloadProgress = $state(0);
   let downloadMessage = $state("");
   let isCheckingForUpdates = $state(false);
-  let selectedTab = $state("ai"); // 'ai' | 'shortcuts' | 'updates' | 'community' | 'about'
+  let selectedTab = $state("ai"); // 'ai' | 'library' | 'shortcuts' | 'updates' | 'community' | 'about'
   let modelsExpanded = $state(false);
 
   // Update manager

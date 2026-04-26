@@ -18,26 +18,39 @@
     }
   });
 
+  // Normalize for dedup comparison only (case-insensitive on Windows, no trailing slash)
+  function normalizePath(p: string): string {
+    return p.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '');
+  }
+
   async function addFolder() {
     const folder = await invoke<string | null>("open_folder_dialog");
-    if (folder && !paths.includes(folder)) {
-      paths = [...paths, folder];
+    if (!folder) return;
+    if (paths.some(p => normalizePath(p) === normalizePath(folder))) return;
+    const prev = paths;
+    paths = [...paths, folder];
+    try {
       await save();
+    } catch (err) {
+      paths = prev;
+      console.error("Failed to add folder:", err);
     }
   }
 
   async function removeFolder(path: string) {
+    const prev = paths;
     paths = paths.filter((p) => p !== path);
-    await save();
+    try {
+      await save();
+    } catch (err) {
+      paths = prev;
+      console.error("Failed to remove folder:", err);
+    }
   }
 
   async function save() {
-    try {
-      await invoke("save_gallery_paths", { paths });
-      galleryRefreshStore.refresh();
-    } catch (err) {
-      console.error("Failed to save gallery paths:", err);
-    }
+    await invoke("save_gallery_paths", { paths });
+    galleryRefreshStore.refresh();
   }
 </script>
 
@@ -64,7 +77,7 @@
     <div class="state-msg">No locations configured.</div>
   {:else}
     <div class="path-list">
-      {#each paths as path}
+      {#each paths as path (path)}
         <div class="path-row">
           <FolderOpen size={16} class="path-icon" />
           <span class="path-text" title={path}>{path}</span>
