@@ -7,6 +7,8 @@
 
   let paths = $state<string[]>([]);
   let loading = $state(true);
+  let saveError = $state<string | null>(null);
+  let saveErrorTimer: ReturnType<typeof setTimeout>;
 
   onMount(async () => {
     try {
@@ -17,6 +19,12 @@
       loading = false;
     }
   });
+
+  function showSaveError(msg: string) {
+    saveError = msg;
+    clearTimeout(saveErrorTimer);
+    saveErrorTimer = setTimeout(() => { saveError = null; }, 4000);
+  }
 
   // Normalize for dedup comparison only (case-insensitive on Windows, no trailing slash)
   function normalizePath(p: string): string {
@@ -33,7 +41,7 @@
       await save();
     } catch (err) {
       paths = prev;
-      console.error("Failed to add folder:", err);
+      showSaveError(`Failed to add folder: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -44,7 +52,7 @@
       await save();
     } catch (err) {
       paths = prev;
-      console.error("Failed to remove folder:", err);
+      showSaveError(`Failed to remove folder: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -70,6 +78,10 @@
       <Plus size={14} /> Add Folder
     </Button>
   </div>
+
+  {#if saveError}
+    <div class="save-error">{saveError}</div>
+  {/if}
 
   {#if loading}
     <div class="state-msg">Loading…</div>
@@ -183,5 +195,15 @@
     padding: 2rem;
     color: rgba(255, 255, 255, 0.35);
     font-size: 0.875rem;
+  }
+
+  .save-error {
+    padding: 0.5rem 0.75rem;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 6px;
+    font-size: 0.8125rem;
+    color: rgba(239, 68, 68, 0.9);
+    margin-bottom: 0.75rem;
   }
 </style>

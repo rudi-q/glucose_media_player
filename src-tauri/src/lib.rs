@@ -15,11 +15,9 @@ const VIDEO_EXTENSIONS: &[&str] = &[
 const AUDIO_EXTENSIONS: &[&str] = &[
     "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "aiff", "wma",
 ];
-/// All media extensions recognised by the app (video + audio).
-const MEDIA_EXTENSIONS: &[&str] = &[
-    "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
-    "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "aiff", "wma",
-];
+fn is_media_extension(ext: &str) -> bool {
+    VIDEO_EXTENSIONS.contains(&ext) || AUDIO_EXTENSIONS.contains(&ext)
+}
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use tauri::RunEvent;
 use tauri::{Emitter, Manager};
@@ -74,6 +72,9 @@ struct WindowState {
 }
 
 static WINDOW_STATE: Mutex<Option<WindowState>> = Mutex::new(None);
+
+// Serializes all config.json read-modify-write operations to prevent lost updates
+static CONFIG_MUTEX: Mutex<()> = Mutex::new(());
 
 // Configuration constants
 const MAX_FILE_LOADING_ATTEMPTS: u32 = 30;
@@ -146,6 +147,8 @@ fn save_gallery_paths(paths: Vec<String>) -> Result<(), String> {
     fs::create_dir_all(&config_dir)
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
 
+    let _guard = CONFIG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
     let mut config: serde_json::Value = if config_file.exists() {
         let content = fs::read_to_string(&config_file)
             .map_err(|e| format!("Failed to read config: {}", e))?;
@@ -158,8 +161,11 @@ fn save_gallery_paths(paths: Vec<String>) -> Result<(), String> {
 
     let content = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
-    fs::write(config_file, content)
-        .map_err(|e| format!("Failed to write config: {}", e))?;
+    let temp_file = config_file.with_extension("json.tmp");
+    fs::write(&temp_file, &content)
+        .map_err(|e| format!("Failed to write temp config: {}", e))?;
+    fs::rename(&temp_file, &config_file)
+        .map_err(|e| format!("Failed to replace config: {}", e))?;
 
     Ok(())
 }
@@ -694,6 +700,18 @@ fn is_cloud_only_path(path: &str) -> bool {
     fs::metadata(path).map(|m| is_cloud_only_file(&m)).unwrap_or(false)
 }
 
+#[cfg(target_os = "windows")]
+fn is_windows_hidden(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_windows_hidden(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
 #[derive(Serialize, Clone)]
 struct SubtitleGenerationProgress {
     stage: String,
@@ -1113,11 +1131,11 @@ fn save_setup_completed(completed: bool) -> Result<(), String> {
     let config_dir = home.join(".glucose");
     let config_file = config_dir.join("config.json");
 
-    // Create config directory if it doesn't exist
     fs::create_dir_all(&config_dir)
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
 
-    // Load existing config or create new
+    let _guard = CONFIG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
     let mut config: serde_json::Value = if config_file.exists() {
         let content = fs::read_to_string(&config_file)
             .map_err(|e| format!("Failed to read config: {}", e))?;
@@ -1126,14 +1144,15 @@ fn save_setup_completed(completed: bool) -> Result<(), String> {
         serde_json::json!({})
     };
 
-    // Update setup_completed field
     config["setup_completed"] = serde_json::json!(completed);
 
-    // Save config
     let content = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
-
-    fs::write(config_file, content).map_err(|e| format!("Failed to write config: {}", e))?;
+    let temp_file = config_file.with_extension("json.tmp");
+    fs::write(&temp_file, &content)
+        .map_err(|e| format!("Failed to write temp config: {}", e))?;
+    fs::rename(&temp_file, &config_file)
+        .map_err(|e| format!("Failed to replace config: {}", e))?;
 
     Ok(())
 }
@@ -1894,17 +1913,25 @@ fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
         }
         let path = entry.path();
         if file_type.is_dir() {
+            // Skip Windows hidden directories (e.g. system/app folders)
+            #[cfg(target_os = "windows")]
+            if entry.metadata().map(|m| is_windows_hidden(&m)).unwrap_or(false) {
+                continue;
+            }
             scan_dir_for_media(&path, videos, depth - 1);
         } else if file_type.is_file() {
             let ext = match path.extension().and_then(|e| e.to_str()) {
                 Some(e) => e.to_lowercase(),
                 None => continue,
             };
-            if !MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+            if !is_media_extension(&ext) {
                 continue;
             }
             // Fetch metadata only after confirming it's a regular file
             let Ok(metadata) = entry.metadata() else { continue };
+            if is_windows_hidden(&metadata) {
+                continue;
+            }
             let Ok(modified) = metadata.modified() else { continue };
             let Ok(mod_secs) = modified.duration_since(SystemTime::UNIX_EPOCH) else { continue };
             videos.push(VideoFile {
@@ -2077,13 +2104,10 @@ pub fn run() {
                     println!("Processing argument: {} -> {}", arg, clean_arg);
 
                     let lower = clean_arg.to_lowercase();
-                    for ext in MEDIA_EXTENSIONS {
-                        if lower.ends_with(&format!(".{}", ext)) {
-                            video_files.push(clean_arg.clone());
-                            #[cfg(debug_assertions)]
-                            println!("Found video file: {}", clean_arg);
-                            break;
-                        }
+                    if VIDEO_EXTENSIONS.iter().chain(AUDIO_EXTENSIONS.iter()).any(|ext| lower.ends_with(&format!(".{}", ext))) {
+                        video_files.push(clean_arg.clone());
+                        #[cfg(debug_assertions)]
+                        println!("Found video file: {}", clean_arg);
                     }
                 }
 
@@ -2165,16 +2189,13 @@ pub fn run() {
                             println!("Decoded path: {}", decoded_path);
 
                             let lower = decoded_path.to_lowercase();
-                            for ext in MEDIA_EXTENSIONS {
-                                if lower.ends_with(&format!(".{}", ext)) {
-                                    video_files.push(decoded_path.to_string());
-                                    #[cfg(debug_assertions)]
-                                    println!(
-                                        "Found video file from opened event: {}",
-                                        decoded_path
-                                    );
-                                    break;
-                                }
+                            if VIDEO_EXTENSIONS.iter().chain(AUDIO_EXTENSIONS.iter()).any(|ext| lower.ends_with(&format!(".{}", ext))) {
+                                video_files.push(decoded_path.to_string());
+                                #[cfg(debug_assertions)]
+                                println!(
+                                    "Found video file from opened event: {}",
+                                    decoded_path
+                                );
                             }
                         }
                     }

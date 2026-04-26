@@ -120,6 +120,7 @@
 
   $effect(() => {
     if ($galleryRefreshStore > 0) {
+      selectedVideoIndex = 0;
       videosLoaded = false;
       cachedVideos = [];
       loadVideos();
@@ -442,7 +443,7 @@
                 <div class="section-header" style="top: calc({libraryHeaderHeight}px - 1.5rem)">{group.label}</div>
               {/if}
               <div class="video-grid">
-                {#each group.videos as { video, index }}
+                {#each group.videos as { video, index } (video.path)}
                   <button
                     class="video-card"
                     class:selected={selectedVideoIndex === index}
