@@ -4,7 +4,7 @@
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown } from "lucide-svelte";
+  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown, Volume2, VolumeX } from "lucide-svelte";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { isAudio } from "$lib/utils/mediaType";
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
@@ -30,6 +30,9 @@
   let cardContextMenuPosition = $state({ x: 0, y: 0 });
   let cardContextMenuVideo = $state<VideoFile | null>(null);
   let isDragging = $state(false);
+  let hoveredPath = $state<string | null>(null);
+  let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+  let previewMuted = $state(localStorage.getItem('glucose_preview_muted') === 'true');
   const _savedSort = localStorage.getItem('glucose_sort');
   let sortBy = $state<'added' | 'watched'>(
     _savedSort === 'added' || _savedSort === 'watched' ? _savedSort : 'added'
@@ -53,6 +56,10 @@
     // Reset keyboard focus when sort order changes (watching sortBy, not sortedVideos, to
     // avoid resetting on every duration update which also replaces the recentVideos array)
     selectedVideoIndex = 0;
+  });
+
+  $effect(() => {
+    localStorage.setItem('glucose_preview_muted', String(previewMuted));
   });
 
   type VideoGroup = { label: string | null; videos: { video: VideoFile; index: number }[] };
@@ -170,11 +177,61 @@
 
     return () => {
       cancelled = true;
+      if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
       unlistenDuration?.();
     };
   });
+
+  function onCardHoverEnter(video: VideoFile) {
+    const progress = watchProgressMap.get(video.path);
+    if (!progress || !(progress.current_time > 0) || video.is_cloud_only || isAudio(video.path)) return;
+    hoverTimer = setTimeout(() => { hoveredPath = video.path; }, 400);
+  }
+
+  function onCardHoverLeave() {
+    if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
+    hoveredPath = null;
+  }
+
+  function hoverPreview(node: HTMLVideoElement, startTime: number) {
+    let aborted = false;
+    const safetyTimeout = setTimeout(() => { aborted = true; abort(); }, 4000);
+
+    function abort() {
+      node.pause();
+      try { node.removeAttribute('src'); node.load(); } catch {}
+    }
+
+    function onMeta() {
+      if (aborted) return;
+      try { node.currentTime = startTime; } catch {}
+    }
+
+    function onSeeked() {
+      if (aborted) return;
+      clearTimeout(safetyTimeout);
+      node.play().catch(() => {});
+    }
+
+    function onPlaying() {
+      if (!aborted) node.classList.add('playing');
+    }
+
+    node.addEventListener('loadedmetadata', onMeta, { once: true });
+    node.addEventListener('seeked', onSeeked, { once: true });
+    node.addEventListener('playing', onPlaying, { once: true });
+    node.addEventListener('error', () => { aborted = true; }, { once: true });
+
+    return {
+      destroy() {
+        aborted = true;
+        clearTimeout(safetyTimeout);
+        abort();
+      }
+    };
+  }
   
   function handleKeyPress(e: KeyboardEvent) {
     // Close app
@@ -463,6 +520,8 @@
                     class:selected={selectedVideoIndex === index}
                     data-index={index}
                     onclick={() => loadVideo(video.path)}
+                    onmouseenter={() => onCardHoverEnter(video)}
+                    onmouseleave={onCardHoverLeave}
                   >
                     <div class="video-thumbnail" class:audio-card={isAudio(video.path)}>
                       {#if isAudio(video.path)}
@@ -479,6 +538,33 @@
                             <Play size={48} strokeWidth={1.5} />
                           {/if}
                         {/await}
+                        {#if hoveredPath === video.path}
+                          {@const progress = watchProgressMap.get(video.path)!}
+                          {@const lookback = Math.max(20, (progress.duration || 0) * 0.005)}
+                          {@const startTime = Math.max(0, progress.current_time - lookback)}
+                          <!-- svelte-ignore a11y_media_has_caption -->
+                          <video
+                            class="hover-preview"
+                            src={convertFileSrc(video.path)}
+                            playsinline
+                            bind:muted={previewMuted}
+                            use:hoverPreview={startTime}
+                          ></video>
+                          <div
+                            class="preview-mute-btn"
+                            role="button"
+                            tabindex="0"
+                            onclick={(e) => { e.stopPropagation(); previewMuted = !previewMuted; }}
+                            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); previewMuted = !previewMuted; } }}
+                            title={previewMuted ? 'Unmute preview' : 'Mute preview'}
+                          >
+                            {#if previewMuted}
+                              <VolumeX size={13} />
+                            {:else}
+                              <Volume2 size={13} />
+                            {/if}
+                          </div>
+                        {/if}
                       {/if}
                       <div class="play-overlay">
                         <Play size={32} fill="white" stroke="none" />
@@ -583,7 +669,12 @@
   }
 
   .player-container:has(.empty-state) {
-    background: var(--surface-gallery);
+    background:
+      radial-gradient(ellipse at 25% 75%, rgba(35, 15, 45, 0.5) 0%, transparent 55%),
+      radial-gradient(ellipse at 75% 25%, rgba(10, 20, 45, 0.4) 0%, transparent 55%),
+      var(--surface-gallery);
+    backdrop-filter: blur(var(--blur-lg));
+    -webkit-backdrop-filter: blur(var(--blur-lg));
   }
 
   .empty-state {
@@ -753,6 +844,47 @@
     height: 100%;
     object-fit: contain;
     background: rgba(0, 0, 0, 0.3);
+  }
+
+  .hover-preview {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+  }
+
+  .hover-preview:global(.playing) {
+    opacity: 1;
+  }
+
+  .preview-mute-btn {
+    position: absolute;
+    bottom: 0.75rem;
+    right: 0.5rem;
+    z-index: 10;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-badge);
+    border: 1px solid var(--color-border);
+    border-radius: 50%;
+    color: var(--color-text);
+    cursor: pointer;
+    backdrop-filter: blur(var(--blur-sm));
+    -webkit-backdrop-filter: blur(var(--blur-sm));
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+
+  .preview-mute-btn:hover {
+    background: var(--color-interactive-hover);
+    border-color: var(--color-border-strong);
   }
 
   .audio-card {
