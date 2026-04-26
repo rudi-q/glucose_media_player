@@ -934,7 +934,7 @@
 
   async function handleLoadedMetadata() {
     if (!videoElement) return;
-    const wasPaused = pendingPaused !== null ? pendingPaused : videoElement.paused;
+    const wasPaused = pendingPaused ?? false;
     pendingPaused = null;
     duration = videoElement.duration;
 

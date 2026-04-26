@@ -30,6 +30,7 @@
   let cardContextMenuPosition = $state({ x: 0, y: 0 });
   let cardContextMenuVideo = $state<VideoFile | null>(null);
   let isDragging = $state(false);
+  let logoReady = $state(false);
   let hoveredPath = $state<string | null>(null);
   let hoverTimer: ReturnType<typeof setTimeout> | null = null;
   let previewMuted = $state(localStorage.getItem('glucose_preview_muted') === 'true');
@@ -161,6 +162,7 @@
   });
 
   onMount(() => {
+    logoReady = true;
     document.addEventListener("keydown", handleKeyPress);
     document.addEventListener("click", handleClickOutside);
 
@@ -576,7 +578,7 @@
   <div class="empty-state" class:dragging={isDragging}>
     <div class="library-container">
       <div class="library-header" bind:offsetHeight={libraryHeaderHeight}>
-        <img src="/logo-dark.svg" alt="glucose" class="logo" />
+        <img src="/logo-dark.svg" alt="glucose" class="logo" class:logo-animate={logoReady} />
         <div class="header-buttons">
           <button class="sort-toggle" onclick={toggleSortMenu} title="Sort" class:sort-active={sortBy === 'watched'}>
             <ArrowUpDown size={15} />
@@ -826,10 +828,28 @@
     padding-right: 5rem;
   }
 
+  @keyframes logo-smoke-in {
+    0% {
+      opacity: 0;
+      filter: blur(8px);
+    }
+    30% {
+      opacity: 0.3;
+    }
+    100% {
+      opacity: 0.95;
+      filter: blur(0px);
+    }
+  }
+
   .library-header .logo {
     height: 48px;
     width: auto;
-    opacity: 0.95;
+    opacity: 0;
+  }
+
+  .library-header .logo.logo-animate {
+    animation: logo-smoke-in 2.8s ease-out forwards;
   }
 
   .header-buttons {
