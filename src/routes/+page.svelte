@@ -981,7 +981,7 @@
     left: 0;
     right: 0;
     height: 4px;
-    background: rgba(0, 0, 0, 0.5);
+    background: transparent;
     z-index: 2;
   }
   
