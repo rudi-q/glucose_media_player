@@ -132,17 +132,25 @@
     document.addEventListener("click", handleClickOutside);
 
     let unlistenDuration: (() => void) | undefined;
+    let cancelled = false;
 
     // Await listener registration before triggering any duration fetches so no
     // "video-duration-ready" events are dropped between invoke and handler setup
     (async () => {
-      unlistenDuration = await listen<{ path: string; duration: number | null }>("video-duration-ready", (event) => {
+      const unlisten = await listen<{ path: string; duration: number | null }>("video-duration-ready", (event) => {
         const { path, duration } = event.payload;
         if (duration !== null) {
           recentVideos = recentVideos.map(v => v.path === path ? { ...v, duration } : v);
           cachedVideos = cachedVideos.map(v => v.path === path ? { ...v, duration } : v);
         }
       });
+
+      if (cancelled) {
+        unlisten();
+        return;
+      }
+
+      unlistenDuration = unlisten;
 
       if (!videosLoaded) {
         loadVideos();
@@ -158,6 +166,7 @@
     })();
 
     return () => {
+      cancelled = true;
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
       unlistenDuration?.();

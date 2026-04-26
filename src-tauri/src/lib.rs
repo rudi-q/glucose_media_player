@@ -108,9 +108,14 @@ fn get_pip_constants() -> Result<PipWindowConfig, anyhow::Error> {
 
 fn default_gallery_paths() -> Vec<String> {
     let mut paths = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        for name in &["Videos", "Downloads", "Desktop", "Documents"] {
-            paths.push(home.join(name).to_string_lossy().to_string());
+    for dir in [
+        dirs::video_dir(),
+        dirs::download_dir(),
+        dirs::desktop_dir(),
+        dirs::document_dir(),
+    ] {
+        if let Some(p) = dir {
+            paths.push(p.to_string_lossy().to_string());
         }
     }
     paths
@@ -152,7 +157,8 @@ fn save_gallery_paths(paths: Vec<String>) -> Result<(), String> {
     let mut config: serde_json::Value = if config_file.exists() {
         let content = fs::read_to_string(&config_file)
             .map_err(|e| format!("Failed to read config: {}", e))?;
-        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse config: {}", e))?
     } else {
         serde_json::json!({})
     };
