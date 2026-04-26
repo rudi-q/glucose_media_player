@@ -8,8 +8,11 @@ const PIP_WINDOW_SETTLE_DELAY_MS = 260;
 
 type ResumePlayback = () => Promise<unknown>;
 
+let originalPipBodyBackground: string | undefined;
+
 export async function enterNativePipWindow() {
   await invoke("enter_pip_mode");
+  originalPipBodyBackground = document.body.style.background;
   document.body.style.background = "#000";
 }
 
@@ -19,7 +22,12 @@ export async function exitNativePipWindow() {
 }
 
 export function resetPipBodyBackground() {
-  document.body.style.background = "transparent";
+  if (originalPipBodyBackground) {
+    document.body.style.background = originalPipBodyBackground;
+  } else {
+    document.body.style.removeProperty("background");
+  }
+  originalPipBodyBackground = undefined;
 }
 
 export async function applyPipVideoMode(
@@ -36,7 +44,13 @@ export async function applyPipVideoMode(
     videoElement.classList.add(PIP_VIDEO_ACTIVE_CLASS);
   } else {
     videoElement.classList.remove(PIP_VIDEO_ACTIVE_CLASS);
-    videoElement.style.cssText = "";
+    for (const prop of [
+      "width", "height", "max-width", "max-height",
+      "position", "top", "left",
+      "display", "visibility", "opacity", "object-fit",
+    ]) {
+      videoElement.style.removeProperty(prop);
+    }
   }
 
   void videoElement.offsetHeight;
@@ -94,7 +108,13 @@ export async function createPipWindowSettler(
   }
 
   const unlistenResize = await appWindow.onResized(scheduleSettle);
-  const unlistenMove = await appWindow.onMoved(scheduleSettle);
+  let unlistenMove: UnlistenFn | undefined;
+  try {
+    unlistenMove = await appWindow.onMoved(scheduleSettle);
+  } catch (err) {
+    unlistenResize();
+    throw err;
+  }
 
   return () => {
     if (settleTimer) {
@@ -102,7 +122,7 @@ export async function createPipWindowSettler(
       settleTimer = null;
     }
     unlistenResize();
-    unlistenMove();
+    unlistenMove?.();
   };
 }
 

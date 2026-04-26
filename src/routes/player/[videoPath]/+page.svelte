@@ -360,6 +360,7 @@
       document.removeEventListener("click", handleClickOutside);
       if (viewMode === "pip") {
         savePipWindowLayout().catch(() => {});
+        exitNativePipWindow().catch(() => {});
         resetPipBodyBackground();
       }
       // Clear volume menu auto-hide timer
@@ -906,9 +907,9 @@
     }
   }
 
-  function handleEnded() {
+  async function handleEnded() {
     fadedPlayback.pauseNow();
-    saveWatchProgress();
+    await saveWatchProgress();
   }
 
   async function handleLoadedMetadata() {

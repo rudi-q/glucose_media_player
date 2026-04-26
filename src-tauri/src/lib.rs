@@ -1928,11 +1928,16 @@ async fn fetch_video_durations(
             .unwrap_or(false);
 
         if !ffprobe_available {
+            let _ = app_handle.emit("ffprobe-unavailable", ());
             return;
         }
 
         for path in paths {
             if is_cloud_only_path(&path) {
+                let _ = app_handle.emit(
+                    "video-duration-ready",
+                    VideoDurationUpdate { path, duration: None },
+                );
                 continue;
             }
             let duration = get_video_duration(&path);

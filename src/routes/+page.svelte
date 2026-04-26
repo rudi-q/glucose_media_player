@@ -79,7 +79,7 @@
       ? [...filteredVideos].sort((a, b) => {
           const aTime = watchProgressMap.get(a.path)?.last_watched ?? 0;
           const bTime = watchProgressMap.get(b.path)?.last_watched ?? 0;
-          return bTime - aTime;
+          return (bTime - aTime) || (b.modified - a.modified);
         })
       : filteredVideos
   );
@@ -332,7 +332,7 @@
         if (wasActive && !currentOptions.active) {
           clearTimeout(safetyTimeout);
           fadedPlayback.pause().catch(() => {});
-        } else if (!wasActive && currentOptions.active && node.readyState >= 2) {
+        } else if (!wasActive && currentOptions.active) {
           startPlayback();
         } else {
           fadedPlayback.syncOutputVolume();
@@ -439,13 +439,14 @@
   
   function scrollSelectedVideoIntoView() {
     setTimeout(() => {
-      const selectedCard = document.querySelector('.video-card.selected');
+      const selectedCard = document.querySelector<HTMLElement>('.video-card.selected');
       if (selectedCard) {
         selectedCard.scrollIntoView({
           behavior: 'smooth',
           block: 'center',
           inline: 'nearest'
         });
+        selectedCard.focus({ preventScroll: true });
       }
     }, 0);
   }

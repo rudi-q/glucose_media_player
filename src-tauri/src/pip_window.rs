@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
@@ -120,6 +121,9 @@ pub(crate) fn enter_pip_mode(app_handle: AppHandle) -> Result<(), String> {
     let normal_min_size = PhysicalSize::new(config.normal_min_width, config.normal_min_height);
     {
         let mut state = WINDOW_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        if state.is_some() {
+            return Ok(());
+        }
         *state = Some(WindowState {
             size: normal_size,
             position: normal_position,
@@ -395,21 +399,34 @@ fn aspect_ratio(config: &PipWindowConfig) -> f64 {
 }
 
 fn work_area_for_window(window: &WebviewWindow) -> WorkArea {
-    if let Ok(Some(monitor)) = window.current_monitor() {
-        let work_area = monitor.work_area();
-        WorkArea {
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+
+    if let Some(m) = monitor {
+        let work_area = m.work_area();
+        return WorkArea {
             x: work_area.position.x,
             y: work_area.position.y,
             width: work_area.size.width,
             height: work_area.size.height,
-        }
-    } else {
-        WorkArea {
-            x: 0,
-            y: 0,
-            width: 1920,
-            height: 1080,
-        }
+        };
+    }
+
+    // Derive a conservative bound from the window's own geometry.
+    let pos = window
+        .outer_position()
+        .unwrap_or_else(|_| PhysicalPosition::new(0, 0));
+    let size = window
+        .outer_size()
+        .unwrap_or_else(|_| PhysicalSize::new(1280, 720));
+    WorkArea {
+        x: pos.x,
+        y: pos.y,
+        width: size.width,
+        height: size.height,
     }
 }
 
@@ -478,8 +495,10 @@ fn load_saved_pip_layout() -> Result<Option<PipWindowLayout>, String> {
 
     let content =
         fs::read_to_string(&config_file).map_err(|e| format!("Failed to read config: {}", e))?;
-    let config: Value =
-        serde_json::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))?;
+    let config: Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
 
     Ok(config
         .get("pip_window")
@@ -515,7 +534,14 @@ fn save_pip_layout(layout: PipWindowLayout) -> Result<(), String> {
     let content = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
     let temp_file = config_file.with_extension("json.tmp");
-    fs::write(&temp_file, &content).map_err(|e| format!("Failed to write temp config: {}", e))?;
+    {
+        let mut file = fs::File::create(&temp_file)
+            .map_err(|e| format!("Failed to create temp config: {}", e))?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("Failed to write temp config: {}", e))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to sync temp config: {}", e))?;
+    }
     fs::rename(&temp_file, &config_file).map_err(|e| format!("Failed to replace config: {}", e))?;
 
     Ok(())
