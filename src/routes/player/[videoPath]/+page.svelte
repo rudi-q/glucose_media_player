@@ -1367,14 +1367,16 @@
   >
     {#if viewMode === "cinematic"}
       <!-- Blurred background video for cinematic mode -->
-      <!-- svelte-ignore a11y_media_has_caption -->
-      <video
-        bind:this={backgroundVideo}
-        class="background-video"
-        src={videoSrc}
-        muted
-        aria-hidden="true"
-      ></video>
+      <div class="background-video-wrap">
+        <!-- svelte-ignore a11y_media_has_caption -->
+        <video
+          bind:this={backgroundVideo}
+          class="background-video"
+          src={videoSrc}
+          muted
+          aria-hidden="true"
+        ></video>
+      </div>
     {/if}
 
     <!-- Main video -->
@@ -1983,20 +1985,19 @@
     height: 100%;
   }
 
-  .background-video {
+  .background-video-wrap {
     position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    min-width: 110%;
-    min-height: 110%;
-    width: auto;
-    height: auto;
-    object-fit: cover;
-    filter: blur(100px) brightness(0.5);
-    opacity: 0.08;
+    inset: -60px;
     z-index: 0;
     pointer-events: none;
+    filter: blur(3840px) brightness(0.05);
+    opacity: 0.9;
+  }
+
+  .background-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
 
   .main-video {
