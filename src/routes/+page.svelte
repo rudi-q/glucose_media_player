@@ -256,12 +256,12 @@
           break;
         case "ArrowUp":
           e.preventDefault();
-          selectedVideoIndex = Math.max(0, selectedVideoIndex - 4);
+          selectedVideoIndex = getVerticalNavigationIndex('up');
           scrollSelectedVideoIntoView();
           break;
         case "ArrowDown":
           e.preventDefault();
-          selectedVideoIndex = Math.min(sortedVideos.length - 1, selectedVideoIndex + 4);
+          selectedVideoIndex = getVerticalNavigationIndex('down');
           scrollSelectedVideoIntoView();
           break;
         case "Enter":
@@ -273,6 +273,43 @@
           break;
       }
     }
+  }
+
+  function getVerticalNavigationIndex(direction: 'up' | 'down'): number {
+    const cards = Array.from(document.querySelectorAll<HTMLElement>('.video-card[data-index]'));
+    const currentCard = cards.find((card) => Number(card.dataset.index) === selectedVideoIndex);
+    if (!currentCard) return selectedVideoIndex;
+
+    const currentRect = currentCard.getBoundingClientRect();
+    const currentCenterX = currentRect.left + currentRect.width / 2;
+    const currentCenterY = currentRect.top + currentRect.height / 2;
+    const rowThreshold = Math.max(8, currentRect.height * 0.25);
+
+    let bestCard: HTMLElement | null = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (const card of cards) {
+      if (card === currentCard) continue;
+
+      const rect = card.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const verticalDistance = direction === 'down'
+        ? centerY - currentCenterY
+        : currentCenterY - centerY;
+
+      if (verticalDistance <= rowThreshold) continue;
+
+      const horizontalDistance = Math.abs(centerX - currentCenterX);
+      const score = verticalDistance * 1000 + horizontalDistance;
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestCard = card;
+      }
+    }
+
+    return bestCard ? Number(bestCard.dataset.index) : selectedVideoIndex;
   }
   
   function scrollSelectedVideoIntoView() {
