@@ -44,7 +44,6 @@
   let showSortMenu = $state(false);
   let sortMenuPos = $state({ top: 0, right: 0 });
 
-  const AUDIO_EXTS = new Set(['mp3','flac','wav','aac','ogg','opus','m4a','aiff','wma']);
   const _savedFilter = localStorage.getItem('glucose_filter');
   let filterBy = $state<'all' | 'video' | 'audio'>(
     _savedFilter === 'video' || _savedFilter === 'audio' ? _savedFilter : 'all'
@@ -58,8 +57,8 @@
     filterBy === 'all'
       ? recentVideos
       : recentVideos.filter(v => {
-          const ext = v.path.split('.').pop()?.toLowerCase() ?? '';
-          return filterBy === 'audio' ? AUDIO_EXTS.has(ext) : !AUDIO_EXTS.has(ext);
+          const audio = isAudio(v.path);
+          return filterBy === 'audio' ? audio : !audio;
         })
   );
 
@@ -140,12 +139,13 @@
   async function loadVideos() {
     loadingRecent = true;
     try {
-      const videos = await invoke<VideoFile[]>("get_recent_videos");
+      const videosPromise = invoke<VideoFile[]>("get_recent_videos");
+      const progressPromise = invoke<Record<string, WatchProgress>>("get_all_watch_progress");
+      const [videos, progressData] = await Promise.all([videosPromise, progressPromise]);
+      watchProgressStore.loadAllProgress(progressData);
       recentVideos = videos;
       cachedVideos = videos;
       videosLoaded = true;
-      const progressData = await invoke<Record<string, WatchProgress>>("get_all_watch_progress");
-      watchProgressStore.loadAllProgress(progressData);
       // Fetch durations in the background — gallery is already visible at this point
       invoke("fetch_video_durations", { paths: videos.filter(v => !v.is_cloud_only).map(v => v.path) }).catch(console.error);
     } catch (err) {
@@ -160,6 +160,7 @@
       selectedVideoIndex = 0;
       videosLoaded = false;
       cachedVideos = [];
+      watchProgressStore.clear();
       loadVideos();
     }
   });
@@ -276,10 +277,11 @@
   function handleKeyPress(e: KeyboardEvent) {
     const target = e.target as HTMLElement;
     const tag = target.tagName;
+    const isVideoCard = target.classList.contains('video-card');
     if (
       tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' ||
       tag === 'TEXTAREA' || tag === 'SELECT' ||
-      target.getAttribute('role') === 'button' ||
+      (target.getAttribute('role') === 'button' && !isVideoCard) ||
       target.isContentEditable ||
       (target.tabIndex > 0 && tag !== 'DIV')
     ) return;

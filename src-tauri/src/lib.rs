@@ -702,7 +702,7 @@ fn is_cloud_only_file(metadata: &fs::Metadata) -> bool {
 
 #[cfg(target_os = "macos")]
 fn is_cloud_only_file(metadata: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
+    use std::os::darwin::fs::MetadataExt;
     const SF_DATALESS: u32 = 0x40000000;
     (metadata.st_flags() & SF_DATALESS) != 0
 }
@@ -2216,8 +2216,12 @@ pub fn run() {
                             #[cfg(debug_assertions)]
                             println!("Decoded path: {}", decoded_path);
 
-                            let lower = decoded_path.to_lowercase();
-                            if VIDEO_EXTENSIONS.iter().chain(AUDIO_EXTENSIONS.iter()).any(|ext| lower.ends_with(&format!(".{}", ext))) {
+                            let is_media = Path::new(decoded_path.as_ref())
+                                .extension()
+                                .and_then(|s| s.to_str())
+                                .map(|ext| is_media_extension(&ext.to_lowercase()))
+                                .unwrap_or(false);
+                            if is_media {
                                 video_files.push(decoded_path.to_string());
                                 #[cfg(debug_assertions)]
                                 println!(
