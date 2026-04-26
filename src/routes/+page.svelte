@@ -51,7 +51,7 @@
   let previewMuted = $state(_previewMutedStored === null ? true : _previewMutedStored === 'true');
   const _savedSort = localStorage.getItem('glucose_sort');
   let sortBy = $state<'added' | 'watched'>(
-    _savedSort === 'added' || _savedSort === 'watched' ? _savedSort : 'added'
+    _savedSort === 'added' || _savedSort === 'watched' ? _savedSort : 'watched'
   );
   let showSortMenu = $state(false);
   let sortMenuPos = $state({ top: 0, right: 0 });
