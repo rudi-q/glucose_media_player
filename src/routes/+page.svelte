@@ -771,7 +771,7 @@
       </div>
       
       {#if loadingRecent}
-        <div class="loading">Scanning for videos...</div>
+        <div class="loading">Scanning for media...</div>
       {:else if sortedVideos.length === 0}
         <div class="empty-content">
           <Play size={64} strokeWidth={1.5} />

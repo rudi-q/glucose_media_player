@@ -888,20 +888,19 @@ async fn delete_temp_file(path: String) -> Result<(), String> {
 
 // Get video duration using FFmpeg
 // Note: Caller should verify ffprobe is available before calling this
-fn get_video_duration(video_path: &str) -> Option<f64> {
-    let output = get_ffprobe_command()
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            video_path,
-        ])
-        .output()
-        .ok()?;
-
+async fn get_video_duration(video_path: &str) -> Option<f64> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    let mut cmd = get_ffprobe_command();
+    cmd.args([
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        video_path,
+    ]);
+    let output = run_with_timeout(cmd, TIMEOUT, "ffprobe").await.ok()?;
     if output.status.success() {
         let duration_str = String::from_utf8_lossy(&output.stdout);
         duration_str.trim().parse::<f64>().ok()
@@ -1910,22 +1909,28 @@ async fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
         .map(std::path::PathBuf::from)
         .collect();
 
-    tokio::task::spawn_blocking(move || {
-        let mut videos = Vec::new();
-        for dir in &search_dirs {
-            scan_dir_for_media(dir, &mut videos, 6);
-        }
+    let handles: Vec<_> = search_dirs
+        .into_iter()
+        .map(|dir| {
+            tokio::task::spawn_blocking(move || {
+                let mut videos = Vec::new();
+                scan_dir_for_media(&dir, &mut videos, 6);
+                videos
+            })
+        })
+        .collect();
 
-        let mut seen = std::collections::HashSet::new();
-        videos.retain(|v| seen.insert(v.path.clone()));
+    let mut videos = Vec::new();
+    for handle in handles {
+        videos.append(&mut handle.await.map_err(|e| e.to_string())?);
+    }
 
-        videos.sort_by(|a, b| b.modified.cmp(&a.modified));
-        videos.truncate(100);
+    let mut seen = std::collections::HashSet::new();
+    videos.retain(|v| seen.insert(v.path.clone()));
+    videos.sort_by(|a, b| b.modified.cmp(&a.modified));
+    videos.truncate(100);
 
-        Ok(videos)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    Ok(videos)
 }
 
 #[derive(Serialize, Clone)]
@@ -1939,12 +1944,16 @@ async fn fetch_video_durations(
     app_handle: tauri::AppHandle,
     paths: Vec<String>,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        let ffprobe_available = get_ffprobe_command()
-            .arg("-version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+    tokio::spawn(async move {
+        let ffprobe_available = tokio::task::spawn_blocking(|| {
+            get_ffprobe_command()
+                .arg("-version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false);
 
         if !ffprobe_available {
             let _ = app_handle.emit("ffprobe-unavailable", ());
@@ -1952,14 +1961,11 @@ async fn fetch_video_durations(
         }
 
         for path in paths {
-            if is_cloud_only_path(&path) {
-                let _ = app_handle.emit(
-                    "video-duration-ready",
-                    VideoDurationUpdate { path, duration: None },
-                );
-                continue;
-            }
-            let duration = get_video_duration(&path);
+            let duration = if is_cloud_only_path(&path) {
+                None
+            } else {
+                get_video_duration(&path).await
+            };
             let _ = app_handle.emit(
                 "video-duration-ready",
                 VideoDurationUpdate { path, duration },
