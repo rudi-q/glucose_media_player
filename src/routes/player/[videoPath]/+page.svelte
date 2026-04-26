@@ -29,6 +29,7 @@
     type WatchProgress,
   } from "$lib/stores/watchProgressStore";
   import type { VideoInfo } from "$lib/types/video";
+  import { createFadedMediaPlayback } from "$lib/utils/fadedMediaPlayback";
   import { loadSubtitleFile, convertSrtToVtt } from "$lib/utils/subtitles";
   import {
     formatTime,
@@ -143,6 +144,31 @@
   const getSetupStatus = getContext<() => SetupStatus | null>("setupStatus");
 
   let setupStatus = $state(getSetupStatus());
+
+  function getVideoOutputVolume() {
+    if (gainNode) return gainNode.gain.value;
+    return videoElement?.volume ?? 0;
+  }
+
+  function setVideoOutputVolume(value: number) {
+    const safeValue = Math.max(0, value);
+    if (gainNode) {
+      gainNode.gain.value = safeValue;
+    } else if (videoElement) {
+      videoElement.volume = Math.min(1, safeValue);
+    }
+  }
+
+  const fadedPlayback = createFadedMediaPlayback({
+    getMediaElement: () => videoElement,
+    getSyncedMediaElements: () => [backgroundVideo],
+    getTargetVolume: () => (isMuted ? 0 : volume),
+    getOutputVolume: getVideoOutputVolume,
+    setOutputVolume: setVideoOutputVolume,
+    onPlayingChange: (playing) => {
+      isPlaying = playing;
+    },
+  });
 
   onMount(() => {
     let disposed = false;
@@ -329,6 +355,7 @@
       // Clear volume menu auto-hide timer
       clearTimeout(volumeMenuAutoTimer);
       clearTimeout(hideControlsTimeout);
+      fadedPlayback.destroy();
       // Close Web Audio context to free resources
       if (audioCtx) {
         audioCtx.close().catch(() => {});
@@ -526,6 +553,10 @@
   }
 
   async function goHome() {
+    if (videoElement && isPlaying) {
+      await fadedPlayback.pause();
+    }
+
     // Save progress before going home
     if (currentVideoPath && videoElement && duration > 0) {
       await saveWatchProgress();
@@ -540,6 +571,10 @@
   }
 
   async function closeApp() {
+    if (videoElement && isPlaying) {
+      await fadedPlayback.pause();
+    }
+
     try {
       const { exit } = await import("@tauri-apps/plugin-process");
       await exit(0);
@@ -555,17 +590,18 @@
     }
   }
 
-  function togglePlay() {
+  async function togglePlay() {
     if (!videoElement) return;
-    if (videoElement.paused) {
-      if (audioCtx?.state === "suspended") audioCtx.resume();
-      videoElement.play();
-      if (backgroundVideo) backgroundVideo.play();
-      isPlaying = true;
+    if (!isPlaying) {
+      setupAudioContext();
+      if (audioCtx?.state === "suspended") await audioCtx.resume();
+      try {
+        await fadedPlayback.play();
+      } catch (err) {
+        console.log("Play prevented:", err);
+      }
     } else {
-      videoElement.pause();
-      if (backgroundVideo) backgroundVideo.pause();
-      isPlaying = false;
+      await fadedPlayback.pause();
     }
   }
 
@@ -603,33 +639,34 @@
     if (!videoElement) return;
     isMuted = !isMuted;
     videoElement.muted = isMuted;
+    fadedPlayback.syncOutputVolume();
     appSettings.updateMuted(isMuted);
   }
 
   function adjustVolume(delta: number) {
     if (!videoElement) return;
-    const newVolume = Math.max(0, Math.min(2, volume + delta));
-    volume = newVolume;
-    if (gainNode) {
-      gainNode.gain.value = newVolume;
-    } else {
-      videoElement.volume = Math.min(1, newVolume);
-    }
-    appSettings.updateVolume(newVolume);
+    setPlaybackVolume(volume + delta);
+    flashVolumeMenu();
+  }
+
+  function setPlaybackVolume(newVolume: number) {
+    if (!videoElement) return;
+    volume = Math.max(0, Math.min(2, newVolume));
     if (isMuted) {
       isMuted = false;
-      videoElement.muted = false;
-      appSettings.updateMuted(false);
     }
-    flashVolumeMenu();
+    videoElement.muted = isMuted;
+    fadedPlayback.syncOutputVolume();
+    appSettings.updateVolume(volume);
+    appSettings.updateMuted(isMuted);
   }
 
   function startScrubbing(e: MouseEvent) {
     if (!videoElement) return;
     isScrubbing = true;
-    wasPlayingBeforeScrub = !videoElement.paused;
+    wasPlayingBeforeScrub = isPlaying;
     if (wasPlayingBeforeScrub) {
-      videoElement.pause();
+      fadedPlayback.pauseNow();
     }
 
     const progressBar = e.currentTarget as HTMLElement;
@@ -660,7 +697,9 @@
     const handleMouseUp = () => {
       isScrubbing = false;
       if (wasPlayingBeforeScrub) {
-        videoElement!.play();
+        fadedPlayback.play().catch((err) => {
+          console.log("Play prevented:", err);
+        });
       }
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
@@ -687,14 +726,14 @@
 
         // Remove PiP video styling
         if (videoElement) {
-          const wasPlaying = !videoElement.paused;
+          const wasPlaying = isPlaying;
           videoElement.classList.remove("pip-video-active");
           videoElement.style.cssText = ""; // Clear any inline styles
           void videoElement.offsetHeight; // Force reflow
 
           // Restore playback state
           if (wasPlaying) {
-            videoElement.play().catch(() => {});
+            fadedPlayback.play({ fade: false }).catch(() => {});
           }
         }
       } catch (err) {
@@ -715,7 +754,7 @@
         await new Promise((resolve) => setTimeout(resolve, 150));
 
         if (videoElement) {
-          const wasPlaying = !videoElement.paused;
+          const wasPlaying = isPlaying;
 
           // Apply PiP video styling via CSS class
           videoElement.classList.add("pip-video-active");
@@ -723,7 +762,7 @@
 
           // Restore playback state
           if (wasPlaying) {
-            videoElement.play().catch(() => {});
+            fadedPlayback.play({ fade: false }).catch(() => {});
           }
         }
       } catch (err) {
@@ -754,14 +793,14 @@
 
         // Remove PiP video styling
         if (videoElement) {
-          const wasPlaying = !videoElement.paused;
+          const wasPlaying = isPlaying;
           videoElement.classList.remove("pip-video-active");
           videoElement.style.cssText = ""; // Clear any inline styles
           void videoElement.offsetHeight; // Force reflow
 
           // Restore playback state
           if (wasPlaying) {
-            videoElement.play().catch(() => {});
+            fadedPlayback.play({ fade: false }).catch(() => {});
           }
         }
 
@@ -787,7 +826,7 @@
         await new Promise((resolve) => setTimeout(resolve, 150));
 
         if (videoElement) {
-          const wasPlaying = !videoElement.paused;
+          const wasPlaying = isPlaying;
 
           // Apply PiP video styling via CSS class (consistent with exit paths)
           videoElement.classList.add("pip-video-active");
@@ -795,7 +834,7 @@
 
           // Restore playback state
           if (wasPlaying) {
-            videoElement.play().catch(() => {});
+            fadedPlayback.play({ fade: false }).catch(() => {});
           }
         }
 
@@ -932,6 +971,11 @@
     }
   }
 
+  function handleEnded() {
+    fadedPlayback.pauseNow();
+    saveWatchProgress();
+  }
+
   async function handleLoadedMetadata() {
     if (!videoElement) return;
     const wasPaused = pendingPaused ?? false;
@@ -974,19 +1018,14 @@
 
     // Set up Web Audio API for volume boost, then auto-play
     setupAudioContext();
-    if (audioCtx?.state === "suspended") audioCtx.resume();
+    if (audioCtx?.state === "suspended") await audioCtx.resume();
     
     if (!wasPaused) {
-      videoElement.play().catch((err) => {
+      fadedPlayback.play().catch((err) => {
         console.log("Auto-play prevented:", err);
       });
-      // Start background video
-      if (backgroundVideo) {
-        backgroundVideo.play().catch(() => {});
-      }
-      isPlaying = true;
     } else {
-      isPlaying = false;
+      fadedPlayback.pauseNow();
     }
 
     // Show controls briefly when video loads
@@ -1211,7 +1250,7 @@
       audioCtx = new AudioContext();
       const source = audioCtx.createMediaElementSource(videoElement);
       gainNode = audioCtx.createGain();
-      gainNode.gain.value = volume;
+      gainNode.gain.value = isPlaying && !isMuted ? volume : 0;
       source.connect(gainNode);
       gainNode.connect(audioCtx.destination);
       // Native volume stays at 1 so the gain node has headroom for boost;
@@ -1247,7 +1286,7 @@
       gainNode = null;
       audioSourceConnected = false;
       // Sync persisted volume/mute to the native element as a fallback.
-      videoElement.volume = Math.min(1, volume);
+      videoElement.volume = isPlaying && !isMuted ? Math.min(1, volume) : 0;
       videoElement.muted = isMuted;
     }
   }
@@ -1390,6 +1429,7 @@
       src={videoSrc}
       ontimeupdate={handleTimeUpdate}
       onloadedmetadata={handleLoadedMetadata}
+      onended={handleEnded}
       onclick={togglePlay}
       oncontextmenu={handleContextMenu}
       crossorigin="anonymous"
@@ -1539,21 +1579,9 @@
                   aria-orientation="vertical"
                   bind:value={volume}
                   oninput={(e) => {
-                    if (videoElement) {
-                      const newVolume = (e.target as HTMLInputElement)
-                        .valueAsNumber;
-                      if (gainNode) {
-                        gainNode.gain.value = newVolume;
-                      } else {
-                        videoElement.volume = Math.min(1, newVolume);
-                      }
-                      appSettings.updateVolume(newVolume);
-                      if (isMuted) {
-                        isMuted = false;
-                        videoElement.muted = false;
-                        appSettings.updateMuted(false);
-                      }
-                    }
+                    setPlaybackVolume(
+                      (e.target as HTMLInputElement).valueAsNumber,
+                    );
                   }}
                 />
                 <span class="volume-percent">
