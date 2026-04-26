@@ -290,27 +290,28 @@
     return `${mins} min${mins !== 1 ? 's' : ''} remaining`;
   }
   
-  async function generateThumbnail(videoPath: string): Promise<string> {
-    if (thumbnailCache.has(videoPath)) {
-      return thumbnailCache.get(videoPath)!;
+  async function generateThumbnail(videoPath: string, seekTime?: number): Promise<string> {
+    const cacheKey = seekTime ? `${videoPath}@${Math.floor(seekTime)}` : videoPath;
+    if (thumbnailCache.has(cacheKey)) {
+      return thumbnailCache.get(cacheKey)!;
     }
-    
+
     return new Promise((resolve) => {
       const video = document.createElement('video');
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
-      
+
       if (!ctx) {
         resolve('');
         return;
       }
-      
+
       video.muted = true;
       video.preload = 'metadata';
       video.crossOrigin = 'anonymous';
-      
+
       video.onloadedmetadata = () => {
-        video.currentTime = Math.min(1, video.duration * 0.1);
+        video.currentTime = seekTime ?? Math.min(1, video.duration * 0.1);
       };
       
       video.onseeked = () => {
@@ -323,7 +324,7 @@
           
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
           const thumbnail = canvas.toDataURL('image/jpeg', 0.7);
-          thumbnailCache.set(videoPath, thumbnail);
+          thumbnailCache.set(cacheKey, thumbnail);
           resolve(thumbnail);
         } catch (err) {
           if (import.meta.env.DEV) {
@@ -467,7 +468,7 @@
                           <Music2 size={40} strokeWidth={1.2} />
                         </div>
                       {:else}
-                        {#await generateThumbnail(video.path)}
+                        {#await generateThumbnail(video.path, watchProgressMap.get(video.path)?.current_time)}
                           <Play size={48} strokeWidth={1.5} />
                         {:then thumbnail}
                           {#if thumbnail}
@@ -580,9 +581,7 @@
   }
 
   .player-container:has(.empty-state) {
-    background: rgba(0, 0, 0, 0.9);
-    backdrop-filter: blur(40px);
-    -webkit-backdrop-filter: blur(40px);
+    background: rgb(8, 8, 11);
   }
 
   .empty-state {
