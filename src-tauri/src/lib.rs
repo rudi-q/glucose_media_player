@@ -700,7 +700,14 @@ fn is_cloud_only_file(metadata: &fs::Metadata) -> bool {
     attrs & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS) != 0
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn is_cloud_only_file(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    const SF_DATALESS: u32 = 0x40000000;
+    (metadata.st_flags() & SF_DATALESS) != 0
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn is_cloud_only_file(_metadata: &fs::Metadata) -> bool {
     false
 }

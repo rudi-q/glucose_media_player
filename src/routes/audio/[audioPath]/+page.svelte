@@ -204,13 +204,14 @@
     if (isPlaying && (bassEnergy > 0.5 || trebleEnergy > 0.4) && Math.random() > 0.3) {
       let numToSpawn = Math.floor(bassEnergy * 4 + trebleEnergy * 2);
       for (let i = 0; i < numToSpawn; i++) {
+        const maxLife = 30 + Math.random() * 50;
         particles.push({
           angle: Math.random() * Math.PI * 2,
           radius: innerR + Math.random() * 20,
           speed: 2 + Math.random() * 5 + (bassEnergy * 8),
           length: 5 + Math.random() * 25,
-          life: 1,
-          maxLife: 30 + Math.random() * 50,
+          life: maxLife,
+          maxLife,
           hue: hueOffset + Math.random() * 60 - 30,
           alpha: 0.5 + Math.random() * 0.5,
           thickness: 1.5 + Math.random() * 2
@@ -287,9 +288,8 @@
     const drawWave = (offset: number, color: string) => {
       ctx.beginPath();
       // Step by 2 to halve path calculation cost without noticeably affecting visuals
-      for (let i = 0; i <= waveData.length; i += 2) {
-        const idx = i >= waveData.length ? 0 : i;
-        const norm = waveData[idx] / 128 - 1;
+      for (let i = 0; i < waveData.length; i += 2) {
+        const norm = waveData[i] / 128 - 1;
         const r = (innerR * 0.85) + (norm * innerR * 0.35) + offset;
         const angle = (i / waveData.length) * Math.PI * 2 - Math.PI / 2;
 

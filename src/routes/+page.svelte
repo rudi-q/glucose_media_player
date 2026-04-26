@@ -35,7 +35,8 @@
   let previewPlayingPath = $state<string | null>(null);
   let previewTransformOrigin = $state('center center');
   let hoverTimer: ReturnType<typeof setTimeout> | null = null;
-  let previewMuted = $state(localStorage.getItem('glucose_preview_muted') === 'true');
+  const _previewMutedStored = localStorage.getItem('glucose_preview_muted');
+  let previewMuted = $state(_previewMutedStored === null ? true : _previewMutedStored === 'true');
   const _savedSort = localStorage.getItem('glucose_sort');
   let sortBy = $state<'added' | 'watched'>(
     _savedSort === 'added' || _savedSort === 'watched' ? _savedSort : 'added'
@@ -261,7 +262,7 @@
     node.addEventListener('loadedmetadata', onMeta, { once: true });
     node.addEventListener('seeked', onSeeked, { once: true });
     node.addEventListener('playing', onPlaying, { once: true });
-    node.addEventListener('error', () => { aborted = true; clearTimeout(safetyTimeout); }, { once: true });
+    node.addEventListener('error', () => { aborted = true; clearTimeout(safetyTimeout); abort(); }, { once: true });
 
     return {
       destroy() {
@@ -672,7 +673,7 @@
                             class="preview-mute-btn"
                             type="button"
                             onclick={(e) => { e.stopPropagation(); previewMuted = !previewMuted; }}
-                            onkeydown={(e) => { e.stopPropagation(); }}
+                            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); }}
                             title={previewMuted ? 'Unmute preview' : 'Mute preview'}
                             aria-pressed={!previewMuted}
                           >
