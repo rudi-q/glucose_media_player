@@ -40,7 +40,7 @@
   let idleClock = 0;
 
   type Particle = { angle: number; radius: number; speed: number; length: number; life: number; maxLife: number; hue: number; alpha: number; thickness: number; };
-  const MAX_PARTICLES = 250;
+  const MAX_PARTICLES = 200; // Optimized count
   let particles: Particle[] = [];
 
   // Playback state
@@ -79,8 +79,7 @@
       const src = audioCtx.createMediaElementSource(audioEl);
       analyser = audioCtx.createAnalyser();
 
-      // Increased FFT size for higher definition cinematic visuals
-      analyser.fftSize = 1024;
+      analyser.fftSize = 1024; // Balanced resolution for performance and visuals
       analyser.smoothingTimeConstant = 0.8;
 
       gainNode = audioCtx.createGain();
@@ -110,7 +109,7 @@
     }
   }
 
-  // ── Cinematic Visualizer ────────────────────────────────────────────────────
+  // ── Cinematic 2D Visualizer ──────────────────────────────────────────────────
 
   function startVisualizer() {
     if (animId) cancelAnimationFrame(animId);
@@ -147,7 +146,8 @@
 
       ctx.save();
       ctx.translate(cx, cy);
-      ctx.shadowBlur = 30 + pulse * 20;
+      // Reduced idle glow blur to save frames
+      ctx.shadowBlur = 15 + pulse * 10;
       ctx.shadowColor = `hsla(${hueOffset}, 80%, 60%, ${0.3 + pulse * 0.3})`;
       ctx.strokeStyle = `hsla(${hueOffset}, 80%, 60%, ${0.2 + pulse * 0.2})`;
       ctx.lineWidth = 2;
@@ -201,7 +201,7 @@
     ctx.scale(pumpScale, pumpScale);
     ctx.rotate(globalRotation);
 
-    // ── PARTICLE ENGINE (SPAWNING) ──
+    // ── PARTICLE ENGINE (2D OUTWARD) ──
     if (isPlaying && (bassEnergy > 0.5 || trebleEnergy > 0.4) && Math.random() > 0.3) {
       let numToSpawn = Math.floor(bassEnergy * 4 + trebleEnergy * 2);
       for (let i = 0; i < numToSpawn; i++) {
@@ -220,7 +220,6 @@
     }
     if (particles.length > MAX_PARTICLES) particles.splice(0, particles.length - MAX_PARTICLES);
 
-    // ── RENDER PARTICLES ──
     ctx.globalCompositeOperation = 'screen';
     ctx.lineCap = 'round';
     for (let i = particles.length - 1; i >= 0; i--) {
@@ -249,18 +248,19 @@
     ctx.globalCompositeOperation = 'source-over';
 
     // ── SYMMETRICAL FREQUENCY SPECTRUM ──
-    const activeBins = 180; // We only draw the first 180 bins for aesthetics
+    const activeBins = 180;
     const barAngle = Math.PI / activeBins;
     const maxBarH = Math.min(W, H) * 0.35;
 
+    // Optimized glowing effect: We use slightly lower shadowBlur to heavily reduce GPU cost
     for (let i = 0; i < activeBins; i++) {
       const norm = Math.min(smoothed[i] / 255, 1);
-      const h = norm * norm * maxBarH * 1.2; // Exponential curve for punchy visuals
+      const h = norm * norm * maxBarH * 1.2;
       if (h < 1) continue;
 
       const binHue = hueOffset + (i / activeBins) * 90;
       ctx.strokeStyle = `hsla(${binHue}, 85%, 60%, ${0.3 + norm * 0.7})`;
-      ctx.shadowBlur = 15 + norm * 25;
+      ctx.shadowBlur = 4 + norm * 8; // Perf fix: Kept blur tight and constrained
       ctx.shadowColor = `hsla(${binHue}, 90%, 65%, ${norm})`;
       ctx.lineWidth = Math.max(2, ((Math.PI * innerR) / activeBins) * 1.5);
 
@@ -283,17 +283,15 @@
     // ── CHROMATIC ABERRATION WAVEFORM (CORE) ──
     analyser.getByteTimeDomainData(waveData);
 
-    // Function to draw a continuous ribbon waveform
     const drawWave = (offset: number, color: string) => {
       ctx.beginPath();
-      // Step through waveData to draw a smooth connected path
-      for (let i = 0; i <= waveData.length; i++) {
-        const idx = i === waveData.length ? 0 : i; // Wrap around to close the circle
+      // Step by 2 to halve path calculation cost without noticeably affecting visuals
+      for (let i = 0; i <= waveData.length; i += 2) {
+        const idx = i >= waveData.length ? 0 : i;
         const norm = waveData[idx] / 128 - 1;
         const r = (innerR * 0.85) + (norm * innerR * 0.35) + offset;
         const angle = (i / waveData.length) * Math.PI * 2 - Math.PI / 2;
 
-        // Counter-rotate the wave slightly for liquid effect
         const localAngle = angle - globalRotation * 2;
         const x = Math.cos(localAngle) * r;
         const y = Math.sin(localAngle) * r;
@@ -309,20 +307,18 @@
     ctx.globalCompositeOperation = 'screen';
     ctx.lineWidth = 2.5;
 
-    // The core splits apart into RGB channels on heavy bass
+    // Core splits apart into RGB channels on heavy bass
     const aberration = bassEnergy * 25;
 
-    // Red Channel
     drawWave(aberration, `rgba(255, 40, 80, ${0.4 + bassEnergy * 0.5})`);
-    // Blue Channel
     drawWave(-aberration, `rgba(40, 200, 255, ${0.4 + bassEnergy * 0.5})`);
-    // Solid White/Cyan Core
+
     ctx.lineWidth = 3;
     drawWave(0, `rgba(220, 240, 255, 0.9)`);
 
     ctx.globalCompositeOperation = 'source-over';
 
-    // ── INNER DARK VOID ──
+    // ── INNER DARK VOID (Contrast backing for title) ──
     const innerFill = ctx.createRadialGradient(0, 0, 0, 0, 0, innerR * 0.8);
     innerFill.addColorStop(0, `rgba(5, 7, 10, 0.95)`);
     innerFill.addColorStop(1, `rgba(5, 7, 10, 0.7)`);
@@ -670,7 +666,7 @@
   <div class="viz-area" bind:this={containerEl}>
     <canvas bind:this={canvas}></canvas>
 
-    <!-- Song title overlay (inside inner circle) -->
+    <!-- Song title overlay (centered perfectly in the inner circle) -->
     <div class="title-overlay">
       <p class="song-name">{displayName}</p>
     </div>
@@ -854,23 +850,39 @@
   }
 
   .title-overlay {
-    position: relative;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    /* Bounded tightly to the inner core circle */
+    width: calc(min(100vw, 100vh) * 0.28);
+    display: flex;
+    align-items: center;
+    justify-content: center;
     z-index: 10;
-    text-align: center;
     pointer-events: none;
   }
 
   .song-name {
     margin: 0;
-    font-size: clamp(0.85rem, 1.8vw, 1.25rem);
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.9);
-    letter-spacing: 0.05em;
-    max-width: 22vw;
+    font-size: clamp(0.75rem, 1.8vw, 1.25rem);
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.95);
+    letter-spacing: 0.03em;
+    line-height: 1.35;
+    text-align: center;
+
+    /* Multiline clamp ensuring it stays neatly inside the sphere */
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    text-shadow: 0 0 15px rgba(255, 255, 255, 0.5), 0 0 30px rgba(120, 180, 255, 0.3);
+
+    text-shadow:
+            0 2px 10px rgba(0, 0, 0, 0.9),
+            0 0 20px rgba(0, 0, 0, 0.8),
+            0 0 35px rgba(120, 180, 255, 0.6);
   }
 
   .controls-zone {
