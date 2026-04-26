@@ -163,7 +163,10 @@ fn save_gallery_paths(paths: Vec<String>) -> Result<(), String> {
         serde_json::json!({})
     };
 
-    config["gallery_paths"] = serde_json::json!(paths);
+    let config_object = config
+        .as_object_mut()
+        .ok_or_else(|| "Config root must be a JSON object".to_string())?;
+    config_object.insert("gallery_paths".to_string(), serde_json::json!(paths));
 
     let content = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
@@ -540,7 +543,7 @@ async fn run_with_timeout(
             tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut out),
             tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut err)
         );
-        
+
         let status = match status_res {
             Ok(s) => s,
             Err(e) => return Err(format!("Failed to wait for {}: {}", label, e)),
@@ -551,7 +554,7 @@ async fn run_with_timeout(
         if let Err(e) = err_res {
             return Err(format!("Failed to read stderr for {}: {}", label, e));
         }
-        
+
         Ok(std::process::Output {
             status,
             stdout: out,
@@ -859,16 +862,16 @@ async fn remux_with_audio_track(
 
     let temp_dir = std::env::temp_dir();
     let mut temp_path_opt: Option<std::path::PathBuf> = None;
-    
+
     for i in 0..100 {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        
+
         let filename = format!("glucose_audio_{}_{}.mkv", std::process::id(), timestamp + i as u128);
         let candidate_path = temp_dir.join(&filename);
-        
+
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -926,7 +929,7 @@ async fn remux_with_audio_track(
 #[tauri::command]
 async fn delete_temp_file(path: String) -> Result<(), String> {
     let target = std::path::Path::new(&path);
-    
+
     let p = match target.canonicalize() {
         Ok(p) => p,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -934,7 +937,7 @@ async fn delete_temp_file(path: String) -> Result<(), String> {
     };
 
     let temp_dir = std::env::temp_dir().canonicalize().map_err(|e| e.to_string())?;
-    
+
     if !p.starts_with(&temp_dir) {
         return Err("Only files inside the system temp directory may be deleted".to_string());
     }
@@ -1150,7 +1153,13 @@ fn save_setup_completed(completed: bool) -> Result<(), String> {
         serde_json::json!({})
     };
 
-    config["setup_completed"] = serde_json::json!(completed);
+    let config_object = config
+        .as_object_mut()
+        .ok_or_else(|| "Config root must be a JSON object".to_string())?;
+    config_object.insert(
+        "setup_completed".to_string(),
+        serde_json::json!(completed),
+    );
 
     let content = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
@@ -1954,13 +1963,12 @@ fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
 
 #[tauri::command]
 async fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
-    tokio::task::spawn_blocking(|| {
-        let search_dirs: Vec<std::path::PathBuf> = get_gallery_paths()
-            .unwrap_or_else(|_| default_gallery_paths())
-            .into_iter()
-            .map(std::path::PathBuf::from)
-            .collect();
+    let search_dirs: Vec<std::path::PathBuf> = get_gallery_paths()?
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect();
 
+    tokio::task::spawn_blocking(move || {
         let mut videos = Vec::new();
         for dir in &search_dirs {
             scan_dir_for_media(dir, &mut videos, 6);

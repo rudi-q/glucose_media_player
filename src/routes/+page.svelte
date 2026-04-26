@@ -185,6 +185,7 @@
   });
 
   function onCardHoverEnter(video: VideoFile) {
+    if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
     const progress = watchProgressMap.get(video.path);
     if (!progress || !(progress.current_time > 0) || video.is_cloud_only || isAudio(video.path)) return;
     hoverTimer = setTimeout(() => { hoveredPath = video.path; }, 400);
@@ -198,21 +199,30 @@
   function hoverPreview(node: HTMLVideoElement, startTime: number) {
     let aborted = false;
     const safetyTimeout = setTimeout(() => { aborted = true; abort(); }, 4000);
+    const seekEpsilon = 0.01;
 
     function abort() {
       node.pause();
       try { node.removeAttribute('src'); node.load(); } catch {}
     }
 
-    function onMeta() {
-      if (aborted) return;
-      try { node.currentTime = startTime; } catch {}
-    }
-
-    function onSeeked() {
+    function startPlayback() {
       if (aborted) return;
       clearTimeout(safetyTimeout);
       node.play().catch(() => {});
+    }
+
+    function onMeta() {
+      if (aborted) return;
+      if (Math.abs(node.currentTime - startTime) < seekEpsilon) {
+        startPlayback();
+        return;
+      }
+      try { node.currentTime = startTime; } catch { startPlayback(); }
+    }
+
+    function onSeeked() {
+      startPlayback();
     }
 
     function onPlaying() {
@@ -222,7 +232,7 @@
     node.addEventListener('loadedmetadata', onMeta, { once: true });
     node.addEventListener('seeked', onSeeked, { once: true });
     node.addEventListener('playing', onPlaying, { once: true });
-    node.addEventListener('error', () => { aborted = true; }, { once: true });
+    node.addEventListener('error', () => { aborted = true; clearTimeout(safetyTimeout); }, { once: true });
 
     return {
       destroy() {
@@ -552,11 +562,14 @@
               {/if}
               <div class="video-grid">
                 {#each group.videos as { video, index } (video.path)}
-                  <button
+                  <div
                     class="video-card"
                     class:selected={selectedVideoIndex === index}
                     data-index={index}
+                    role="button"
+                    tabindex="0"
                     onclick={() => loadVideo(video.path)}
+                    onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); loadVideo(video.path); } }}
                     onmouseenter={() => onCardHoverEnter(video)}
                     onmouseleave={onCardHoverLeave}
                   >
@@ -587,20 +600,20 @@
                             bind:muted={previewMuted}
                             use:hoverPreview={startTime}
                           ></video>
-                          <div
+                          <button
                             class="preview-mute-btn"
-                            role="button"
-                            tabindex="0"
+                            type="button"
                             onclick={(e) => { e.stopPropagation(); previewMuted = !previewMuted; }}
-                            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); previewMuted = !previewMuted; } }}
+                            onkeydown={(e) => { e.stopPropagation(); }}
                             title={previewMuted ? 'Unmute preview' : 'Mute preview'}
+                            aria-pressed={!previewMuted}
                           >
                             {#if previewMuted}
                               <VolumeX size={13} />
                             {:else}
                               <Volume2 size={13} />
                             {/if}
-                          </div>
+                          </button>
                         {/if}
                       {/if}
                       <div class="play-overlay">
@@ -633,7 +646,7 @@
                         {/if}
                       </div>
                     </div>
-                  </button>
+                  </div>
                 {/each}
               </div>
             </div>
