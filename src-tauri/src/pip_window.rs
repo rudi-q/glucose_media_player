@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
 #[derive(Clone, Copy, Debug)]
@@ -180,37 +180,45 @@ pub(crate) fn exit_pip_mode(app_handle: AppHandle) -> Result<(), String> {
         eprintln!("Failed to persist PiP layout before exit: {}", err);
     }
 
-    window
-        .set_always_on_top(saved_state.always_on_top)
-        .map_err(|e| format!("Failed to restore always-on-top state: {}", e))?;
-    window
-        .set_min_size(Some(saved_state.normal_min_size))
-        .map_err(|e| format!("Failed to restore minimum window size: {}", e))?;
-    window
-        .set_max_size(None::<PhysicalSize<u32>>)
-        .map_err(|e| format!("Failed to clear maximum window size: {}", e))?;
-    window
-        .set_decorations(saved_state.decorations_enabled)
-        .map_err(|e| format!("Failed to restore decoration state: {}", e))?;
-    window
-        .set_resizable(saved_state.resizable)
-        .map_err(|e| format!("Failed to restore resizable state: {}", e))?;
-    window
-        .set_size(saved_state.size)
-        .map_err(|e| format!("Failed to restore window size: {}", e))?;
-    window
-        .set_position(saved_state.position)
-        .map_err(|e| format!("Failed to restore window position: {}", e))?;
+    let restore_result = (|| -> Result<(), String> {
+        window
+            .set_always_on_top(saved_state.always_on_top)
+            .map_err(|e| format!("Failed to restore always-on-top state: {}", e))?;
+        window
+            .set_min_size(Some(saved_state.normal_min_size))
+            .map_err(|e| format!("Failed to restore minimum window size: {}", e))?;
+        window
+            .set_max_size(None::<PhysicalSize<u32>>)
+            .map_err(|e| format!("Failed to clear maximum window size: {}", e))?;
+        window
+            .set_decorations(saved_state.decorations_enabled)
+            .map_err(|e| format!("Failed to restore decoration state: {}", e))?;
+        window
+            .set_resizable(saved_state.resizable)
+            .map_err(|e| format!("Failed to restore resizable state: {}", e))?;
+        window
+            .set_size(saved_state.size)
+            .map_err(|e| format!("Failed to restore window size: {}", e))?;
+        window
+            .set_position(saved_state.position)
+            .map_err(|e| format!("Failed to restore window position: {}", e))?;
+        if saved_state.maximized {
+            window
+                .maximize()
+                .map_err(|e| format!("Failed to restore maximized state: {}", e))?;
+        }
+        if saved_state.fullscreen {
+            window
+                .set_fullscreen(true)
+                .map_err(|e| format!("Failed to restore fullscreen state: {}", e))?;
+        }
+        Ok(())
+    })();
 
-    if saved_state.maximized {
-        window
-            .maximize()
-            .map_err(|e| format!("Failed to restore maximized state: {}", e))?;
-    }
-    if saved_state.fullscreen {
-        window
-            .set_fullscreen(true)
-            .map_err(|e| format!("Failed to restore fullscreen state: {}", e))?;
+    if let Err(err) = restore_result {
+        let mut state = WINDOW_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        *state = Some(saved_state);
+        return Err(err);
     }
 
     #[cfg(debug_assertions)]
@@ -283,10 +291,14 @@ fn main_window(app_handle: &AppHandle) -> Result<WebviewWindow, String> {
 }
 
 fn get_pip_constants() -> Result<PipWindowConfig, String> {
+    static CACHE: OnceLock<PipWindowConfig> = OnceLock::new();
+    if let Some(config) = CACHE.get() {
+        return Ok(*config);
+    }
     const CONSTANTS_JSON: &str = include_str!("../../constants.json");
     let constants: AppConstants = serde_json::from_str(CONSTANTS_JSON)
         .map_err(|e| format!("Failed to parse constants.json: {}", e))?;
-    Ok(constants.pip_window)
+    Ok(*CACHE.get_or_init(|| constants.pip_window))
 }
 
 fn is_pip_active() -> bool {
@@ -415,18 +427,16 @@ fn work_area_for_window(window: &WebviewWindow) -> WorkArea {
         };
     }
 
-    // Derive a conservative bound from the window's own geometry.
-    let pos = window
-        .outer_position()
-        .unwrap_or_else(|_| PhysicalPosition::new(0, 0));
-    let size = window
-        .outer_size()
-        .unwrap_or_else(|_| PhysicalSize::new(1280, 720));
+    // Both monitor queries failed — use a conservative screen-aligned fallback so
+    // default_pip_position and snap_and_clamp_position clamp against the screen origin,
+    // not the window's own bounding box.
+    #[cfg(debug_assertions)]
+    eprintln!("work_area_for_window: could not determine monitor; using fallback work area");
     WorkArea {
-        x: pos.x,
-        y: pos.y,
-        width: size.width,
-        height: size.height,
+        x: 0,
+        y: 0,
+        width: 1280,
+        height: 720,
     }
 }
 
@@ -542,7 +552,10 @@ fn save_pip_layout(layout: PipWindowLayout) -> Result<(), String> {
         file.sync_all()
             .map_err(|e| format!("Failed to sync temp config: {}", e))?;
     }
-    fs::rename(&temp_file, &config_file).map_err(|e| format!("Failed to replace config: {}", e))?;
+    if let Err(e) = fs::rename(&temp_file, &config_file) {
+        let _ = fs::remove_file(&temp_file);
+        return Err(format!("Failed to replace config: {}", e));
+    }
 
     Ok(())
 }

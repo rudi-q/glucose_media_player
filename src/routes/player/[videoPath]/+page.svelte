@@ -359,9 +359,7 @@
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
       if (viewMode === "pip") {
-        savePipWindowLayout().catch(() => {});
-        exitNativePipWindow().catch(() => {});
-        resetPipBodyBackground();
+        exitNativePipWindow().catch(() => resetPipBodyBackground());
       }
       // Clear volume menu auto-hide timer
       clearTimeout(volumeMenuAutoTimer);
@@ -671,7 +669,7 @@
   function setPlaybackVolume(newVolume: number) {
     if (!videoElement) return;
     volume = Math.max(0, Math.min(2, newVolume));
-    if (isMuted) {
+    if (isMuted && newVolume > 0) {
       isMuted = false;
     }
     videoElement.muted = isMuted;
@@ -762,10 +760,8 @@
       await applyPipVideoMode(videoElement, true, wasPlaying, () =>
         fadedPlayback.play({ fade: false }),
       );
-      return true;
     } catch (err) {
       console.error("Failed to enter PiP mode:", err);
-      return false;
     }
   }
 
@@ -777,10 +773,8 @@
       await applyPipVideoMode(videoElement, false, wasPlaying, () =>
         fadedPlayback.play({ fade: false }),
       );
-      return true;
     } catch (err) {
       console.error("Failed to exit PiP mode:", err);
-      return false;
     }
   }
 

@@ -58,6 +58,25 @@ fn get_ffmpeg_command() -> Command {
     create_hidden_command("ffmpeg")
 }
 
+fn get_ffprobe_command() -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
+            let ffprobe_exe = std::path::Path::new(&app_data)
+                .join("glucose")
+                .join("resources")
+                .join("ffmpeg")
+                .join("bin")
+                .join("ffprobe.exe");
+            if ffprobe_exe.exists() {
+                return create_hidden_command(ffprobe_exe.to_str().unwrap_or("ffprobe"));
+            }
+        }
+    }
+
+    create_hidden_command("ffprobe")
+}
+
 // Global state to store pending file paths
 static PENDING_FILES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static FILE_PROCESSED: Mutex<bool> = Mutex::new(false);
@@ -433,7 +452,7 @@ async fn get_embedded_subtitle_tracks(
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     const SUPPORTED: &[&str] = &["subrip", "ass", "ssa", "webvtt", "mov_text", "text"];
 
-    let mut cmd = create_hidden_command("ffprobe");
+    let mut cmd = get_ffprobe_command();
     cmd.args([
         "-v",
         "error",
@@ -665,7 +684,7 @@ struct EmbeddedAudioTrack {
 async fn get_embedded_audio_tracks(video_path: String) -> Result<Vec<EmbeddedAudioTrack>, String> {
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-    let mut cmd = create_hidden_command("ffprobe");
+    let mut cmd = get_ffprobe_command();
     cmd.args([
         "-v",
         "error",
@@ -870,7 +889,7 @@ async fn delete_temp_file(path: String) -> Result<(), String> {
 // Get video duration using FFmpeg
 // Note: Caller should verify ffprobe is available before calling this
 fn get_video_duration(video_path: &str) -> Option<f64> {
-    let output = create_hidden_command("ffprobe")
+    let output = get_ffprobe_command()
         .args([
             "-v",
             "error",
@@ -1921,7 +1940,7 @@ async fn fetch_video_durations(
     paths: Vec<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let ffprobe_available = create_hidden_command("ffprobe")
+        let ffprobe_available = get_ffprobe_command()
             .arg("-version")
             .output()
             .map(|o| o.status.success())

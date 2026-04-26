@@ -12,13 +12,18 @@ let originalPipBodyBackground: string | undefined;
 
 export async function enterNativePipWindow() {
   await invoke("enter_pip_mode");
-  originalPipBodyBackground = document.body.style.background;
-  document.body.style.background = "#000";
+  if (originalPipBodyBackground === undefined) {
+    originalPipBodyBackground = document.body.style.background;
+    document.body.style.background = "#000";
+  }
 }
 
 export async function exitNativePipWindow() {
-  await invoke("exit_pip_mode");
-  resetPipBodyBackground();
+  try {
+    await invoke("exit_pip_mode");
+  } finally {
+    resetPipBodyBackground();
+  }
 }
 
 export function resetPipBodyBackground() {
@@ -36,9 +41,9 @@ export async function applyPipVideoMode(
   shouldResumePlayback: boolean,
   resumePlayback: ResumePlayback,
 ) {
-  await delay(PIP_VIDEO_REFLOW_DELAY_MS);
-
   if (!videoElement) return;
+
+  await delay(PIP_VIDEO_REFLOW_DELAY_MS);
 
   if (active) {
     videoElement.classList.add(PIP_VIDEO_ACTIVE_CLASS);
@@ -56,7 +61,7 @@ export async function applyPipVideoMode(
   void videoElement.offsetHeight;
 
   if (shouldResumePlayback) {
-    resumePlayback().catch(() => {});
+    resumePlayback().catch((err) => console.debug("resumePlayback failed", err));
   }
 }
 
@@ -71,9 +76,10 @@ export async function createPipWindowSettler(
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
   let settleInFlight = false;
   let settleAgain = false;
+  let destroyed = false;
 
   function scheduleSettle() {
-    if (!isPipActive()) return;
+    if (destroyed || !isPipActive()) return;
 
     if (settleTimer) {
       clearTimeout(settleTimer);
@@ -86,7 +92,7 @@ export async function createPipWindowSettler(
   }
 
   async function settlePipWindow() {
-    if (!isPipActive()) return;
+    if (destroyed || !isPipActive()) return;
 
     if (settleInFlight) {
       settleAgain = true;
@@ -100,7 +106,7 @@ export async function createPipWindowSettler(
       console.error("Failed to settle PiP window:", err);
     } finally {
       settleInFlight = false;
-      if (settleAgain) {
+      if (!destroyed && settleAgain) {
         settleAgain = false;
         scheduleSettle();
       }
@@ -117,6 +123,7 @@ export async function createPipWindowSettler(
   }
 
   return () => {
+    destroyed = true;
     if (settleTimer) {
       clearTimeout(settleTimer);
       settleTimer = null;

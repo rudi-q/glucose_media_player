@@ -158,7 +158,7 @@
       recentVideos = videos;
       cachedVideos = videos;
       videosLoaded = true;
-      // Fetch durations in the background â€” gallery is already visible at this point
+      // Fetch durations in the background — gallery is already visible at this point
       invoke("fetch_video_durations", { paths: videos.filter(v => !v.is_cloud_only).map(v => v.path) }).catch(console.error);
     } catch (err) {
       console.error("Failed to load recent videos:", err);
@@ -874,7 +874,7 @@
                         {/if}
                       {/if}
                       {#if video.is_cloud_only}
-                        <div class="cloud-badge" title="Not downloaded â€” stored in cloud">
+                        <div class="cloud-badge" title={"Not downloaded — stored in cloud"}>
                           <Cloud size={13} />
                         </div>
                       {/if}
@@ -1060,7 +1060,7 @@
     font-weight: 500;
   }
 
-  /* Open Video â€” prominent frosted glass */
+  /* Open Video — prominent frosted glass */
   .header-buttons :global(.white) {
     background: rgba(255, 255, 255, 0.11);
     border-color: rgba(255, 255, 255, 0.22);
@@ -1076,7 +1076,7 @@
     transform: translateY(-1px);
   }
 
-  /* Settings â€” subdued ghost */
+  /* Settings — subdued ghost */
   .header-buttons :global(.secondary) {
     background: rgba(255, 255, 255, 0.04);
     border-color: rgba(255, 255, 255, 0.09);
