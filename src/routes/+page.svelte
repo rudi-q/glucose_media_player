@@ -20,7 +20,7 @@
   let recentVideos = $state<VideoFile[]>([]);
   let loadingRecent = $state(true);
   let thumbnailCache = $state<Map<string, string>>(new Map());
-  let watchProgressMap = $state($watchProgressStore);
+  let watchProgressMap = $derived($watchProgressStore);
   let selectedVideoIndex = $state(0);
   let showCloseButton = $state(false);
   let hideCloseButtonTimeout: ReturnType<typeof setTimeout>;
@@ -30,7 +30,9 @@
   let cardContextMenuPosition = $state({ x: 0, y: 0 });
   let cardContextMenuVideo = $state<VideoFile | null>(null);
   let isDragging = $state(false);
-  let sortBy = $state<'added' | 'watched'>('added');
+  let sortBy = $state<'added' | 'watched'>(
+    (localStorage.getItem('glucose_sort') as 'added' | 'watched') ?? 'added'
+  );
   let showSortMenu = $state(false);
   let sortMenuPos = $state({ top: 0, right: 0 });
   let libraryHeaderHeight = $state(96);
@@ -46,9 +48,9 @@
   );
 
   $effect(() => {
+    localStorage.setItem('glucose_sort', sortBy);
     // Reset keyboard focus when sort order changes (watching sortBy, not sortedVideos, to
     // avoid resetting on every duration update which also replaces the recentVideos array)
-    void sortBy;
     selectedVideoIndex = 0;
   });
 
@@ -668,9 +670,7 @@
     color: rgba(255, 255, 255, 0.3);
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    background: rgba(0, 0, 0, 0.9);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    background: transparent;
   }
 
   .video-grid {
