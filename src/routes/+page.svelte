@@ -32,6 +32,8 @@
   let isDragging = $state(false);
   let logoReady = $state(false);
   let hoveredPath = $state<string | null>(null);
+  let previewPlayingPath = $state<string | null>(null);
+  let previewTransformOrigin = $state('center center');
   let hoverTimer: ReturnType<typeof setTimeout> | null = null;
   let previewMuted = $state(localStorage.getItem('glucose_preview_muted') === 'true');
   const _savedSort = localStorage.getItem('glucose_sort');
@@ -219,6 +221,8 @@
   function onCardHoverLeave() {
     if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
     hoveredPath = null;
+    previewPlayingPath = null;
+    previewTransformOrigin = 'center center';
   }
 
   function hoverPreview(node: HTMLVideoElement, startTime: number) {
@@ -615,6 +619,8 @@
                   <div
                     class="video-card"
                     class:selected={selectedVideoIndex === index}
+                    class:preview-expanding={previewPlayingPath === video.path}
+                    style:transform-origin={previewPlayingPath === video.path ? previewTransformOrigin : ''}
                     data-index={index}
                     role="button"
                     tabindex="0"
@@ -649,6 +655,18 @@
                             playsinline
                             bind:muted={previewMuted}
                             use:hoverPreview={startTime}
+                            onplaying={(e) => {
+                              const card = (e.currentTarget as HTMLElement).closest('.video-card') as HTMLElement | null;
+                              if (card) {
+                                const rect = card.getBoundingClientRect();
+                                const halfExtra = rect.width * 0.09;
+                                const ox = rect.left - halfExtra < 4 ? 'left'
+                                  : rect.right + halfExtra > window.innerWidth - 4 ? 'right'
+                                  : 'center';
+                                previewTransformOrigin = `${ox} center`;
+                              }
+                              previewPlayingPath = video.path;
+                            }}
                           ></video>
                           <button
                             class="preview-mute-btn"
@@ -947,15 +965,23 @@
     border-radius: 8px;
     padding: 0;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: transform 0.3s ease, background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
     text-align: left;
     overflow: hidden;
+    position: relative;
   }
 
   .video-card:hover {
     background: rgba(255, 255, 255, 0.06);
     border-color: rgba(255, 255, 255, 0.15);
     transform: translateY(-2px);
+  }
+
+  .video-card.preview-expanding {
+    transform: scale(1.18);
+    z-index: 10;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+    transition: transform 0.4s cubic-bezier(0.34, 1.1, 0.64, 1), box-shadow 0.4s ease;
   }
 
   .video-card.selected {
