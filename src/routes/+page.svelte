@@ -20,6 +20,10 @@
   let recentVideos = $state<VideoFile[]>([]);
   let loadingRecent = $state(true);
   let thumbnailCache = $state<Map<string, string>>(new Map());
+  const thumbnailPromises = new Map<string, Promise<string>>();
+  const thumbnailQueue: Array<() => void> = [];
+  let activeThumbnailJobs = 0;
+  const MAX_THUMBNAIL_JOBS = 2;
   let watchProgressMap = $derived($watchProgressStore);
   let selectedVideoIndex = $state(0);
   let showCloseButton = $state(false);
@@ -207,6 +211,7 @@
     return () => {
       cancelled = true;
       if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
+      clearThumbnailCache();
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
       unlistenDuration?.();
@@ -318,6 +323,7 @@
           break;
         case "Enter":
         case " ":
+          if (isVideoCard) return;
           e.preventDefault();
           if (sortedVideos[selectedVideoIndex]) {
             loadVideo(sortedVideos[selectedVideoIndex].path);
@@ -443,50 +449,136 @@
     if (thumbnailCache.has(cacheKey)) {
       return thumbnailCache.get(cacheKey)!;
     }
+    if (thumbnailPromises.has(cacheKey)) {
+      return thumbnailPromises.get(cacheKey)!;
+    }
 
+    const promise = scheduleThumbnailJob(() => createThumbnail(videoPath, seekTime, hasSeek, cacheKey))
+      .finally(() => thumbnailPromises.delete(cacheKey));
+    thumbnailPromises.set(cacheKey, promise);
+    return promise;
+  }
+
+  function scheduleThumbnailJob(job: () => Promise<string>): Promise<string> {
+    return new Promise((resolve) => {
+      const run = () => {
+        activeThumbnailJobs += 1;
+        job()
+          .then(resolve)
+          .catch(() => resolve(''))
+          .finally(() => {
+            activeThumbnailJobs -= 1;
+            thumbnailQueue.shift()?.();
+          });
+      };
+
+      if (activeThumbnailJobs < MAX_THUMBNAIL_JOBS) {
+        run();
+      } else {
+        thumbnailQueue.push(run);
+      }
+    });
+  }
+
+  function createThumbnail(videoPath: string, seekTime: number | undefined, hasSeek: boolean, cacheKey: string): Promise<string> {
     return new Promise((resolve) => {
       const video = document.createElement('video');
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
+      let settled = false;
+      const timeout = setTimeout(() => settle(''), 8000);
+
+      function cleanup() {
+        clearTimeout(timeout);
+        video.onloadedmetadata = null;
+        video.onseeked = null;
+        video.onerror = null;
+        try {
+          video.removeAttribute('src');
+          video.load();
+        } catch {}
+      }
+
+      function settle(thumbnail: string) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(thumbnail);
+      }
+
+      function capture() {
+        try {
+          const targetWidth = 320;
+          const aspectRatio = video.videoWidth / video.videoHeight;
+
+          if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) {
+            settle('');
+            return;
+          }
+
+          canvas.width = targetWidth;
+          canvas.height = Math.round(targetWidth / aspectRatio);
+
+          ctx!.drawImage(video, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob((blob) => {
+            if (!blob) {
+              settle('');
+              return;
+            }
+            const thumbnail = URL.createObjectURL(blob);
+            thumbnailCache.set(cacheKey, thumbnail);
+            settle(thumbnail);
+          }, 'image/jpeg', 0.7);
+        } catch (err) {
+          if (import.meta.env.DEV) {
+            console.log('Thumbnail generation skipped:', videoPath, err);
+          }
+          settle('');
+        }
+      }
 
       if (!ctx) {
-        resolve('');
+        settle('');
         return;
       }
 
       video.muted = true;
       video.preload = 'metadata';
+      video.playsInline = true;
       video.crossOrigin = 'anonymous';
 
       video.onloadedmetadata = () => {
-        video.currentTime = hasSeek ? seekTime! : Math.min(1, video.duration * 0.1);
-      };
-      
-      video.onseeked = () => {
+        const defaultTime = Number.isFinite(video.duration) ? Math.min(1, video.duration * 0.1) : 0;
+        const targetTime = hasSeek ? seekTime! : defaultTime;
+        if (targetTime <= 0) {
+          capture();
+          return;
+        }
         try {
-          const targetWidth = 320;
-          const aspectRatio = video.videoWidth / video.videoHeight;
-          
-          canvas.width = targetWidth;
-          canvas.height = Math.round(targetWidth / aspectRatio);
-          
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const thumbnail = canvas.toDataURL('image/jpeg', 0.7);
-          thumbnailCache.set(cacheKey, thumbnail);
-          resolve(thumbnail);
-        } catch (err) {
-          if (import.meta.env.DEV) {
-            console.log('Thumbnail generation skipped (CORS):', videoPath);
-          }
-          resolve('');
+          video.currentTime = targetTime;
+        } catch {
+          capture();
         }
       };
-      
-      video.onerror = () => resolve('');
+
+      video.onseeked = capture;
+
+      video.onerror = () => settle('');
       video.src = convertFileSrc(videoPath);
     });
   }
-  
+
+  function clearThumbnailCache() {
+    thumbnailQueue.length = 0;
+    thumbnailPromises.clear();
+    for (const thumbnail of thumbnailCache.values()) {
+      if (thumbnail.startsWith('blob:')) {
+        URL.revokeObjectURL(thumbnail);
+      }
+    }
+    thumbnailCache.clear();
+  }
+
   function handleMainContainerMouseMove() {
     showCloseButton = true;
     clearTimeout(hideCloseButtonTimeout);
