@@ -883,7 +883,7 @@
                       <div class="video-meta">
                         {#if video.duration}
                           <span class="video-duration">{formatDuration(video.duration)}</span>
-                          <span class="video-separator">â€¢</span>
+                          <span class="video-separator">•</span>
                           <span class="video-remaining">{getRemainingTime(video.path, video.duration)}</span>
                         {:else}
                           <span>{(video.size / (1024 * 1024)).toFixed(1)} MB</span>
