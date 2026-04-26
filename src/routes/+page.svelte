@@ -547,7 +547,7 @@
             <ArrowUpDown size={15} />
           </button>
           <Button variant="white" onclick={openFileDialog}>
-            Open Video
+            Open File
           </Button>
           <Button variant="secondary" onclick={() => showSettings()}>
             Settings
