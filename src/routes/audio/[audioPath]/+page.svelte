@@ -5,6 +5,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { appSettings } from '$lib/stores/appStore';
   import { watchProgressStore } from '$lib/stores/watchProgressStore';
+  import { createFadedMediaPlayback } from '$lib/utils/fadedMediaPlayback';
   import { formatDuration } from '$lib/utils/time';
   import { X, Play, Pause, Volume1, Volume2, VolumeX, Home } from 'lucide-svelte';
 
@@ -16,7 +17,6 @@
   // DOM refs
   let audioEl: HTMLAudioElement;
   let canvas: HTMLCanvasElement;
-  let containerEl: HTMLDivElement;
 
   // Web Audio API
   let audioCtx: AudioContext | null = null;
@@ -26,12 +26,22 @@
 
   // Visualizer state
   let animId: number;
-  let smoothed: Float32Array = new Float32Array(128);
-  // Reusable typed-array buffers — allocated once in setupAudio() to avoid
-  // per-frame GC pressure in the animation loop.
+  let smoothed: Float32Array = new Float32Array(512);
   let freqData = new Uint8Array(new ArrayBuffer(0));
   let waveData = new Uint8Array(new ArrayBuffer(0));
+
+  // Cinematic Engine State
   let bassEnergy = 0;
+  let midEnergy = 0;
+  let trebleEnergy = 0;
+  let globalRotation = 0;
+  let pumpScale = 1;
+  let hueOffset = 210;
+  let idleClock = 0;
+
+  type Particle = { angle: number; radius: number; speed: number; length: number; life: number; maxLife: number; hue: number; alpha: number; thickness: number; };
+  const MAX_PARTICLES = 200; // Optimized count
+  let particles: Particle[] = [];
 
   // Playback state
   let isPlaying = $state(false);
@@ -47,12 +57,7 @@
 
   // Progress autosave
   let progressSaveInterval: ReturnType<typeof setInterval>;
-  // Resolved restore position from get_watch_progress; applied in
-  // onloadedmetadata so playback always starts at the right position.
   let pendingRestoreTime: number | null = null;
-  // Settles when the per-track get_watch_progress IPC call completes (or fails).
-  // onloadedmetadata awaits this before calling play() to eliminate the race
-  // where playback starts at 0 then jumps when the IPC resolves later.
   let progressRestorePromise: Promise<void> = Promise.resolve();
   let currentLoadId = 0;
 
@@ -65,6 +70,30 @@
   let volumeMenuAutoTimer: ReturnType<typeof setTimeout>;
   let previousAudioPath = '';
 
+  function getAudioOutputVolume() {
+    if (gainNode) return gainNode.gain.value;
+    return audioEl?.volume ?? 0;
+  }
+
+  function setAudioOutputVolume(value: number) {
+    const safeValue = Math.max(0, value);
+    if (gainNode) {
+      gainNode.gain.value = safeValue;
+    } else if (audioEl) {
+      audioEl.volume = Math.min(1, safeValue);
+    }
+  }
+
+  const fadedPlayback = createFadedMediaPlayback({
+    getMediaElement: () => audioEl,
+    getTargetVolume: () => (isMuted ? 0 : volume),
+    getOutputVolume: getAudioOutputVolume,
+    setOutputVolume: setAudioOutputVolume,
+    onPlayingChange: (playing) => {
+      isPlaying = playing;
+    },
+  });
+
   // ── Audio context setup ─────────────────────────────────────────────────────
 
   function setupAudio() {
@@ -73,22 +102,26 @@
       audioCtx = new AudioContext();
       const src = audioCtx.createMediaElementSource(audioEl);
       analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.75;
+
+      analyser.fftSize = 1024; // Balanced resolution for performance and visuals
+      analyser.smoothingTimeConstant = 0.8;
+
       gainNode = audioCtx.createGain();
-      gainNode.gain.value = isMuted ? 0 : volume;
+      gainNode.gain.value = isPlaying && !isMuted ? volume : 0;
+
       src.connect(analyser);
       analyser.connect(gainNode);
       gainNode.connect(audioCtx.destination);
       audioEl.volume = 1;
+      audioEl.muted = isMuted;
       sourceConnected = true;
+
       smoothed = new Float32Array(analyser.frequencyBinCount);
       freqData = new Uint8Array(analyser.frequencyBinCount);
       waveData = new Uint8Array(analyser.fftSize);
       startVisualizer();
     } catch (e) {
       console.error('Audio context setup failed:', e);
-      // Clean up partial state
       if (gainNode) gainNode.disconnect();
       if (analyser) analyser.disconnect();
       gainNode = null;
@@ -101,15 +134,12 @@
     }
   }
 
-  // ── Visualizer ──────────────────────────────────────────────────────────────
+  // ── Cinematic 2D Visualizer ──────────────────────────────────────────────────
 
   function startVisualizer() {
     if (animId) cancelAnimationFrame(animId);
     drawFrame();
   }
-
-  // Idle pulse clock — runs even before audio starts so the circle is visible
-  let idleClock = 0;
 
   function drawFrame() {
     animId = requestAnimationFrame(drawFrame);
@@ -118,169 +148,213 @@
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    idleClock += 0.018;
-
-    // If no analyser yet, draw an idle state so the user sees the visualizer
-    if (!analyser) {
-      const dpr = window.devicePixelRatio || 1;
-      const W = canvas.width / dpr;
-      const H = canvas.height / dpr;
-      const cx = W / 2;
-      const cy = H / 2;
-      const innerR = Math.min(W, H) * 0.19;
-      const pulse = 0.5 + 0.5 * Math.sin(idleClock);
-
-      ctx.clearRect(0, 0, W, H);
-
-      // Pulsing ring
-      ctx.save();
-      ctx.shadowBlur = 18 + pulse * 14;
-      ctx.shadowColor = `hsla(210, 90%, 65%, ${0.25 + pulse * 0.2})`;
-      ctx.strokeStyle = `hsla(210, 90%, 65%, ${0.2 + pulse * 0.15})`;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-
-      // Inner circle fill
-      const fill = ctx.createRadialGradient(cx, cy, 0, cx, cy, innerR);
-      fill.addColorStop(0, 'hsla(215, 30%, 12%, 1)');
-      fill.addColorStop(1, 'hsla(215, 20%, 7%, 1)');
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
-      ctx.fillStyle = fill;
-      ctx.fill();
-      ctx.restore();
-      return;
-    }
-
     const dpr = window.devicePixelRatio || 1;
     const W = canvas.width / dpr;
     const H = canvas.height / dpr;
     const cx = W / 2;
     const cy = H / 2;
+    const innerR = Math.min(W, H) * 0.18;
 
-    // Read frequency data into reusable buffer
-    const bins = freqData.length; // frequencyBinCount = fftSize / 2
-    analyser.getByteFrequencyData(freqData);
+    idleClock += 0.01;
+    hueOffset += 0.15; // Slow ambient color drift
 
-    // Exponential smoothing
-    const lerpFactor = isPlaying ? 0.14 : 0.06;
-    for (let i = 0; i < bins; i++) {
-      smoothed[i] += (freqData[i] - smoothed[i]) * lerpFactor;
+    // ── IDLE / NO AUDIO STATE ──
+    if (!analyser) {
+      ctx.clearRect(0, 0, W, H);
+      const pulse = 0.5 + 0.5 * Math.sin(idleClock * 2);
+
+      const bgGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, W);
+      bgGrad.addColorStop(0, `hsla(${hueOffset}, 40%, 10%, ${0.3 + pulse * 0.2})`);
+      bgGrad.addColorStop(1, '#05070a');
+      ctx.fillStyle = bgGrad;
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      // Reduced idle glow blur to save frames
+      ctx.shadowBlur = 15 + pulse * 10;
+      ctx.shadowColor = `hsla(${hueOffset}, 80%, 60%, ${0.3 + pulse * 0.3})`;
+      ctx.strokeStyle = `hsla(${hueOffset}, 80%, 60%, ${0.2 + pulse * 0.2})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, innerR, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+      return;
     }
 
-    // Bass energy (first 8 bins ≈ sub-bass & bass)
-    let bassSum = 0;
-    for (let i = 0; i < 8; i++) bassSum += smoothed[i];
-    const targetBass = (bassSum / 8) / 255;
-    bassEnergy += (targetBass - bassEnergy) * 0.1;
+    // ── AUDIO ANALYSIS ──
+    const bins = freqData.length;
+    analyser.getByteFrequencyData(freqData);
 
-    // ── Clear ──
-    ctx.clearRect(0, 0, W, H);
+    const lerpFactor = isPlaying ? 0.25 : 0.05;
+    let bSum = 0, mSum = 0, tSum = 0;
 
-    // ── Background radial pulse (bass-driven) ──
-    const bgRadius = Math.min(W, H) * (0.38 + bassEnergy * 0.12);
+    for (let i = 0; i < bins; i++) {
+      smoothed[i] += (freqData[i] - smoothed[i]) * lerpFactor;
+      if (i < 10) bSum += smoothed[i];
+      else if (i < 60) mSum += smoothed[i];
+      else if (i < 200) tSum += smoothed[i];
+    }
+
+    const currentBass = (bSum / 10) / 255;
+    const currentMid = (mSum / 50) / 255;
+    const currentTreble = (tSum / 140) / 255;
+
+    bassEnergy += (currentBass - bassEnergy) * 0.2;
+    midEnergy += (currentMid - midEnergy) * 0.2;
+    trebleEnergy += (currentTreble - trebleEnergy) * 0.2;
+
+    // ── CLEAR & AMBIENT GLOW ──
+    ctx.fillStyle = '#05070a';
+    ctx.fillRect(0, 0, W, H);
+
+    const bgRadius = Math.max(W, H) * (0.5 + bassEnergy * 0.4);
     const bgGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, bgRadius);
-    bgGrad.addColorStop(0, `hsla(220, 80%, 8%, ${0.25 + bassEnergy * 0.35})`);
+    bgGrad.addColorStop(0, `hsla(${hueOffset}, 70%, 15%, ${0.3 + bassEnergy * 0.5})`);
     bgGrad.addColorStop(1, 'hsla(220, 80%, 4%, 0)');
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, W, H);
 
-    // ── Frequency bars ──
-    const numBars = bins * 2; // full 360° mirrored
-    const innerR = Math.min(W, H) * 0.19;
-    const maxBarH = Math.min(W, H) * 0.28;
-    const barAngle = (Math.PI * 2) / numBars;
+    // ── CINEMATIC TRANSFORM (PUMP & ROTATION) ──
+    globalRotation += 0.0005 + (bassEnergy * 0.005);
+    const targetPump = 1 + (bassEnergy * 0.12) + (midEnergy * 0.03);
+    pumpScale += (targetPump - pumpScale) * 0.2;
 
-    for (let i = 0; i < numBars; i++) {
-      // Mirror: first half maps 0→N forward, second half maps N→0 backward
-      const binIdx = i < bins ? i : numBars - 1 - i;
-      const norm = Math.min(smoothed[binIdx] / 255, 1);
-      const barH = norm * maxBarH;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(pumpScale, pumpScale);
+    ctx.rotate(globalRotation);
 
-      const angle = i * barAngle - Math.PI / 2;
-
-      // Color: bass = warm amber, mids = electric blue, highs = icy cyan
-      const freqFrac = binIdx / bins; // 0 (bass) → 1 (treble)
-      let hue: number;
-      if (freqFrac < 0.15) {
-        hue = 30 + freqFrac * (200 / 0.15); // amber → blue
-      } else if (freqFrac < 0.6) {
-        hue = 210 + ((freqFrac - 0.15) / 0.45) * 50; // blue → cyan
-      } else {
-        hue = 185 + ((freqFrac - 0.6) / 0.4) * 40; // cyan → ice
+    // ── PARTICLE ENGINE (2D OUTWARD) ──
+    if (isPlaying && (bassEnergy > 0.5 || trebleEnergy > 0.4) && Math.random() > 0.3) {
+      let numToSpawn = Math.floor(bassEnergy * 4 + trebleEnergy * 2);
+      for (let i = 0; i < numToSpawn; i++) {
+        const maxLife = 30 + Math.random() * 50;
+        particles.push({
+          angle: Math.random() * Math.PI * 2,
+          radius: innerR + Math.random() * 20,
+          speed: 2 + Math.random() * 5 + (bassEnergy * 8),
+          length: 5 + Math.random() * 25,
+          life: maxLife,
+          maxLife,
+          hue: hueOffset + Math.random() * 60 - 30,
+          alpha: 0.5 + Math.random() * 0.5,
+          thickness: 1.5 + Math.random() * 2
+        });
       }
-      const sat = 85 - norm * 15;
-      const lit = 45 + norm * 40;
-      const alpha = 0.35 + norm * 0.65;
+    }
+    if (particles.length > MAX_PARTICLES) particles.splice(0, particles.length - MAX_PARTICLES);
 
-      const x1 = cx + Math.cos(angle) * innerR;
-      const y1 = cy + Math.sin(angle) * innerR;
-      const x2 = cx + Math.cos(angle) * (innerR + barH);
-      const y2 = cy + Math.sin(angle) * (innerR + barH);
+    ctx.globalCompositeOperation = 'screen';
+    ctx.lineCap = 'round';
+    for (let i = particles.length - 1; i >= 0; i--) {
+      let p = particles[i];
+      p.radius += p.speed;
+      p.life--;
 
-      ctx.save();
-      ctx.lineWidth = Math.max(1.5, (Math.PI * 2 * innerR) / numBars - 0.5);
-      ctx.lineCap = 'round';
-      ctx.strokeStyle = `hsla(${hue}, ${sat}%, ${lit}%, ${alpha})`;
-      ctx.shadowBlur = 6 + norm * 18;
-      ctx.shadowColor = `hsla(${hue}, 90%, 70%, ${norm * 0.8})`;
+      if (p.life <= 0) {
+        particles.splice(i, 1);
+        continue;
+      }
+
+      const lifePct = p.life / p.maxLife;
+      const x1 = Math.cos(p.angle) * p.radius;
+      const y1 = Math.sin(p.angle) * p.radius;
+      const x2 = Math.cos(p.angle) * (p.radius - p.length * lifePct);
+      const y2 = Math.sin(p.angle) * (p.radius - p.length * lifePct);
+
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
+      ctx.strokeStyle = `hsla(${p.hue}, 90%, 70%, ${p.alpha * lifePct})`;
+      ctx.lineWidth = p.thickness;
       ctx.stroke();
-      ctx.restore();
     }
+    ctx.globalCompositeOperation = 'source-over';
 
-    // ── Outer glow ring at bar base ──
-    ctx.save();
-    ctx.shadowBlur = 18 + bassEnergy * 30;
-    ctx.shadowColor = `hsla(210, 90%, 65%, ${0.3 + bassEnergy * 0.4})`;
-    ctx.strokeStyle = `hsla(210, 90%, 65%, ${0.15 + bassEnergy * 0.2})`;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
+    // ── SYMMETRICAL FREQUENCY SPECTRUM ──
+    const activeBins = 180;
+    const barAngle = Math.PI / activeBins;
+    const maxBarH = Math.min(W, H) * 0.35;
 
-    // ── Inner circle fill ──
-    const innerFill = ctx.createRadialGradient(cx, cy, 0, cx, cy, innerR);
-    innerFill.addColorStop(0, `hsla(215, 30%, 12%, 1)`);
-    innerFill.addColorStop(0.7, `hsla(215, 25%, 9%, 1)`);
-    innerFill.addColorStop(1, `hsla(215, 20%, 7%, 1)`);
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
-    ctx.fillStyle = innerFill;
-    ctx.fill();
-    ctx.restore();
+    // Optimized glowing effect: We use slightly lower shadowBlur to heavily reduce GPU cost
+    for (let i = 0; i < activeBins; i++) {
+      const norm = Math.min(smoothed[i] / 255, 1);
+      const h = norm * norm * maxBarH * 1.2;
+      if (h < 1) continue;
 
-    // ── Waveform inside inner circle ──
-    if (analyser) {
-      analyser.getByteTimeDomainData(waveData);
-      const waveSlice = waveData.subarray(0, 128); // zero-copy view
-      const waveR = innerR * 0.65;
-      ctx.save();
-      ctx.strokeStyle = `hsla(200, 80%, 75%, 0.5)`;
-      ctx.lineWidth = 1.5;
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = 'hsla(200, 80%, 75%, 0.6)';
+      const binHue = hueOffset + (i / activeBins) * 90;
+      ctx.strokeStyle = `hsla(${binHue}, 85%, 60%, ${0.3 + norm * 0.7})`;
+      ctx.shadowBlur = 4 + norm * 8; // Perf fix: Kept blur tight and constrained
+      ctx.shadowColor = `hsla(${binHue}, 90%, 65%, ${norm})`;
+      ctx.lineWidth = Math.max(2, ((Math.PI * innerR) / activeBins) * 1.5);
+
+      // Right side (forward)
+      let angleR = i * barAngle - Math.PI / 2;
       ctx.beginPath();
-      for (let i = 0; i < waveSlice.length; i++) {
-        const norm = waveSlice[i] / 128 - 1; // -1 to 1
-        const angle = (i / waveSlice.length) * Math.PI * 2 - Math.PI / 2;
-        const r = waveR + norm * waveR * 0.3;
-        const x = cx + Math.cos(angle) * r;
-        const y = cy + Math.sin(angle) * r;
-        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      ctx.moveTo(Math.cos(angleR) * innerR, Math.sin(angleR) * innerR);
+      ctx.lineTo(Math.cos(angleR) * (innerR + h), Math.sin(angleR) * (innerR + h));
+      ctx.stroke();
+
+      // Left side (mirrored) — skip i === 0 to avoid doubling the top-center bar
+      if (i > 0) {
+        let angleL = -i * barAngle - Math.PI / 2;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(angleL) * innerR, Math.sin(angleL) * innerR);
+        ctx.lineTo(Math.cos(angleL) * (innerR + h), Math.sin(angleL) * (innerR + h));
+        ctx.stroke();
+      }
+    }
+    ctx.shadowBlur = 0; // Reset blur
+
+    // ── CHROMATIC ABERRATION WAVEFORM (CORE) ──
+    analyser.getByteTimeDomainData(waveData);
+
+    const drawWave = (offset: number, color: string) => {
+      ctx.beginPath();
+      // Step by 2 to halve path calculation cost without noticeably affecting visuals
+      for (let i = 0; i < waveData.length; i += 2) {
+        const norm = waveData[i] / 128 - 1;
+        const r = (innerR * 0.85) + (norm * innerR * 0.35) + offset;
+        const angle = (i / waveData.length) * Math.PI * 2 - Math.PI / 2;
+
+        const localAngle = angle - globalRotation * 2;
+        const x = Math.cos(localAngle) * r;
+        const y = Math.sin(localAngle) * r;
+
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
       }
       ctx.closePath();
+      ctx.strokeStyle = color;
       ctx.stroke();
-      ctx.restore();
-    }
+    };
+
+    ctx.globalCompositeOperation = 'screen';
+    ctx.lineWidth = 2.5;
+
+    // Core splits apart into RGB channels on heavy bass
+    const aberration = bassEnergy * 25;
+
+    drawWave(aberration, `rgba(255, 40, 80, ${0.4 + bassEnergy * 0.5})`);
+    drawWave(-aberration, `rgba(40, 200, 255, ${0.4 + bassEnergy * 0.5})`);
+
+    ctx.lineWidth = 3;
+    drawWave(0, `rgba(220, 240, 255, 0.9)`);
+
+    ctx.globalCompositeOperation = 'source-over';
+
+    // ── INNER DARK VOID (Contrast backing for title) ──
+    const innerFill = ctx.createRadialGradient(0, 0, 0, 0, 0, innerR * 0.8);
+    innerFill.addColorStop(0, `rgba(5, 7, 10, 0.95)`);
+    innerFill.addColorStop(1, `rgba(5, 7, 10, 0.7)`);
+    ctx.beginPath();
+    ctx.arc(0, 0, innerR * 0.75, 0, Math.PI * 2);
+    ctx.fillStyle = innerFill;
+    ctx.fill();
+
+    ctx.restore(); // Restore master transform
   }
 
   // ── Playback controls ───────────────────────────────────────────────────────
@@ -288,12 +362,12 @@
   async function togglePlay() {
     if (!audioEl) return;
     if (isPlaying) {
-      audioEl.pause();
+      await fadedPlayback.pause();
     } else {
       setupAudio(); // must run first — creates audioCtx
       if (audioCtx?.state === 'suspended') await audioCtx.resume();
       try {
-        await audioEl.play();
+        await fadedPlayback.play();
       } catch (err) {
         console.log('Play prevented:', err);
       }
@@ -301,13 +375,10 @@
   }
 
   function applyGain() {
-    if (gainNode) {
-      gainNode.gain.value = isMuted ? 0 : volume;
-    } else if (audioEl) {
-      // Gain node unavailable (setupAudio failed) — fall back to native element.
-      audioEl.volume = Math.min(1, isMuted ? 0 : volume);
+    if (audioEl) {
       audioEl.muted = isMuted;
     }
+    fadedPlayback.syncOutputVolume();
     appSettings.updateVolume(volume);
     appSettings.updateMuted(isMuted);
   }
@@ -332,7 +403,7 @@
     if (!audioEl) return;
     const clamped = Math.max(0, Math.min(duration, t));
     audioEl.currentTime = clamped;
-    currentTime = clamped; // sync immediately so rapid seeks accumulate correctly
+    currentTime = clamped;
   }
 
   // ── Canvas sizing ───────────────────────────────────────────────────────────
@@ -351,26 +422,23 @@
   function handleKey(e: KeyboardEvent) {
     const active = document.activeElement;
     if (
-      active instanceof HTMLElement &&
-      active !== document.body &&
-      active.matches('input, textarea, select, button, [contenteditable="true"], [role="slider"]')
+            active instanceof HTMLElement &&
+            active !== document.body &&
+            active.matches('input, textarea, select, button, [contenteditable="true"], [role="slider"]')
     ) return;
 
-    // Close app
     if (e.key === 'Escape') {
       e.preventDefault();
       closeApp();
       return;
     }
 
-    // Back to library
     if (e.key === 'Backspace') {
       e.preventDefault();
       goBack();
       return;
     }
 
-    // 0–9: seek to that tenth of the track
     if (e.key >= '0' && e.key <= '9') {
       e.preventDefault();
       seek(parseInt(e.key) * 0.1 * duration);
@@ -408,12 +476,11 @@
     }
   }
 
-  // Progress bar keyboard handler (when bar is focused)
   function handleProgressKeydown(e: KeyboardEvent) {
     if (!duration) return;
     let handled = false;
     let newTime = currentTime;
-    const step = duration * 0.01; // 1% of track
+    const step = duration * 0.01;
     switch (e.key) {
       case 'ArrowLeft':  newTime = Math.max(0, currentTime - step);    handled = true; break;
       case 'ArrowRight': newTime = Math.min(duration, currentTime + step); handled = true; break;
@@ -426,8 +493,8 @@
     }
   }
 
-  function goBack() {
-    if (isPlaying) audioEl?.pause();
+  async function goBack() {
+    if (isPlaying) await fadedPlayback.pause();
     goto('/');
   }
 
@@ -443,7 +510,6 @@
     }
   }
 
-  // Re-arm the hide timer when the volume menu closes.
   $effect(() => {
     if (!showVolumeMenu) showControls();
   });
@@ -458,8 +524,6 @@
   // ── Watch progress ──────────────────────────────────────────────────────────
 
   function saveProgress() {
-    // Read live position from the element so scrubs that haven't fired a
-    // timeupdate yet are still captured correctly.
     const pos = audioEl?.currentTime ?? currentTime;
     if (duration > 0 && pos > 2) {
       watchProgressStore.setProgress(audioPath, {
@@ -478,16 +542,10 @@
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
-  // Per-track restore — runs on mount and re-runs whenever audioPath changes
-  // (same-route navigation, e.g. opening a new file via file association).
   $effect(() => {
-    const path = audioPath; // establish reactive dependency
+    const path = audioPath;
     let cancelled = false;
 
-    // Persist the outgoing track's position before we zero the reactive state.
-    // onpause fires after duration is already reset to 0, so saveProgress()
-    // would bail — capture now and write directly. Use untrack() so reading
-    // duration/currentTime here doesn't re-trigger this effect on every tick.
     untrack(() => {
       const outgoingPath = previousAudioPath;
       const outgoingDuration = duration;
@@ -508,8 +566,6 @@
       previousAudioPath = path;
     });
 
-    // Reset per-track state immediately so stale values from the previous
-    // file don't show while the new file loads.
     pendingRestoreTime = null;
     currentTime = 0;
     duration = 0;
@@ -522,7 +578,6 @@
           const pct = progress.current_time / progress.duration;
           if (pct > 0.05 && pct < 0.95) {
             pendingRestoreTime = progress.current_time;
-            // Metadata already loaded before IPC resolved — apply immediately.
             if (audioEl && audioEl.readyState >= 1) {
               audioEl.currentTime = pendingRestoreTime;
             }
@@ -551,11 +606,9 @@
     window.addEventListener('resize', resizeCanvas);
     window.addEventListener('keydown', handleKey);
 
-    // Restore volume/mute from persisted settings (app-level, not per-track).
     volume = $appSettings.volume ?? 1;
     isMuted = $appSettings.isMuted ?? false;
 
-    // Draw idle frame immediately
     if (!analyser) {
       startVisualizer();
     }
@@ -568,11 +621,13 @@
       window.removeEventListener('resize', resizeCanvas);
       window.removeEventListener('keydown', handleKey);
       clearInterval(progressSaveInterval);
+      fadedPlayback.destroy();
     };
   });
 
   onDestroy(() => {
     cancelAnimationFrame(animId);
+    fadedPlayback.destroy();
     audioCtx?.close();
     clearTimeout(hideCloseBtnTimer);
     clearTimeout(hideControlsTimer);
@@ -581,8 +636,10 @@
   });
 
   async function closeApp() {
-    // Persist the current position before the process exits — exit(0) kills
-    // the process immediately so onDestroy never runs.
+    if (isPlaying) {
+      await fadedPlayback.pause();
+    }
+
     const pos = audioEl?.currentTime ?? currentTime;
     if (duration > 0 && pos > 2) {
       await invoke('save_watch_progress', {
@@ -624,12 +681,12 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="root"
-  onmousemove={handleMouseMove}
-  onmouseleave={() => { showCloseBtn = false; }}
-  oncontextmenu={(e) => e.preventDefault()}
-  ondragover={(e) => e.preventDefault()}
-  ondrop={(e) => e.preventDefault()}
+        class="root"
+        onmousemove={handleMouseMove}
+        onmouseleave={() => { showCloseBtn = false; }}
+        oncontextmenu={(e) => e.preventDefault()}
+        ondragover={(e) => e.preventDefault()}
+        ondrop={(e) => e.preventDefault()}
 >
   <!-- Close button -->
   <button class="close-btn" class:visible={showCloseBtn} tabindex={showCloseBtn ? 0 : -1} onclick={closeApp} onfocus={() => { showCloseBtn = true; clearTimeout(hideCloseBtnTimer); hideCloseBtnTimer = setTimeout(() => { showCloseBtn = false; }, 1200); }} title="Close (Esc)">
@@ -637,39 +694,39 @@
   </button>
 
   <!-- Visualizer fills the entire screen -->
-  <div class="viz-area" bind:this={containerEl}>
+  <div class="viz-area">
     <canvas bind:this={canvas}></canvas>
 
-    <!-- Song title overlay (inside inner circle) -->
+    <!-- Song title overlay (centered perfectly in the inner circle) -->
     <div class="title-overlay">
       <p class="song-name">{displayName}</p>
     </div>
   </div>
 
-  <!-- Controls zone — overlaid at the bottom, identical structure to video player -->
+  <!-- Controls zone -->
   <div class="controls-zone">
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="controls" class:visible={controlsVisible} inert={!controlsVisible} bind:this={controlsEl} onmouseenter={showControls}>
 
       <!-- Progress bar -->
       <div
-        class="progress-bar"
-        class:scrubbing={isScrubbing}
-        onmousedown={onScrubStart}
-        onmousemove={onScrubMove}
-        onmouseup={onScrubEnd}
-        onmouseleave={onScrubEnd}
-        onkeydown={handleProgressKeydown}
-        role="slider"
-        aria-label="Audio progress"
-        aria-valuemin={0}
-        aria-valuemax={duration}
-        aria-valuenow={isScrubbing ? scrubValue : currentTime}
-        tabindex="0"
+              class="progress-bar"
+              class:scrubbing={isScrubbing}
+              onmousedown={onScrubStart}
+              onmousemove={onScrubMove}
+              onmouseup={onScrubEnd}
+              onmouseleave={onScrubEnd}
+              onkeydown={handleProgressKeydown}
+              role="slider"
+              aria-label="Audio progress"
+              aria-valuemin={0}
+              aria-valuemax={duration}
+              aria-valuenow={isScrubbing ? scrubValue : currentTime}
+              tabindex="0"
       >
         <div
-          class="progress-filled"
-          style="width: {duration ? Math.min(100, Math.max(0, ((isScrubbing ? scrubValue : currentTime) / duration) * 100)) : 0}%"
+                class="progress-filled"
+                style="width: {duration ? Math.min(100, Math.max(0, ((isScrubbing ? scrubValue : currentTime) / duration) * 100)) : 0}%"
         >
           <div class="progress-handle"></div>
         </div>
@@ -710,14 +767,14 @@
             {#if showVolumeMenu}
               <div class="volume-menu">
                 <input
-                  type="range"
-                  class="volume-slider-vertical"
-                  min="0"
-                  max="2"
-                  step="0.01"
-                  aria-label="Volume"
-                  value={volume}
-                  oninput={(e) => setVolume((e.target as HTMLInputElement).valueAsNumber)}
+                        type="range"
+                        class="volume-slider-vertical"
+                        min="0"
+                        max="2"
+                        step="0.01"
+                        aria-label="Volume"
+                        value={volume}
+                        oninput={(e) => setVolume((e.target as HTMLInputElement).valueAsNumber)}
                 />
                 <span class="volume-percent">{Math.round((isMuted ? 0 : volume) * 100)}%</span>
                 <button class="mute-toggle" onclick={toggleMute} class:muted={isMuted}>
@@ -737,37 +794,32 @@
   </div>
 </div>
 
-<!-- Hidden audio element — crossorigin required for Web Audio API (CORS) -->
 <audio
-  bind:this={audioEl}
-  src={convertFileSrc(audioPath)}
-  crossorigin="anonymous"
-  onplay={() => { isPlaying = true; audioCtx?.resume(); showControls(); }}
-  onpause={() => { isPlaying = false; saveProgress(); }}
-  ontimeupdate={() => { if (!isScrubbing) currentTime = audioEl.currentTime; }}
-  onloadedmetadata={async () => {
+        bind:this={audioEl}
+        src={convertFileSrc(audioPath)}
+        crossorigin="anonymous"
+        onplay={() => { audioCtx?.resume(); showControls(); }}
+        onpause={() => { isPlaying = false; saveProgress(); }}
+        ontimeupdate={() => { if (!isScrubbing) currentTime = audioEl.currentTime; }}
+        onloadedmetadata={async () => {
     const myLoadId = ++currentLoadId;
     duration = audioEl.duration;
     setupAudio();
-    // Wait for the progress-restore IPC to settle so play() always starts
-    // at the correct position, never jumping mid-playback.
     await progressRestorePromise;
-    // A newer load started while we were awaiting — bail to avoid seeking
-    // or auto-playing against the wrong track.
     if (myLoadId !== currentLoadId) return;
     if (pendingRestoreTime !== null) {
       audioEl.currentTime = pendingRestoreTime;
     }
-    audioEl.play().catch((err) => console.log('Auto-play prevented:', err));
+    fadedPlayback.play().catch((err) => console.log('Auto-play prevented:', err));
   }}
-  onended={() => { isPlaying = false; saveProgress(); }}
-  preload="metadata"
+        onended={() => { fadedPlayback.pauseNow(); saveProgress(); }}
+        preload="metadata"
 ></audio>
 
 <style>
   :global(body) {
     margin: 0;
-    background: #080a10;
+    background: #05070a;
     overflow: hidden;
     user-select: none;
   }
@@ -777,13 +829,12 @@
     inset: 0;
     display: flex;
     flex-direction: column;
-    background: #080a10;
+    background: #05070a;
     font-family: system-ui, sans-serif;
     color: rgba(255, 255, 255, 0.9);
     cursor: default;
   }
 
-  /* ── Close button ─────────────────────────────────── */
   .close-btn {
     position: fixed;
     top: 12px;
@@ -813,7 +864,6 @@
     color: #fff;
   }
 
-  /* ── Visualizer area ──────────────────────────────── */
   .viz-area {
     position: absolute;
     inset: 0;
@@ -831,26 +881,41 @@
   }
 
   .title-overlay {
-    position: relative;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    /* Bounded tightly to the inner core circle */
+    width: calc(min(100vw, 100vh) * 0.28);
+    display: flex;
+    align-items: center;
+    justify-content: center;
     z-index: 10;
-    text-align: center;
     pointer-events: none;
   }
 
   .song-name {
     margin: 0;
-    font-size: clamp(0.75rem, 1.5vw, 1rem);
-    font-weight: 400;
-    color: rgba(255, 255, 255, 0.6);
+    font-size: clamp(0.75rem, 1.8vw, 1.25rem);
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.95);
     letter-spacing: 0.03em;
-    max-width: 18vw;
+    line-height: 1.35;
+    text-align: center;
+
+    /* Multiline clamp ensuring it stays neatly inside the sphere */
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    text-shadow: 0 0 20px rgba(120, 180, 255, 0.4);
+
+    text-shadow:
+            0 2px 10px rgba(0, 0, 0, 0.9),
+            0 0 20px rgba(0, 0, 0, 0.8),
+            0 0 35px rgba(120, 180, 255, 0.6);
   }
 
-  /* ── Controls zone + controls (matches video player cinematic/overlay style) ── */
   .controls-zone {
     position: absolute;
     bottom: 0;
@@ -863,14 +928,14 @@
   .controls {
     padding: 2rem 1.5rem 1.5rem;
     background: linear-gradient(
-      to top,
-      rgba(0, 0, 0, 0.85) 0%,
-      rgba(0, 0, 0, 0.6) 60%,
-      transparent 100%
+            to top,
+            rgba(0, 0, 0, 0.9) 0%,
+            rgba(0, 0, 0, 0.6) 50%,
+            transparent 100%
     );
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.25s ease;
+    transition: opacity 0.3s ease;
   }
 
   .controls.visible {
@@ -937,17 +1002,9 @@
     flex: 1;
   }
 
-  .controls-left {
-    justify-content: flex-start;
-  }
-
-  .controls-center {
-    justify-content: center;
-  }
-
-  .controls-right {
-    justify-content: flex-end;
-  }
+  .controls-left { justify-content: flex-start; }
+  .controls-center { justify-content: center; }
+  .controls-right { justify-content: flex-end; }
 
   .control-button {
     background: none;
@@ -958,19 +1015,20 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: opacity 0.15s ease;
-    opacity: 0.9;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    opacity: 0.8;
   }
 
   .control-button:hover {
     opacity: 1;
+    transform: scale(1.05);
   }
 
   .time {
     font-size: 0.875rem;
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.01em;
-    opacity: 0.9;
+    opacity: 0.8;
   }
 
   .volume-control {
@@ -986,9 +1044,9 @@
     left: 50%;
     transform: translateX(-50%);
     margin-bottom: 0.5rem;
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: rgba(20, 24, 30, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 8px;
     padding: 1rem 0.75rem;
@@ -996,7 +1054,7 @@
     flex-direction: column;
     align-items: center;
     gap: 0.75rem;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
     z-index: 100;
   }
 
@@ -1033,13 +1091,8 @@
     transition: transform 0.15s ease;
   }
 
-  .volume-slider-vertical::-webkit-slider-thumb:hover {
-    transform: scale(1.2);
-  }
-
-  .volume-slider-vertical::-moz-range-thumb:hover {
-    transform: scale(1.2);
-  }
+  .volume-slider-vertical::-webkit-slider-thumb:hover { transform: scale(1.2); }
+  .volume-slider-vertical::-moz-range-thumb:hover { transform: scale(1.2); }
 
   .volume-percent {
     font-size: 0.7rem;

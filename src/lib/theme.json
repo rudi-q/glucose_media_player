@@ -1,0 +1,25 @@
+{
+  "blur": {
+    "sm": "6px",
+    "md": "10px",
+    "lg": "40px"
+  },
+  "surface": {
+    "gallery": "rgb(7, 7, 10)",
+    "overlay": "rgba(0, 0, 0, 0.85)",
+    "panel": "rgba(0, 0, 0, 0.95)",
+    "badge": "rgba(0, 0, 0, 0.55)"
+  },
+  "color": {
+    "accent": "#c065b6",
+    "accentSubtle": "rgba(192, 101, 182, 0.15)",
+    "accentBorder": "rgba(192, 101, 182, 0.35)",
+    "border": "rgba(255, 255, 255, 0.1)",
+    "borderStrong": "rgba(255, 255, 255, 0.2)",
+    "interactive": "rgba(255, 255, 255, 0.08)",
+    "interactiveHover": "rgba(255, 255, 255, 0.15)",
+    "text": "rgba(255, 255, 255, 0.9)",
+    "textMuted": "rgba(255, 255, 255, 0.6)",
+    "textSubtle": "rgba(255, 255, 255, 0.4)"
+  }
+}

@@ -24,11 +24,21 @@
     setupStore,
     type SetupStatus,
   } from "$lib/stores/appStore";
+  import PipWindowFrame from "$lib/components/PipWindowFrame.svelte";
   import {
     watchProgressStore,
     type WatchProgress,
   } from "$lib/stores/watchProgressStore";
   import type { VideoInfo } from "$lib/types/video";
+  import { createFadedMediaPlayback } from "$lib/utils/fadedMediaPlayback";
+  import {
+    applyPipVideoMode,
+    createPipWindowSettler,
+    enterNativePipWindow,
+    exitNativePipWindow,
+    resetPipBodyBackground,
+    savePipWindowLayout,
+  } from "$lib/utils/pipWindow";
   import { loadSubtitleFile, convertSrtToVtt } from "$lib/utils/subtitles";
   import {
     formatTime,
@@ -59,6 +69,7 @@
   let showCloseButton = $state(false);
   let hideCloseButtonTimeout: ReturnType<typeof setTimeout>;
   type ViewMode = "cinematic" | "fullscreen" | "pip";
+  type NonPipViewMode = Exclude<ViewMode, "pip">;
   let viewMode = $state<ViewMode>("cinematic");
 
   // Scrubbing/seeking state
@@ -144,6 +155,31 @@
 
   let setupStatus = $state(getSetupStatus());
 
+  function getVideoOutputVolume() {
+    if (gainNode) return gainNode.gain.value;
+    return videoElement?.volume ?? 0;
+  }
+
+  function setVideoOutputVolume(value: number) {
+    const safeValue = Math.max(0, value);
+    if (gainNode) {
+      gainNode.gain.value = safeValue;
+    } else if (videoElement) {
+      videoElement.volume = Math.min(1, safeValue);
+    }
+  }
+
+  const fadedPlayback = createFadedMediaPlayback({
+    getMediaElement: () => videoElement,
+    getSyncedMediaElements: () => [backgroundVideo],
+    getTargetVolume: () => (isMuted ? 0 : volume),
+    getOutputVolume: getVideoOutputVolume,
+    setOutputVolume: setVideoOutputVolume,
+    onPlayingChange: (playing) => {
+      isPlaying = playing;
+    },
+  });
+
   onMount(() => {
     let disposed = false;
     const unsubs: UnlistenFn[] = [];
@@ -159,12 +195,7 @@
         if (data.initialMode === 'fullscreen') {
           viewMode = 'fullscreen';
         } else if (data.initialMode === 'pip') {
-          try {
-            await invoke('enter_pip_mode');
-            viewMode = 'pip';
-          } catch (err) {
-            console.error('Failed to enter PiP mode:', err);
-          }
+          await enterPipMode();
         }
 
         // Auto-detect subtitles: external file first, then embedded tracks.
@@ -262,6 +293,7 @@
             }
           },
         ),
+        createPipWindowSettler(() => viewMode === "pip"),
       ]);
 
       for (const r of results) {
@@ -326,9 +358,13 @@
       }
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
+      if (viewMode === "pip") {
+        exitNativePipWindow().catch(() => resetPipBodyBackground());
+      }
       // Clear volume menu auto-hide timer
       clearTimeout(volumeMenuAutoTimer);
       clearTimeout(hideControlsTimeout);
+      fadedPlayback.destroy();
       // Close Web Audio context to free resources
       if (audioCtx) {
         audioCtx.close().catch(() => {});
@@ -526,6 +562,10 @@
   }
 
   async function goHome() {
+    if (videoElement && isPlaying) {
+      await fadedPlayback.pause();
+    }
+
     // Save progress before going home
     if (currentVideoPath && videoElement && duration > 0) {
       await saveWatchProgress();
@@ -536,10 +576,22 @@
       clearInterval(progressSaveInterval);
     }
 
+    if (viewMode === "pip") {
+      await exitPipMode("cinematic");
+    }
+
     await goto("/");
   }
 
   async function closeApp() {
+    if (videoElement && isPlaying) {
+      await fadedPlayback.pause();
+    }
+
+    if (viewMode === "pip") {
+      await savePipWindowLayout().catch(() => {});
+    }
+
     try {
       const { exit } = await import("@tauri-apps/plugin-process");
       await exit(0);
@@ -555,17 +607,18 @@
     }
   }
 
-  function togglePlay() {
+  async function togglePlay() {
     if (!videoElement) return;
-    if (videoElement.paused) {
-      if (audioCtx?.state === "suspended") audioCtx.resume();
-      videoElement.play();
-      if (backgroundVideo) backgroundVideo.play();
-      isPlaying = true;
+    if (!isPlaying) {
+      setupAudioContext();
+      if (audioCtx?.state === "suspended") await audioCtx.resume();
+      try {
+        await fadedPlayback.play();
+      } catch (err) {
+        console.log("Play prevented:", err);
+      }
     } else {
-      videoElement.pause();
-      if (backgroundVideo) backgroundVideo.pause();
-      isPlaying = false;
+      await fadedPlayback.pause();
     }
   }
 
@@ -603,33 +656,34 @@
     if (!videoElement) return;
     isMuted = !isMuted;
     videoElement.muted = isMuted;
+    fadedPlayback.syncOutputVolume();
     appSettings.updateMuted(isMuted);
   }
 
   function adjustVolume(delta: number) {
     if (!videoElement) return;
-    const newVolume = Math.max(0, Math.min(2, volume + delta));
-    volume = newVolume;
-    if (gainNode) {
-      gainNode.gain.value = newVolume;
-    } else {
-      videoElement.volume = Math.min(1, newVolume);
-    }
-    appSettings.updateVolume(newVolume);
-    if (isMuted) {
-      isMuted = false;
-      videoElement.muted = false;
-      appSettings.updateMuted(false);
-    }
+    setPlaybackVolume(volume + delta);
     flashVolumeMenu();
+  }
+
+  function setPlaybackVolume(newVolume: number) {
+    if (!videoElement) return;
+    volume = Math.max(0, Math.min(2, newVolume));
+    if (isMuted && newVolume > 0) {
+      isMuted = false;
+    }
+    videoElement.muted = isMuted;
+    fadedPlayback.syncOutputVolume();
+    appSettings.updateVolume(volume);
+    appSettings.updateMuted(isMuted);
   }
 
   function startScrubbing(e: MouseEvent) {
     if (!videoElement) return;
     isScrubbing = true;
-    wasPlayingBeforeScrub = !videoElement.paused;
+    wasPlayingBeforeScrub = isPlaying;
     if (wasPlayingBeforeScrub) {
-      videoElement.pause();
+      fadedPlayback.pauseNow();
     }
 
     const progressBar = e.currentTarget as HTMLElement;
@@ -660,7 +714,9 @@
     const handleMouseUp = () => {
       isScrubbing = false;
       if (wasPlayingBeforeScrub) {
-        videoElement!.play();
+        fadedPlayback.play().catch((err) => {
+          console.log("Play prevented:", err);
+        });
       }
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
@@ -672,63 +728,9 @@
 
   async function togglePipMode() {
     if (viewMode === "pip") {
-      // Exit PiP mode - return to cinematic
-      try {
-        await invoke("exit_pip_mode");
-
-        // Change mode immediately
-        viewMode = "cinematic";
-
-        // Restore transparent background
-        document.body.style.background = "transparent";
-
-        // Wait for window resize, then restore video
-        await new Promise((resolve) => setTimeout(resolve, 150));
-
-        // Remove PiP video styling
-        if (videoElement) {
-          const wasPlaying = !videoElement.paused;
-          videoElement.classList.remove("pip-video-active");
-          videoElement.style.cssText = ""; // Clear any inline styles
-          void videoElement.offsetHeight; // Force reflow
-
-          // Restore playback state
-          if (wasPlaying) {
-            videoElement.play().catch(() => {});
-          }
-        }
-      } catch (err) {
-        console.error("Failed to exit PiP mode:", err);
-      }
+      await exitPipMode("cinematic");
     } else {
-      // Enter PiP mode from any other mode
-      try {
-        await invoke("enter_pip_mode");
-
-        // Change mode immediately
-        viewMode = "pip";
-
-        // Force solid background for PiP (transparency causes black screen)
-        document.body.style.background = "#000";
-
-        // Wait a moment for window resize, then trigger video reflow
-        await new Promise((resolve) => setTimeout(resolve, 150));
-
-        if (videoElement) {
-          const wasPlaying = !videoElement.paused;
-
-          // Apply PiP video styling via CSS class
-          videoElement.classList.add("pip-video-active");
-          void videoElement.offsetHeight; // Force reflow
-
-          // Restore playback state
-          if (wasPlaying) {
-            videoElement.play().catch(() => {});
-          }
-        }
-      } catch (err) {
-        console.error("Failed to enter PiP mode:", err);
-      }
+      await enterPipMode();
     }
   }
 
@@ -737,76 +739,43 @@
     const currentIndex = modes.indexOf(viewMode);
     const nextMode = modes[(currentIndex + 1) % modes.length];
 
-    // Handle PiP transitions
     if (viewMode === "pip") {
-      // Exiting PiP mode
-      try {
-        await invoke("exit_pip_mode");
-
-        // Change mode immediately
-        viewMode = nextMode;
-
-        // Restore transparent background
-        document.body.style.background = "transparent";
-
-        // Wait for window resize, then restore video
-        await new Promise((resolve) => setTimeout(resolve, 150));
-
-        // Remove PiP video styling
-        if (videoElement) {
-          const wasPlaying = !videoElement.paused;
-          videoElement.classList.remove("pip-video-active");
-          videoElement.style.cssText = ""; // Clear any inline styles
-          void videoElement.offsetHeight; // Force reflow
-
-          // Restore playback state
-          if (wasPlaying) {
-            videoElement.play().catch(() => {});
-          }
-        }
-
-        return; // Exit early since we already set viewMode
-      } catch (err) {
-        console.error("Failed to exit PiP mode:", err);
-        return;
-      }
+      await exitPipMode(nextMode as NonPipViewMode);
+      return;
     }
 
     if (nextMode === "pip") {
-      // Entering PiP mode
-      try {
-        await invoke("enter_pip_mode");
-
-        // Change mode immediately
-        viewMode = nextMode;
-
-        // Force solid background for PiP (transparency causes black screen)
-        document.body.style.background = "#000";
-
-        // Wait a moment for window resize, then trigger video reflow
-        await new Promise((resolve) => setTimeout(resolve, 150));
-
-        if (videoElement) {
-          const wasPlaying = !videoElement.paused;
-
-          // Apply PiP video styling via CSS class (consistent with exit paths)
-          videoElement.classList.add("pip-video-active");
-          void videoElement.offsetHeight; // Force reflow
-
-          // Restore playback state
-          if (wasPlaying) {
-            videoElement.play().catch(() => {});
-          }
-        }
-
-        return; // Exit early since we already set viewMode
-      } catch (err) {
-        console.error("Failed to enter PiP mode:", err);
-        return; // Don't change mode if entering PiP failed
-      }
+      await enterPipMode();
+      return;
     }
 
     viewMode = nextMode;
+  }
+
+  async function enterPipMode() {
+    try {
+      const wasPlaying = isPlaying;
+      await enterNativePipWindow();
+      viewMode = "pip";
+      await applyPipVideoMode(videoElement, true, wasPlaying, () =>
+        fadedPlayback.play({ fade: false }),
+      );
+    } catch (err) {
+      console.error("Failed to enter PiP mode:", err);
+    }
+  }
+
+  async function exitPipMode(nextMode: NonPipViewMode) {
+    try {
+      const wasPlaying = isPlaying;
+      await exitNativePipWindow();
+      viewMode = nextMode;
+      await applyPipVideoMode(videoElement, false, wasPlaying, () =>
+        fadedPlayback.play({ fade: false }),
+      );
+    } catch (err) {
+      console.error("Failed to exit PiP mode:", err);
+    }
   }
 
   function handleMainContainerMouseMove() {
@@ -932,9 +901,14 @@
     }
   }
 
+  async function handleEnded() {
+    fadedPlayback.pauseNow();
+    await saveWatchProgress();
+  }
+
   async function handleLoadedMetadata() {
     if (!videoElement) return;
-    const wasPaused = pendingPaused !== null ? pendingPaused : videoElement.paused;
+    const wasPaused = pendingPaused ?? false;
     pendingPaused = null;
     duration = videoElement.duration;
 
@@ -974,19 +948,14 @@
 
     // Set up Web Audio API for volume boost, then auto-play
     setupAudioContext();
-    if (audioCtx?.state === "suspended") audioCtx.resume();
+    if (audioCtx?.state === "suspended") await audioCtx.resume();
     
     if (!wasPaused) {
-      videoElement.play().catch((err) => {
+      fadedPlayback.play().catch((err) => {
         console.log("Auto-play prevented:", err);
       });
-      // Start background video
-      if (backgroundVideo) {
-        backgroundVideo.play().catch(() => {});
-      }
-      isPlaying = true;
     } else {
-      isPlaying = false;
+      fadedPlayback.pauseNow();
     }
 
     // Show controls briefly when video loads
@@ -1211,7 +1180,7 @@
       audioCtx = new AudioContext();
       const source = audioCtx.createMediaElementSource(videoElement);
       gainNode = audioCtx.createGain();
-      gainNode.gain.value = volume;
+      gainNode.gain.value = isPlaying && !isMuted ? volume : 0;
       source.connect(gainNode);
       gainNode.connect(audioCtx.destination);
       // Native volume stays at 1 so the gain node has headroom for boost;
@@ -1247,7 +1216,7 @@
       gainNode = null;
       audioSourceConnected = false;
       // Sync persisted volume/mute to the native element as a fallback.
-      videoElement.volume = Math.min(1, volume);
+      videoElement.volume = isPlaying && !isMuted ? Math.min(1, volume) : 0;
       videoElement.muted = isMuted;
     }
   }
@@ -1350,13 +1319,8 @@
     </button>
   {/if}
 
-  <!-- Draggable header for PIP mode -->
   {#if viewMode === "pip"}
-    <div class="pip-drag-header">
-      <button class="pip-close-button" onclick={closeApp} title="Close (Esc)">
-        <X size={14} />
-      </button>
-    </div>
+    <PipWindowFrame onClose={closeApp} />
   {/if}
 
   <div
@@ -1367,14 +1331,16 @@
   >
     {#if viewMode === "cinematic"}
       <!-- Blurred background video for cinematic mode -->
-      <!-- svelte-ignore a11y_media_has_caption -->
-      <video
-        bind:this={backgroundVideo}
-        class="background-video"
-        src={videoSrc}
-        muted
-        aria-hidden="true"
-      ></video>
+      <div class="background-video-wrap">
+        <!-- svelte-ignore a11y_media_has_caption -->
+        <video
+          bind:this={backgroundVideo}
+          class="background-video"
+          src={videoSrc}
+          muted
+          aria-hidden="true"
+        ></video>
+      </div>
     {/if}
 
     <!-- Main video -->
@@ -1388,6 +1354,7 @@
       src={videoSrc}
       ontimeupdate={handleTimeUpdate}
       onloadedmetadata={handleLoadedMetadata}
+      onended={handleEnded}
       onclick={togglePlay}
       oncontextmenu={handleContextMenu}
       crossorigin="anonymous"
@@ -1537,21 +1504,9 @@
                   aria-orientation="vertical"
                   bind:value={volume}
                   oninput={(e) => {
-                    if (videoElement) {
-                      const newVolume = (e.target as HTMLInputElement)
-                        .valueAsNumber;
-                      if (gainNode) {
-                        gainNode.gain.value = newVolume;
-                      } else {
-                        videoElement.volume = Math.min(1, newVolume);
-                      }
-                      appSettings.updateVolume(newVolume);
-                      if (isMuted) {
-                        isMuted = false;
-                        videoElement.muted = false;
-                        appSettings.updateMuted(false);
-                      }
-                    }
+                    setPlaybackVolume(
+                      (e.target as HTMLInputElement).valueAsNumber,
+                    );
                   }}
                 />
                 <span class="volume-percent">
@@ -1893,9 +1848,9 @@
 <style>
   .player-container.video-player {
     user-select: none;
-    background: rgba(0, 0, 0, 0.85);
-    backdrop-filter: blur(40px);
-    -webkit-backdrop-filter: blur(40px);
+    background: var(--surface-overlay);
+    backdrop-filter: blur(var(--blur-lg));
+    -webkit-backdrop-filter: blur(var(--blur-lg));
   }
 
   .player-container:has(.video-container.fullscreen) {
@@ -1910,52 +1865,6 @@
     -webkit-backdrop-filter: none;
     border-radius: 8px;
     overflow: hidden;
-  }
-
-  /* PIP mode draggable header */
-  .pip-drag-header {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 32px;
-    background: rgba(0, 0, 0, 0.7);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px 8px 0 0;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    padding: 0 8px;
-    z-index: 200;
-    -webkit-app-region: drag;
-    cursor: move;
-    opacity: 0;
-    transition: opacity 0.2s ease;
-  }
-
-  .player-container:hover .pip-drag-header {
-    opacity: 1;
-  }
-
-  .pip-close-button {
-    width: 24px;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 4px;
-    color: rgba(255, 255, 255, 0.7);
-    cursor: pointer;
-    transition: all 0.2s ease;
-    -webkit-app-region: no-drag;
-  }
-
-  .pip-close-button:hover {
-    background: rgba(255, 255, 255, 0.2);
-    border-color: rgba(255, 255, 255, 0.3);
-    color: #fff;
   }
 
   .video-container {
@@ -1983,20 +1892,20 @@
     height: 100%;
   }
 
-  .background-video {
+  .background-video-wrap {
     position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    min-width: 110%;
-    min-height: 110%;
-    width: auto;
-    height: auto;
-    object-fit: cover;
-    filter: blur(100px) brightness(0.5);
-    opacity: 0.08;
+    inset: -60px;
     z-index: 0;
     pointer-events: none;
+    filter: blur(60px) brightness(0.12);
+    opacity: 0.92;
+    transform: scale(1.04);
+  }
+
+  .background-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
 
   .main-video {
@@ -2324,10 +2233,10 @@
     left: 50%;
     transform: translateX(-50%);
     margin-bottom: 0.5rem;
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface-panel);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 1rem 0.75rem;
     display: flex;
@@ -2509,10 +2418,10 @@
     bottom: 100%;
     right: 0;
     margin-bottom: 0.5rem;
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface-panel);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 0.75rem 0;
     min-width: 260px;
@@ -2531,10 +2440,10 @@
     bottom: 100%;
     right: 0;
     margin-bottom: 0.5rem;
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface-panel);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 0.75rem 0;
     min-width: 220px;
@@ -2596,9 +2505,9 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.85);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: var(--surface-overlay);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2702,10 +2611,10 @@
   /* Context Menu */
   .context-menu {
     position: fixed;
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface-panel);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 0.5rem 0;
     min-width: 200px;
@@ -2758,10 +2667,10 @@
     left: 100%;
     top: 0;
     margin-left: 0.5rem;
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface-panel);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+    border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 0.5rem 0;
     min-width: 180px;

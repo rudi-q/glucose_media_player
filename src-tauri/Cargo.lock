@@ -1532,7 +1532,7 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "glucose"
-version = "3.2.1"
+version = "3.3.0"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",

@@ -51,3 +51,10 @@ function createSetupStore() {
 }
 
 export const setupStore = createSetupStore();
+
+// Increment to signal the gallery should re-scan
+const { subscribe: refreshSubscribe, update: refreshUpdate } = writable(0);
+export const galleryRefreshStore = {
+	subscribe: refreshSubscribe,
+	refresh: () => refreshUpdate((n) => n + 1),
+};

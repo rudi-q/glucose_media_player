@@ -2,6 +2,14 @@
   "pipWindow": {
     "width": 480,
     "height": 270,
-    "padding": 20
+    "minWidth": 320,
+    "minHeight": 180,
+    "maxWidth": 960,
+    "padding": 20,
+    "snapThreshold": 32,
+    "aspectWidth": 16,
+    "aspectHeight": 9,
+    "normalMinWidth": 800,
+    "normalMinHeight": 450
   }
 }

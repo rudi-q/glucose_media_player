@@ -1,5 +1,7 @@
-use anyhow::anyhow;
-use serde::{Deserialize, Serialize};
+mod pip_window;
+
+use pip_window::{enter_pip_mode, exit_pip_mode, save_pip_window_layout, settle_pip_window};
+use serde::Serialize;
 use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
@@ -15,15 +17,12 @@ const VIDEO_EXTENSIONS: &[&str] = &[
 const AUDIO_EXTENSIONS: &[&str] = &[
     "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "aiff", "wma",
 ];
-/// All media extensions recognised by the app (video + audio).
-const MEDIA_EXTENSIONS: &[&str] = &[
-    "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ogv",
-    "mp3", "flac", "wav", "aac", "ogg", "opus", "m4a", "aiff", "wma",
-];
+fn is_media_extension(ext: &str) -> bool {
+    VIDEO_EXTENSIONS.contains(&ext) || AUDIO_EXTENSIONS.contains(&ext)
+}
+use tauri::Emitter;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use tauri::RunEvent;
-use tauri::{Emitter, Manager};
-use tauri::{PhysicalPosition, PhysicalSize};
 
 // Helper to create a Command with hidden console window on Windows
 fn create_hidden_command(program: &str) -> Command {
@@ -59,21 +58,31 @@ fn get_ffmpeg_command() -> Command {
     create_hidden_command("ffmpeg")
 }
 
+fn get_ffprobe_command() -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
+            let ffprobe_exe = std::path::Path::new(&app_data)
+                .join("glucose")
+                .join("resources")
+                .join("ffmpeg")
+                .join("bin")
+                .join("ffprobe.exe");
+            if ffprobe_exe.exists() {
+                return create_hidden_command(ffprobe_exe.to_str().unwrap_or("ffprobe"));
+            }
+        }
+    }
+
+    create_hidden_command("ffprobe")
+}
+
 // Global state to store pending file paths
 static PENDING_FILES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static FILE_PROCESSED: Mutex<bool> = Mutex::new(false);
 
-// PiP window state storage
-#[derive(Clone, Debug)]
-struct WindowState {
-    size: PhysicalSize<u32>,
-    position: PhysicalPosition<i32>,
-    decorations_enabled: bool,
-    resizable: bool,
-    pip_active: bool,
-}
-
-static WINDOW_STATE: Mutex<Option<WindowState>> = Mutex::new(None);
+// Serializes all config.json read-modify-write operations to prevent lost updates
+pub(crate) static CONFIG_MUTEX: Mutex<()> = Mutex::new(());
 
 // Configuration constants
 const MAX_FILE_LOADING_ATTEMPTS: u32 = 30;
@@ -84,25 +93,94 @@ const FINAL_ATTEMPT_DELAY_MS: u64 = 500;
 const INITIAL_ATTEMPT_COUNT: u32 = 5;
 const MIDDLE_ATTEMPT_COUNT: u32 = 15;
 
-// PiP window configuration from constants.json
-#[derive(Deserialize)]
-struct PipWindowConfig {
-    width: u32,
-    height: u32,
-    padding: i32,
+fn default_gallery_paths() -> Vec<String> {
+    let mut paths = Vec::new();
+    for dir in [
+        dirs::video_dir(),
+        dirs::download_dir(),
+        dirs::desktop_dir(),
+        dirs::document_dir(),
+    ] {
+        if let Some(p) = dir {
+            paths.push(p.to_string_lossy().to_string());
+        }
+    }
+    paths
 }
 
-#[derive(Deserialize)]
-struct AppConstants {
-    #[serde(rename = "pipWindow")]
-    pip_window: PipWindowConfig,
+#[tauri::command]
+fn get_gallery_paths() -> Result<Vec<String>, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let config_file = home.join(".glucose").join("config.json");
+
+    if !config_file.exists() {
+        return Ok(default_gallery_paths());
+    }
+
+    let content =
+        fs::read_to_string(&config_file).map_err(|e| format!("Failed to read config: {}", e))?;
+    let config: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))?;
+
+    if let Some(arr) = config.get("gallery_paths").and_then(|v| v.as_array()) {
+        let result: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        return Ok(result);
+    }
+
+    Ok(default_gallery_paths())
 }
 
-fn get_pip_constants() -> Result<PipWindowConfig, anyhow::Error> {
-    const CONSTANTS_JSON: &str = include_str!("../../constants.json");
-    let constants: AppConstants = serde_json::from_str(CONSTANTS_JSON)
-        .map_err(|e| anyhow!("Failed to parse constants.json: {}", e))?;
-    Ok(constants.pip_window)
+#[tauri::command]
+fn save_gallery_paths(paths: Vec<String>) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let config_dir = home.join(".glucose");
+    let config_file = config_dir.join("config.json");
+
+    fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+
+    let _guard = CONFIG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+    let mut config: serde_json::Value = if config_file.exists() {
+        let content = fs::read_to_string(&config_file)
+            .map_err(|e| format!("Failed to read config: {}", e))?;
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))?
+    } else {
+        serde_json::json!({})
+    };
+
+    let config_object = config
+        .as_object_mut()
+        .ok_or_else(|| "Config root must be a JSON object".to_string())?;
+    config_object.insert("gallery_paths".to_string(), serde_json::json!(paths));
+
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    let temp_file = config_file.with_extension("json.tmp");
+    fs::write(&temp_file, &content).map_err(|e| format!("Failed to write temp config: {}", e))?;
+    fs::rename(&temp_file, &config_file).map_err(|e| format!("Failed to replace config: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_folder_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let result = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match result {
+        Some(folder) => {
+            let path_buf = folder.into_path().map_err(|e| e.to_string())?;
+            Ok(Some(path_buf.to_string_lossy().to_string()))
+        }
+        None => Ok(None),
+    }
 }
 
 // Path sanitization function
@@ -126,14 +204,21 @@ fn sanitize_path(path: &str) -> String {
 async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let file_path = app
-        .dialog()
-        .file()
-        .add_filter("Video Files", VIDEO_EXTENSIONS)
-        .add_filter("Audio Files", AUDIO_EXTENSIONS)
-        .blocking_pick_file();
+    let all_exts: Vec<&'static str> = VIDEO_EXTENSIONS
+        .iter()
+        .chain(AUDIO_EXTENSIONS.iter())
+        .copied()
+        .collect();
+    let result = tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Media Files", &all_exts)
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
-    match file_path {
+    match result {
         Some(file) => {
             let path_buf = file.into_path().map_err(|e| e.to_string())?;
             let path = path_buf.to_string_lossy().to_string();
@@ -147,13 +232,16 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, Strin
 async fn open_subtitle_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let file_path = app
-        .dialog()
-        .file()
-        .add_filter("Subtitle Files", &["srt", "vtt", "ass", "ssa", "sub"])
-        .blocking_pick_file();
+    let result = tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Subtitle Files", &["srt", "vtt", "ass", "ssa", "sub"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
-    match file_path {
+    match result {
         Some(file) => {
             let path_buf = file.into_path().map_err(|e| e.to_string())?;
             let path = path_buf.to_string_lossy().to_string();
@@ -208,147 +296,6 @@ fn exit_app(app_handle: tauri::AppHandle) {
     #[cfg(debug_assertions)]
     println!("Exit app command called");
     app_handle.exit(0);
-}
-
-#[tauri::command]
-fn enter_pip_mode(app_handle: tauri::AppHandle) -> Result<(), String> {
-    let window = app_handle
-        .get_webview_window("main")
-        .ok_or("Failed to get main window")?;
-
-    // Check if already in PiP mode (idempotency)
-    {
-        let state = WINDOW_STATE.lock().unwrap();
-        if let Some(saved_state) = state.as_ref() {
-            if saved_state.pip_active {
-                #[cfg(debug_assertions)]
-                println!("Already in PiP mode, skipping");
-                return Ok(());
-            }
-        }
-    }
-
-    // Get PiP configuration from constants.json
-    let pip_config =
-        get_pip_constants().map_err(|e| format!("Failed to load PiP configuration: {}", e))?;
-
-    // Save current window state
-    let current_size = window
-        .outer_size()
-        .map_err(|e| format!("Failed to get window size: {}", e))?;
-    let current_position = window
-        .outer_position()
-        .map_err(|e| format!("Failed to get window position: {}", e))?;
-    let current_decorations = window
-        .is_decorated()
-        .map_err(|e| format!("Failed to get decoration state: {}", e))?;
-    let current_resizable = window
-        .is_resizable()
-        .map_err(|e| format!("Failed to get resizable state: {}", e))?;
-
-    let mut state = WINDOW_STATE.lock().unwrap();
-    *state = Some(WindowState {
-        size: current_size,
-        position: current_position,
-        decorations_enabled: current_decorations,
-        resizable: current_resizable,
-        pip_active: true,
-    });
-
-    #[cfg(debug_assertions)]
-    println!("Saved window state: {:?}", state);
-
-    // Enable decorations for PiP mode so window can be dragged
-    window
-        .set_decorations(true)
-        .map_err(|e| format!("Failed to enable decorations: {}", e))?;
-
-    // Enable resizing for PiP mode
-    window
-        .set_resizable(true)
-        .map_err(|e| format!("Failed to enable resizing: {}", e))?;
-
-    // Set PiP window properties
-    window
-        .set_size(PhysicalSize::new(pip_config.width, pip_config.height))
-        .map_err(|e| format!("Failed to set window size: {}", e))?;
-
-    // Position at bottom-right corner with some padding
-    // Get monitor size or use fallback defaults
-    let (screen_width, screen_height) = if let Ok(Some(monitor)) = window.current_monitor() {
-        let size = monitor.size();
-        (size.width as i32, size.height as i32)
-    } else {
-        // Fallback when monitor detection fails
-        (1920i32, 1080i32)
-    };
-
-    // Calculate position from screen size
-    let x = screen_width - (pip_config.width as i32) - pip_config.padding;
-    let y = screen_height - (pip_config.height as i32) - pip_config.padding;
-    let position = PhysicalPosition::new(x, y);
-
-    window
-        .set_position(position)
-        .map_err(|e| format!("Failed to set window position: {}", e))?;
-
-    // Set window to always on top
-    window
-        .set_always_on_top(true)
-        .map_err(|e| format!("Failed to set always on top: {}", e))?;
-
-    #[cfg(debug_assertions)]
-    println!("Entered PiP mode");
-
-    Ok(())
-}
-
-#[tauri::command]
-fn exit_pip_mode(app_handle: tauri::AppHandle) -> Result<(), String> {
-    let window = app_handle
-        .get_webview_window("main")
-        .ok_or("Failed to get main window")?;
-
-    // Validate that we are in PiP mode and have saved state
-    let mut state = WINDOW_STATE.lock().unwrap();
-    let saved_state = state
-        .take()
-        .ok_or("Cannot exit PiP mode: no saved window state found")?;
-
-    if !saved_state.pip_active {
-        return Err("Cannot exit PiP mode: PiP mode is not currently active".to_string());
-    }
-
-    #[cfg(debug_assertions)]
-    println!("Restoring window state: {:?}", saved_state);
-
-    // Restore size and position
-    window
-        .set_size(saved_state.size)
-        .map_err(|e| format!("Failed to restore window size: {}", e))?;
-    window
-        .set_position(saved_state.position)
-        .map_err(|e| format!("Failed to restore window position: {}", e))?;
-
-    // Restore original decoration state
-    window
-        .set_decorations(saved_state.decorations_enabled)
-        .map_err(|e| format!("Failed to restore decoration state: {}", e))?;
-
-    // Restore original resizable state
-    window
-        .set_resizable(saved_state.resizable)
-        .map_err(|e| format!("Failed to restore resizable state: {}", e))?;
-
-    // Remove always on top
-    window
-        .set_always_on_top(false)
-        .map_err(|e| format!("Failed to remove always on top: {}", e))?;
-
-    #[cfg(debug_assertions)]
-    println!("Exited PiP mode");
-
-    Ok(())
 }
 
 #[tauri::command]
@@ -429,7 +376,10 @@ async fn run_with_timeout(
         None => {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err(format!("run_with_timeout: Failed to capture stdout for {}", label));
+            return Err(format!(
+                "run_with_timeout: Failed to capture stdout for {}",
+                label
+            ));
         }
     };
 
@@ -438,7 +388,10 @@ async fn run_with_timeout(
         None => {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err(format!("run_with_timeout: Failed to capture stderr for {}", label));
+            return Err(format!(
+                "run_with_timeout: Failed to capture stderr for {}",
+                label
+            ));
         }
     };
 
@@ -450,7 +403,7 @@ async fn run_with_timeout(
             tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut out),
             tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut err)
         );
-        
+
         let status = match status_res {
             Ok(s) => s,
             Err(e) => return Err(format!("Failed to wait for {}: {}", label, e)),
@@ -461,13 +414,14 @@ async fn run_with_timeout(
         if let Err(e) = err_res {
             return Err(format!("Failed to read stderr for {}: {}", label, e));
         }
-        
+
         Ok(std::process::Output {
             status,
             stdout: out,
             stderr: err,
         })
-    }).await;
+    })
+    .await;
 
     match output_result {
         Ok(Ok(output)) => Ok(output),
@@ -479,7 +433,11 @@ async fn run_with_timeout(
         Err(_) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            Err(format!("{} timed out after {} seconds", label, timeout.as_secs()))
+            Err(format!(
+                "{} timed out after {} seconds",
+                label,
+                timeout.as_secs()
+            ))
         }
     }
 }
@@ -494,12 +452,16 @@ async fn get_embedded_subtitle_tracks(
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     const SUPPORTED: &[&str] = &["subrip", "ass", "ssa", "webvtt", "mov_text", "text"];
 
-    let mut cmd = create_hidden_command("ffprobe");
+    let mut cmd = get_ffprobe_command();
     cmd.args([
-        "-v", "error",
-        "-select_streams", "s",
-        "-show_entries", "stream=index,codec_name:stream_tags=language,title",
-        "-of", "json",
+        "-v",
+        "error",
+        "-select_streams",
+        "s",
+        "-show_entries",
+        "stream=index,codec_name:stream_tags=language,title",
+        "-of",
+        "json",
         &video_path,
     ]);
 
@@ -513,7 +475,12 @@ async fn get_embedded_subtitle_tracks(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
         Ok(v) => v,
-        Err(e) => return Err(format!("Failed to parse ffprobe JSON: {} (stdout: {})", e, stdout)),
+        Err(e) => {
+            return Err(format!(
+                "Failed to parse ffprobe JSON: {} (stdout: {})",
+                e, stdout
+            ))
+        }
     };
 
     let streams = match parsed["streams"].as_array() {
@@ -544,7 +511,11 @@ async fn get_embedded_subtitle_tracks(
     }
 
     #[cfg(debug_assertions)]
-    println!("Found {} embedded subtitle track(s) in: {}", tracks.len(), video_path);
+    println!(
+        "Found {} embedded subtitle track(s) in: {}",
+        tracks.len(),
+        video_path
+    );
 
     Ok(tracks)
 }
@@ -565,14 +536,21 @@ async fn extract_embedded_subtitle(
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
     #[cfg(debug_assertions)]
-    println!("Extracting embedded subtitle stream {} from: {}", stream_index, video_path);
+    println!(
+        "Extracting embedded subtitle stream {} from: {}",
+        stream_index, video_path
+    );
 
     let mut cmd = get_ffmpeg_command();
     cmd.args([
-        "-v", "error",
-        "-i", &video_path,
-        "-map", &format!("0:{}", stream_index),
-        "-f", "srt",
+        "-v",
+        "error",
+        "-i",
+        &video_path,
+        "-map",
+        &format!("0:{}", stream_index),
+        "-f",
+        "srt",
         "pipe:1",
     ]);
 
@@ -593,6 +571,52 @@ struct VideoFile {
     size: u64,
     modified: u64,
     duration: Option<f64>,
+    is_cloud_only: bool,
+}
+
+#[cfg(target_os = "windows")]
+fn is_cloud_only_file(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    let attrs = metadata.file_attributes();
+    // Set by OneDrive, Google Drive for Desktop, and Dropbox for files not yet downloaded
+    const FILE_ATTRIBUTE_OFFLINE: u32 = 0x1000;
+    const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x40000;
+    const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x400000;
+    attrs
+        & (FILE_ATTRIBUTE_OFFLINE
+            | FILE_ATTRIBUTE_RECALL_ON_OPEN
+            | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
+        != 0
+}
+
+#[cfg(target_os = "macos")]
+fn is_cloud_only_file(metadata: &fs::Metadata) -> bool {
+    use std::os::darwin::fs::MetadataExt;
+    const SF_DATALESS: u32 = 0x40000000;
+    (metadata.st_flags() & SF_DATALESS) != 0
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn is_cloud_only_file(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+fn is_cloud_only_path(path: &str) -> bool {
+    fs::metadata(path)
+        .map(|m| is_cloud_only_file(&m))
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn is_windows_hidden(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_windows_hidden(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 #[derive(Serialize, Clone)]
@@ -657,17 +681,19 @@ struct EmbeddedAudioTrack {
 }
 
 #[tauri::command]
-async fn get_embedded_audio_tracks(
-    video_path: String,
-) -> Result<Vec<EmbeddedAudioTrack>, String> {
+async fn get_embedded_audio_tracks(video_path: String) -> Result<Vec<EmbeddedAudioTrack>, String> {
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-    let mut cmd = create_hidden_command("ffprobe");
+    let mut cmd = get_ffprobe_command();
     cmd.args([
-        "-v", "error",
-        "-select_streams", "a",
-        "-show_entries", "stream=index,codec_name,channels:stream_tags=language,title:stream_disposition=default",
-        "-of", "json",
+        "-v",
+        "error",
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=index,codec_name,channels:stream_tags=language,title:stream_disposition=default",
+        "-of",
+        "json",
         &video_path,
     ]);
 
@@ -681,7 +707,12 @@ async fn get_embedded_audio_tracks(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
         Ok(v) => v,
-        Err(e) => return Err(format!("Failed to parse ffprobe JSON: {} (stdout: {})", e, stdout)),
+        Err(e) => {
+            return Err(format!(
+                "Failed to parse ffprobe JSON: {} (stdout: {})",
+                e, stdout
+            ))
+        }
     };
 
     let streams = match parsed["streams"].as_array() {
@@ -710,7 +741,11 @@ async fn get_embedded_audio_tracks(
     }
 
     #[cfg(debug_assertions)]
-    println!("Found {} embedded audio track(s) in: {}", tracks.len(), video_path);
+    println!(
+        "Found {} embedded audio track(s) in: {}",
+        tracks.len(),
+        video_path
+    );
 
     Ok(tracks)
 }
@@ -723,11 +758,17 @@ async fn remux_with_audio_track(
     audio_stream_index: i64,
 ) -> Result<String, String> {
     if audio_stream_index < 0 {
-        return Err(format!("Invalid audio stream index: {}", audio_stream_index));
+        return Err(format!(
+            "Invalid audio stream index: {}",
+            audio_stream_index
+        ));
     }
 
     let audio_tracks = get_embedded_audio_tracks(video_path.clone()).await?;
-    if !audio_tracks.iter().any(|track| track.index == audio_stream_index) {
+    if !audio_tracks
+        .iter()
+        .any(|track| track.index == audio_stream_index)
+    {
         return Err(format!(
             "Stream index {} is not a valid audio track for this video",
             audio_stream_index
@@ -736,16 +777,20 @@ async fn remux_with_audio_track(
 
     let temp_dir = std::env::temp_dir();
     let mut temp_path_opt: Option<std::path::PathBuf> = None;
-    
+
     for i in 0..100 {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        
-        let filename = format!("glucose_audio_{}_{}.mkv", std::process::id(), timestamp + i as u128);
+
+        let filename = format!(
+            "glucose_audio_{}_{}.mkv",
+            std::process::id(),
+            timestamp + i as u128
+        );
         let candidate_path = temp_dir.join(&filename);
-        
+
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -760,22 +805,31 @@ async fn remux_with_audio_track(
         }
     }
 
-    let temp_path = temp_path_opt.ok_or_else(|| "Failed to generate a unique temporary file path".to_string())?;
+    let temp_path = temp_path_opt
+        .ok_or_else(|| "Failed to generate a unique temporary file path".to_string())?;
     let temp_path_str = temp_path.to_string_lossy().to_string();
     let out = temp_path_str.clone();
 
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
     #[cfg(debug_assertions)]
-    println!("Remuxing audio stream {} from: {} -> {}", audio_stream_index, video_path, temp_path_str);
+    println!(
+        "Remuxing audio stream {} from: {} -> {}",
+        audio_stream_index, video_path, temp_path_str
+    );
 
     let mut cmd = get_ffmpeg_command();
     cmd.args([
-        "-v", "error",
-        "-i", &video_path,
-        "-map", "0:V?",
-        "-map", &format!("0:{}", audio_stream_index),
-        "-c", "copy",
+        "-v",
+        "error",
+        "-i",
+        &video_path,
+        "-map",
+        "0:V?",
+        "-map",
+        &format!("0:{}", audio_stream_index),
+        "-c",
+        "copy",
         "-y",
         &temp_path_str,
     ]);
@@ -803,19 +857,22 @@ async fn remux_with_audio_track(
 #[tauri::command]
 async fn delete_temp_file(path: String) -> Result<(), String> {
     let target = std::path::Path::new(&path);
-    
+
     let p = match target.canonicalize() {
         Ok(p) => p,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.to_string()),
     };
 
-    let temp_dir = std::env::temp_dir().canonicalize().map_err(|e| e.to_string())?;
-    
+    let temp_dir = std::env::temp_dir()
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+
     if !p.starts_with(&temp_dir) {
         return Err("Only files inside the system temp directory may be deleted".to_string());
     }
-    let file_name = p.file_name()
+    let file_name = p
+        .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| "Invalid file name".to_string())?;
     if !file_name.starts_with("glucose_audio_") || !file_name.ends_with(".mkv") {
@@ -831,20 +888,19 @@ async fn delete_temp_file(path: String) -> Result<(), String> {
 
 // Get video duration using FFmpeg
 // Note: Caller should verify ffprobe is available before calling this
-fn get_video_duration(video_path: &str) -> Option<f64> {
-    let output = create_hidden_command("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            video_path,
-        ])
-        .output()
-        .ok()?;
-
+async fn get_video_duration(video_path: &str) -> Option<f64> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    let mut cmd = get_ffprobe_command();
+    cmd.args([
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        video_path,
+    ]);
+    let output = run_with_timeout(cmd, TIMEOUT, "ffprobe").await.ok()?;
     if output.status.success() {
         let duration_str = String::from_utf8_lossy(&output.stdout);
         duration_str.trim().parse::<f64>().ok()
@@ -1014,11 +1070,11 @@ fn save_setup_completed(completed: bool) -> Result<(), String> {
     let config_dir = home.join(".glucose");
     let config_file = config_dir.join("config.json");
 
-    // Create config directory if it doesn't exist
     fs::create_dir_all(&config_dir)
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
 
-    // Load existing config or create new
+    let _guard = CONFIG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
     let mut config: serde_json::Value = if config_file.exists() {
         let content = fs::read_to_string(&config_file)
             .map_err(|e| format!("Failed to read config: {}", e))?;
@@ -1027,14 +1083,16 @@ fn save_setup_completed(completed: bool) -> Result<(), String> {
         serde_json::json!({})
     };
 
-    // Update setup_completed field
-    config["setup_completed"] = serde_json::json!(completed);
+    let config_object = config
+        .as_object_mut()
+        .ok_or_else(|| "Config root must be a JSON object".to_string())?;
+    config_object.insert("setup_completed".to_string(), serde_json::json!(completed));
 
-    // Save config
     let content = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
-
-    fs::write(config_file, content).map_err(|e| format!("Failed to write config: {}", e))?;
+    let temp_file = config_file.with_extension("json.tmp");
+    fs::write(&temp_file, &content).map_err(|e| format!("Failed to write temp config: {}", e))?;
+    fs::rename(&temp_file, &config_file).map_err(|e| format!("Failed to replace config: {}", e))?;
 
     Ok(())
 }
@@ -1073,7 +1131,7 @@ async fn download_whisper_model(
         &output_path,
         &format!("Downloading {} model", model_size),
     )
-        .await?;
+    .await?;
 
     Ok(output_path.to_string_lossy().to_string())
 }
@@ -1361,8 +1419,8 @@ async fn generate_subtitles(
             &language_clone,
         )
     })
-        .await
-        .map_err(|e| format!("Transcription task failed: {}", e))??;
+    .await
+    .map_err(|e| format!("Transcription task failed: {}", e))??;
 
     // Clean up temporary audio file
     let _ = fs::remove_file(&temp_audio_str);
@@ -1441,7 +1499,8 @@ fn transcribe_audio_with_whisper(
     for i in 0..num_segments {
         // 1. Fetch the segment object for this loop iteration
         // USING .ok_or_else() INSTEAD OF .map_err() because get_segment returns an Option
-        let segment = state.get_segment(i)
+        let segment = state
+            .get_segment(i)
             .ok_or_else(|| format!("Failed to get segment {}", i))?;
 
         // 2. Grab the timestamps from the object
@@ -1449,7 +1508,8 @@ fn transcribe_audio_with_whisper(
         let end_timestamp = segment.end_timestamp();
 
         // 3. Grab the text
-        let text = segment.to_str()
+        let text = segment
+            .to_str()
             .map_err(|e| format!("Failed to parse segment text: {}", e))?
             .to_string();
 
@@ -1681,8 +1741,8 @@ async fn convert_video(
             &app_handle_clone,
         )
     })
-        .await
-        .map_err(|e| format!("Conversion task failed: {}", e))??;
+    .await
+    .map_err(|e| format!("Conversion task failed: {}", e))??;
 
     // Emit completion
     let _ = app_handle.emit(
@@ -1778,95 +1838,141 @@ fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchPro
     Ok(progress_map)
 }
 
-#[tauri::command]
-fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
-    let mut videos = Vec::new();
-
-    // Check if ffprobe is available once at the start
-    let ffprobe_available = create_hidden_command("ffprobe")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !ffprobe_available {
-        eprintln!("Warning: ffprobe not found in PATH. Video durations will not be extracted.");
+fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
+    if depth == 0 {
+        return;
     }
-
-    // Get common video directories
-    let mut search_dirs = Vec::new();
-
-    if let Some(home) = dirs::home_dir() {
-        #[cfg(debug_assertions)]
-        println!("Home directory: {:?}", home);
-        search_dirs.push(home.join("Videos"));
-        search_dirs.push(home.join("Downloads"));
-        search_dirs.push(home.join("Desktop"));
-        search_dirs.push(home.join("Documents"));
-    }
-
-    // Scan directories
-    for dir in &search_dirs {
-        #[cfg(debug_assertions)]
-        println!("Checking directory: {:?} (exists: {})", dir, dir.exists());
-        if dir.exists() {
-            #[cfg(debug_assertions)]
-            let mut dir_video_count = 0;
-            if let Ok(entries) = fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    if let Ok(metadata) = entry.metadata() {
-                        if metadata.is_file() {
-                            if let Some(ext) = entry.path().extension() {
-                                if let Some(ext_str) = ext.to_str() {
-                                    if MEDIA_EXTENSIONS.contains(&ext_str.to_lowercase().as_str()) {
-                                        if let Ok(modified) = metadata.modified() {
-                                            if let Ok(duration) =
-                                                modified.duration_since(SystemTime::UNIX_EPOCH)
-                                            {
-                                                let video_path =
-                                                    entry.path().to_string_lossy().to_string();
-                                                // Only try to get duration if ffprobe is available
-                                                let video_duration = if ffprobe_available {
-                                                    get_video_duration(&video_path)
-                                                } else {
-                                                    None
-                                                };
-
-                                                videos.push(VideoFile {
-                                                    path: video_path,
-                                                    name: entry
-                                                        .file_name()
-                                                        .to_string_lossy()
-                                                        .to_string(),
-                                                    size: metadata.len(),
-                                                    modified: duration.as_secs(),
-                                                    duration: video_duration,
-                                                });
-                                                #[cfg(debug_assertions)]
-                                                {
-                                                    dir_video_count += 1;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        // Skip symlinks: avoids loops for directories and duplicates for files
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            // Skip Windows hidden directories (e.g. system/app folders)
+            #[cfg(target_os = "windows")]
+            if entry
+                .metadata()
+                .map(|m| is_windows_hidden(&m))
+                .unwrap_or(false)
+            {
+                continue;
             }
-            #[cfg(debug_assertions)]
-            println!("Found {} videos in {:?}", dir_video_count, dir);
+            scan_dir_for_media(&path, videos, depth - 1);
+        } else if file_type.is_file() {
+            let ext = match path.extension().and_then(|e| e.to_str()) {
+                Some(e) => e.to_lowercase(),
+                None => continue,
+            };
+            if !is_media_extension(&ext) {
+                continue;
+            }
+            // Fetch metadata only after confirming it's a regular file
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if is_windows_hidden(&metadata) {
+                continue;
+            }
+            let Ok(modified) = metadata.modified() else {
+                continue;
+            };
+            let Ok(mod_secs) = modified.duration_since(SystemTime::UNIX_EPOCH) else {
+                continue;
+            };
+            videos.push(VideoFile {
+                path: path.to_string_lossy().to_string(),
+                name: name.to_string_lossy().to_string(),
+                size: metadata.len(),
+                modified: mod_secs.as_secs(),
+                duration: None,
+                is_cloud_only: is_cloud_only_file(&metadata),
+            });
         }
     }
+}
 
-    // Sort by modified time (most recent first)
+#[tauri::command]
+async fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
+    let search_dirs: Vec<std::path::PathBuf> = get_gallery_paths()?
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+
+    let handles: Vec<_> = search_dirs
+        .into_iter()
+        .map(|dir| {
+            tokio::task::spawn_blocking(move || {
+                let mut videos = Vec::new();
+                scan_dir_for_media(&dir, &mut videos, 6);
+                videos
+            })
+        })
+        .collect();
+
+    let mut videos = Vec::new();
+    for handle in handles {
+        videos.append(&mut handle.await.map_err(|e| e.to_string())?);
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    videos.retain(|v| seen.insert(v.path.clone()));
     videos.sort_by(|a, b| b.modified.cmp(&a.modified));
-
-    // Return top 20
-    videos.truncate(20);
+    videos.truncate(100);
 
     Ok(videos)
+}
+
+#[derive(Serialize, Clone)]
+struct VideoDurationUpdate {
+    path: String,
+    duration: Option<f64>,
+}
+
+#[tauri::command]
+async fn fetch_video_durations(
+    app_handle: tauri::AppHandle,
+    paths: Vec<String>,
+) -> Result<(), String> {
+    tokio::spawn(async move {
+        let ffprobe_available = tokio::task::spawn_blocking(|| {
+            get_ffprobe_command()
+                .arg("-version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false);
+
+        if !ffprobe_available {
+            let _ = app_handle.emit("ffprobe-unavailable", ());
+            return;
+        }
+
+        for path in paths {
+            let duration = if is_cloud_only_path(&path) {
+                None
+            } else {
+                get_video_duration(&path).await
+            };
+            let _ = app_handle.emit(
+                "video-duration-ready",
+                VideoDurationUpdate { path, duration },
+            );
+        }
+    });
+    Ok(())
 }
 
 // Function to process video files and emit events
@@ -1973,14 +2079,15 @@ pub fn run() {
                     #[cfg(debug_assertions)]
                     println!("Processing argument: {} -> {}", arg, clean_arg);
 
-                    let lower = clean_arg.to_lowercase();
-                    for ext in MEDIA_EXTENSIONS {
-                        if lower.ends_with(&format!(".{}", ext)) {
-                            video_files.push(clean_arg.clone());
-                            #[cfg(debug_assertions)]
-                            println!("Found video file: {}", clean_arg);
-                            break;
-                        }
+                    let is_media = std::path::Path::new(&clean_arg)
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .map(|ext| is_media_extension(&ext.to_lowercase()))
+                        .unwrap_or(false);
+                    if is_media {
+                        video_files.push(clean_arg.clone());
+                        #[cfg(debug_assertions)]
+                        println!("Found video file: {}", clean_arg);
                     }
                 }
 
@@ -1998,9 +2105,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_file_dialog,
+            open_folder_dialog,
             open_subtitle_dialog,
+            get_gallery_paths,
+            save_gallery_paths,
             convert_file_path,
             get_recent_videos,
+            fetch_video_durations,
             get_pending_file,
             mark_file_processed,
             frontend_ready,
@@ -2023,7 +2134,9 @@ pub fn run() {
             get_video_info,
             convert_video,
             enter_pip_mode,
-            exit_pip_mode
+            exit_pip_mode,
+            save_pip_window_layout,
+            settle_pip_window
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -2057,17 +2170,15 @@ pub fn run() {
                             #[cfg(debug_assertions)]
                             println!("Decoded path: {}", decoded_path);
 
-                            let lower = decoded_path.to_lowercase();
-                            for ext in MEDIA_EXTENSIONS {
-                                if lower.ends_with(&format!(".{}", ext)) {
-                                    video_files.push(decoded_path.to_string());
-                                    #[cfg(debug_assertions)]
-                                    println!(
-                                        "Found video file from opened event: {}",
-                                        decoded_path
-                                    );
-                                    break;
-                                }
+                            let is_media = Path::new(decoded_path.as_ref())
+                                .extension()
+                                .and_then(|s| s.to_str())
+                                .map(|ext| is_media_extension(&ext.to_lowercase()))
+                                .unwrap_or(false);
+                            if is_media {
+                                video_files.push(decoded_path.to_string());
+                                #[cfg(debug_assertions)]
+                                println!("Found video file from opened event: {}", decoded_path);
                             }
                         }
                     }

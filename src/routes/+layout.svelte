@@ -1,6 +1,32 @@
 <script lang="ts">
   import "$lib/styles/global.css";
+  import theme from "$lib/theme.json";
   import { invoke } from "@tauri-apps/api/core";
+
+  // Inject design tokens as CSS custom properties (no SSR, document is available)
+  {
+    const tokens: Record<string, string> = {
+      "--blur-sm":                 theme.blur.sm,
+      "--blur-md":                 theme.blur.md,
+      "--blur-lg":                 theme.blur.lg,
+      "--surface-gallery":         theme.surface.gallery,
+      "--surface-overlay":         theme.surface.overlay,
+      "--surface-panel":           theme.surface.panel,
+      "--surface-badge":           theme.surface.badge,
+      "--color-accent":            theme.color.accent,
+      "--color-accent-subtle":     theme.color.accentSubtle,
+      "--color-accent-border":     theme.color.accentBorder,
+      "--color-border":            theme.color.border,
+      "--color-border-strong":     theme.color.borderStrong,
+      "--color-interactive":       theme.color.interactive,
+      "--color-interactive-hover": theme.color.interactiveHover,
+      "--color-text":              theme.color.text,
+      "--color-text-muted":        theme.color.textMuted,
+      "--color-text-subtle":       theme.color.textSubtle,
+    };
+    const root = document.documentElement;
+    for (const [k, v] of Object.entries(tokens)) root.style.setProperty(k, v);
+  }
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, setContext } from "svelte";
@@ -28,8 +54,10 @@
     Users,
     Star,
     Keyboard,
+    FolderOpen,
   } from "lucide-svelte";
   import Button from "$lib/components/Button.svelte";
+  import LibrarySettings from "$lib/components/LibrarySettings.svelte";
   import UpdateManager, {
     type UpdateManagerAPI,
   } from "$lib/components/UpdateManager.svelte";
@@ -55,7 +83,7 @@
   let downloadProgress = $state(0);
   let downloadMessage = $state("");
   let isCheckingForUpdates = $state(false);
-  let selectedTab = $state("ai"); // 'ai' | 'shortcuts' | 'updates' | 'community' | 'about'
+  let selectedTab = $state("ai"); // 'ai' | 'library' | 'shortcuts' | 'updates' | 'community' | 'about'
   let modelsExpanded = $state(false);
 
   // Update manager
@@ -301,6 +329,14 @@
           >
             <Cpu size={18} />
             <span>AI Settings</span>
+          </button>
+          <button
+            class="sidebar-tab"
+            class:active={selectedTab === "library"}
+            onclick={() => (selectedTab = "library")}
+          >
+            <FolderOpen size={18} />
+            <span>Library</span>
           </button>
           <button
             class="sidebar-tab"
@@ -721,6 +757,8 @@
                 </div>
               </div>
             </div>
+          {:else if selectedTab === "library"}
+            <LibrarySettings />
           {:else if selectedTab === "shortcuts"}
             <div class="settings-section">
               <div class="shortcuts-layout">
