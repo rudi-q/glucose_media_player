@@ -75,7 +75,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="pip-drag-header" class:visible onmousedown={startWindowDrag}>
-  <button class="pip-window-button" onclick={() => appWindow.minimize()} title="Minimize">
+  <button class="pip-window-button" onclick={() => appWindow.minimize().catch((err) => { console.error("Failed to minimize window:", err); })} title="Minimize">
     <Minus size={14} />
   </button>
   <button class="pip-window-button pip-close-button" onclick={onClose} title="Close">
