@@ -429,7 +429,7 @@
 
     if (e.key === 'Escape') {
       e.preventDefault();
-      closeApp();
+      goBack();
       return;
     }
 

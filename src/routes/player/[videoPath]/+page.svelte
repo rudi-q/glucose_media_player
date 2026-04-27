@@ -1318,7 +1318,7 @@
       class="close-button"
       class:visible={showCloseButton}
       onclick={closeApp}
-      title="Close (Esc)"
+      title="Close"
     >
       <X size={16} />
     </button>

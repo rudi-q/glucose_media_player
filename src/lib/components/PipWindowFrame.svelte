@@ -44,6 +44,7 @@
   }
 
   onMount(() => {
+    showHeader();
     document.addEventListener("mousemove", showHeader);
     return () => {
       document.removeEventListener("mousemove", showHeader);
@@ -74,10 +75,10 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="pip-drag-header" class:visible onmousedown={startWindowDrag}>
-  <button class="pip-close-button" onclick={() => appWindow.minimize()} title="Minimize">
+  <button class="pip-window-button" onclick={() => appWindow.minimize()} title="Minimize">
     <Minus size={14} />
   </button>
-  <button class="pip-close-button" onclick={onClose} title="Close (Esc)">
+  <button class="pip-window-button pip-close-button" onclick={onClose} title="Close">
     <X size={14} />
   </button>
 </div>
@@ -115,7 +116,7 @@
     opacity: 1;
   }
 
-  .pip-close-button {
+  .pip-window-button {
     width: 24px;
     height: 24px;
     display: flex;
@@ -129,7 +130,7 @@
     transition: all 0.2s ease;
   }
 
-  .pip-close-button:hover {
+  .pip-window-button:hover {
     background: rgba(255, 255, 255, 0.2);
     border-color: rgba(255, 255, 255, 0.3);
     color: #fff;
