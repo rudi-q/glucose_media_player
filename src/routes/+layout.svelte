@@ -838,7 +838,7 @@
                       <kbd class="key">Backspace</kbd>
                     </div>
                     <div class="shortcut-item">
-                      <span class="shortcut-label">Close Application</span>
+                      <span class="shortcut-label">Exit Current Mode / Close App</span>
                       <kbd class="key">Esc</kbd>
                     </div>
                   </div>

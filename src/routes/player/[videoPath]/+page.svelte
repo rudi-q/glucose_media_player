@@ -375,11 +375,16 @@
     };
   });
 
-  function handleKeyPress(e: KeyboardEvent) {
-    // Close app
+  async function handleKeyPress(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
-      closeApp();
+      if (viewMode === "pip") {
+        await exitPipMode("cinematic");
+      } else if (viewMode === "fullscreen") {
+        viewMode = "cinematic";
+      } else {
+        await goHome();
+      }
       return;
     }
 
