@@ -172,6 +172,9 @@
       selectedVideoIndex = 0;
       videosLoaded = false;
       cachedVideos = [];
+      hoveredPath = null;
+      previewActivePath = null;
+      previewPlayingPath = null;
       watchProgressStore.clear();
       loadVideos();
     }
@@ -816,9 +819,9 @@
                           {/if}
                         {/await}
                         {#if hoveredPath === video.path}
-                          {@const progress = watchProgressMap.get(video.path)!}
-                          {@const lookback = Math.max(20, (progress.duration || 0) * 0.005)}
-                          {@const startTime = Math.max(0, progress.current_time - lookback)}
+                          {@const progress = watchProgressMap.get(video.path)}
+                          {@const lookback = Math.max(20, (progress?.duration || 0) * 0.005)}
+                          {@const startTime = Math.max(0, (progress?.current_time ?? 0) - lookback)}
                           <!-- svelte-ignore a11y_media_has_caption -->
                           <video
                             class="hover-preview"
