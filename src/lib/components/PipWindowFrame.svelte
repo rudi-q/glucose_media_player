@@ -34,13 +34,37 @@
   let visible = $state(false);
   let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
+  let headerHovered = false;
+
   function showHeader() {
     visible = true;
     if (hideTimer) clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      visible = false;
+    if (!headerHovered) {
+      hideTimer = setTimeout(() => {
+        visible = false;
+        hideTimer = null;
+      }, HIDE_DELAY_MS);
+    }
+  }
+
+  function keepHeader() {
+    headerHovered = true;
+    visible = true;
+    if (hideTimer) {
+      clearTimeout(hideTimer);
       hideTimer = null;
-    }, HIDE_DELAY_MS);
+    }
+  }
+
+  function releaseHeader() {
+    headerHovered = false;
+    showHeader();
+  }
+
+  function minimizeWindow() {
+    appWindow.minimize().catch((err) => {
+      console.error("Failed to minimize window:", err);
+    });
   }
 
   onMount(() => {
@@ -74,8 +98,8 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pip-drag-header" class:visible onmousedown={startWindowDrag}>
-  <button class="pip-window-button" onclick={() => appWindow.minimize().catch((err) => { console.error("Failed to minimize window:", err); })} title="Minimize">
+<div class="pip-drag-header" class:visible onmousedown={startWindowDrag} onmouseenter={keepHeader} onmouseleave={releaseHeader}>
+  <button class="pip-window-button" onclick={minimizeWindow} title="Minimize">
     <Minus size={14} />
   </button>
   <button class="pip-window-button pip-close-button" onclick={onClose} title="Close">
