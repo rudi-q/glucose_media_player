@@ -35,11 +35,12 @@
   let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
   let headerHovered = false;
+  let headerFocused = false;
 
   function showHeader() {
     visible = true;
     if (hideTimer) clearTimeout(hideTimer);
-    if (!headerHovered) {
+    if (!headerHovered && !headerFocused) {
       hideTimer = setTimeout(() => {
         visible = false;
         hideTimer = null;
@@ -48,7 +49,6 @@
   }
 
   function keepHeader() {
-    headerHovered = true;
     visible = true;
     if (hideTimer) {
       clearTimeout(hideTimer);
@@ -56,8 +56,23 @@
     }
   }
 
-  function releaseHeader() {
+  function onHeaderMouseEnter() {
+    headerHovered = true;
+    keepHeader();
+  }
+
+  function onHeaderMouseLeave() {
     headerHovered = false;
+    showHeader();
+  }
+
+  function onHeaderFocusIn() {
+    headerFocused = true;
+    keepHeader();
+  }
+
+  function onHeaderFocusOut() {
+    headerFocused = false;
     showHeader();
   }
 
@@ -98,7 +113,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pip-drag-header" class:visible onmousedown={startWindowDrag} onmouseenter={keepHeader} onmouseleave={releaseHeader} onfocusin={keepHeader} onfocusout={releaseHeader}>
+<div class="pip-drag-header" class:visible onmousedown={startWindowDrag} onmouseenter={onHeaderMouseEnter} onmouseleave={onHeaderMouseLeave} onfocusin={onHeaderFocusIn} onfocusout={onHeaderFocusOut}>
   <button class="pip-window-button" onclick={minimizeWindow} title="Minimize" aria-label="Minimize">
     <Minus size={14} />
   </button>
