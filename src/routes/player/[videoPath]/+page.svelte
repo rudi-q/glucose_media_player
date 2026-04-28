@@ -375,11 +375,16 @@
     };
   });
 
-  function handleKeyPress(e: KeyboardEvent) {
-    // Close app
+  async function handleKeyPress(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
-      closeApp();
+      if (viewMode === "pip") {
+        await exitPipMode("cinematic");
+      } else if (viewMode === "fullscreen") {
+        viewMode = "cinematic";
+      } else {
+        await goHome();
+      }
       return;
     }
 
@@ -1313,7 +1318,7 @@
       class="close-button"
       class:visible={showCloseButton}
       onclick={closeApp}
-      title="Close (Esc)"
+      title="Close"
     >
       <X size={16} />
     </button>

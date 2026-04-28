@@ -429,7 +429,7 @@
 
     if (e.key === 'Escape') {
       e.preventDefault();
-      closeApp();
+      goBack();
       return;
     }
 
@@ -635,28 +635,6 @@
     saveProgress();
   });
 
-  async function closeApp() {
-    if (isPlaying) {
-      await fadedPlayback.pause();
-    }
-
-    const pos = audioEl?.currentTime ?? currentTime;
-    if (duration > 0 && pos > 2) {
-      await invoke('save_watch_progress', {
-        videoPath: audioPath,
-        currentTime: pos,
-        duration
-      }).catch(console.error);
-    }
-    try {
-      const { exit } = await import('@tauri-apps/plugin-process');
-      await exit(0);
-    } catch {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      (await getCurrentWindow()).close();
-    }
-  }
-
   // Scrubber helpers
   function onScrubStart(e: MouseEvent) {
     isScrubbing = true;
@@ -689,7 +667,7 @@
         ondrop={(e) => e.preventDefault()}
 >
   <!-- Close button -->
-  <button class="close-btn" class:visible={showCloseBtn} tabindex={showCloseBtn ? 0 : -1} onclick={closeApp} onfocus={() => { showCloseBtn = true; clearTimeout(hideCloseBtnTimer); hideCloseBtnTimer = setTimeout(() => { showCloseBtn = false; }, 1200); }} title="Close (Esc)">
+  <button class="close-btn" class:visible={showCloseBtn} tabindex={showCloseBtn ? 0 : -1} onclick={goBack} onfocus={() => { showCloseBtn = true; clearTimeout(hideCloseBtnTimer); hideCloseBtnTimer = setTimeout(() => { showCloseBtn = false; }, 1200); }} title="Back to library">
     <X size={16} />
   </button>
 

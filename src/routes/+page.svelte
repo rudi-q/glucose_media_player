@@ -47,6 +47,7 @@
   let previewTransformOrigin = $state('center center');
   let hoverTimer: ReturnType<typeof setTimeout> | null = null;
   let previewFadeOutTimer: ReturnType<typeof setTimeout> | null = null;
+  let keyboardPreviewTimer: ReturnType<typeof setTimeout> | null = null;
   const _previewMutedStored = localStorage.getItem('glucose_preview_muted');
   let previewMuted = $state(_previewMutedStored === null ? true : _previewMutedStored === 'true');
   const _savedSort = localStorage.getItem('glucose_sort');
@@ -224,6 +225,7 @@
       destroyed = true;
       if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
       if (previewFadeOutTimer !== null) { clearTimeout(previewFadeOutTimer); previewFadeOutTimer = null; }
+      if (keyboardPreviewTimer !== null) { clearTimeout(keyboardPreviewTimer); keyboardPreviewTimer = null; }
       clearThumbnailCache();
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
@@ -232,6 +234,7 @@
   });
 
   function onCardHoverEnter(video: VideoFile) {
+    if (keyboardPreviewTimer !== null) { clearTimeout(keyboardPreviewTimer); keyboardPreviewTimer = null; }
     if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
     const progress = watchProgressMap.get(video.path);
     if (!progress || !(progress.current_time > 0) || video.is_cloud_only || isAudio(video.path)) return;
@@ -267,6 +270,16 @@
       }
       previewFadeOutTimer = null;
     }, 800);
+  }
+
+  function scheduleKeyboardPreview() {
+    onCardHoverLeave();
+    if (keyboardPreviewTimer !== null) { clearTimeout(keyboardPreviewTimer); keyboardPreviewTimer = null; }
+    keyboardPreviewTimer = setTimeout(() => {
+      keyboardPreviewTimer = null;
+      const video = sortedVideos[selectedVideoIndex];
+      if (video) onCardHoverEnter(video);
+    }, 1000);
   }
 
   type HoverPreviewOptions = {
@@ -375,21 +388,25 @@
           e.preventDefault();
           selectedVideoIndex = Math.max(0, selectedVideoIndex - 1);
           scrollSelectedVideoIntoView();
+          scheduleKeyboardPreview();
           break;
         case "ArrowRight":
           e.preventDefault();
           selectedVideoIndex = Math.min(sortedVideos.length - 1, selectedVideoIndex + 1);
           scrollSelectedVideoIntoView();
+          scheduleKeyboardPreview();
           break;
         case "ArrowUp":
           e.preventDefault();
           selectedVideoIndex = getVerticalNavigationIndex('up');
           scrollSelectedVideoIntoView();
+          scheduleKeyboardPreview();
           break;
         case "ArrowDown":
           e.preventDefault();
           selectedVideoIndex = getVerticalNavigationIndex('down');
           scrollSelectedVideoIntoView();
+          scheduleKeyboardPreview();
           break;
         case "Enter":
         case " ":

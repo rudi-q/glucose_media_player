@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { X } from "lucide-svelte";
+  import { onMount } from "svelte";
+  import { Minus, X } from "lucide-svelte";
 
   type ResizeDirection =
     | "East"
@@ -29,6 +30,67 @@
     { className: "corner-bottom-left", direction: "SouthWest" },
   ];
 
+  const HIDE_DELAY_MS = 2000;
+  let visible = $state(false);
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
+
+  let headerHovered = false;
+  let headerFocused = false;
+
+  function showHeader() {
+    visible = true;
+    if (hideTimer) clearTimeout(hideTimer);
+    if (!headerHovered && !headerFocused) {
+      hideTimer = setTimeout(() => {
+        visible = false;
+        hideTimer = null;
+      }, HIDE_DELAY_MS);
+    }
+  }
+
+  function keepHeader() {
+    visible = true;
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+  }
+
+  function onHeaderMouseEnter() {
+    headerHovered = true;
+    keepHeader();
+  }
+
+  function onHeaderMouseLeave() {
+    headerHovered = false;
+    showHeader();
+  }
+
+  function onHeaderFocusIn() {
+    headerFocused = true;
+    keepHeader();
+  }
+
+  function onHeaderFocusOut() {
+    headerFocused = false;
+    showHeader();
+  }
+
+  function minimizeWindow() {
+    appWindow.minimize().catch((err) => {
+      console.error("Failed to minimize window:", err);
+    });
+  }
+
+  onMount(() => {
+    showHeader();
+    document.addEventListener("mousemove", showHeader);
+    return () => {
+      document.removeEventListener("mousemove", showHeader);
+      if (hideTimer) clearTimeout(hideTimer);
+    };
+  });
+
   function startWindowDrag(event: MouseEvent) {
     if (event.button !== 0) return;
     if ((event.target as HTMLElement).closest("button")) return;
@@ -51,8 +113,11 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pip-drag-header" onmousedown={startWindowDrag}>
-  <button class="pip-close-button" onclick={onClose} title="Close (Esc)">
+<div class="pip-drag-header" class:visible onmousedown={startWindowDrag} onmouseenter={onHeaderMouseEnter} onmouseleave={onHeaderMouseLeave} onfocusin={onHeaderFocusIn} onfocusout={onHeaderFocusOut}>
+  <button class="pip-window-button" onclick={minimizeWindow} title="Minimize" aria-label="Minimize">
+    <Minus size={14} />
+  </button>
+  <button class="pip-window-button pip-close-button" onclick={onClose} title="Close" aria-label="Close">
     <X size={14} />
   </button>
 </div>
@@ -78,6 +143,7 @@
     display: flex;
     align-items: center;
     justify-content: flex-end;
+    gap: 4px;
     padding: 0 8px;
     z-index: 220;
     cursor: move;
@@ -85,11 +151,11 @@
     transition: opacity 0.2s ease;
   }
 
-  :global(.player-container:hover) .pip-drag-header {
+  .pip-drag-header.visible {
     opacity: 1;
   }
 
-  .pip-close-button {
+  .pip-window-button {
     width: 24px;
     height: 24px;
     display: flex;
@@ -103,7 +169,7 @@
     transition: all 0.2s ease;
   }
 
-  .pip-close-button:hover {
+  .pip-window-button:hover {
     background: rgba(255, 255, 255, 0.2);
     border-color: rgba(255, 255, 255, 0.3);
     color: #fff;
