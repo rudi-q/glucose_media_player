@@ -98,11 +98,11 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pip-drag-header" class:visible onmousedown={startWindowDrag} onmouseenter={keepHeader} onmouseleave={releaseHeader}>
-  <button class="pip-window-button" onclick={minimizeWindow} title="Minimize">
+<div class="pip-drag-header" class:visible onmousedown={startWindowDrag} onmouseenter={keepHeader} onmouseleave={releaseHeader} onfocusin={keepHeader} onfocusout={releaseHeader}>
+  <button class="pip-window-button" onclick={minimizeWindow} title="Minimize" aria-label="Minimize">
     <Minus size={14} />
   </button>
-  <button class="pip-window-button pip-close-button" onclick={onClose} title="Close">
+  <button class="pip-window-button pip-close-button" onclick={onClose} title="Close" aria-label="Close">
     <X size={14} />
   </button>
 </div>
