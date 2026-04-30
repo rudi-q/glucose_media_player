@@ -121,6 +121,7 @@
 
   // HEVC codec warning
   let showHevcWarning = $state(false);
+  let isWindows = $state(false);
 
   // Context menu state
   let showContextMenu = $state(false);
@@ -187,6 +188,9 @@
   onMount(() => {
     let disposed = false;
     const unsubs: UnlistenFn[] = [];
+    const platform = navigator.platform.toLowerCase();
+    const userAgent = navigator.userAgent.toLowerCase();
+    isWindows = platform.includes("win") || userAgent.includes("windows");
 
     // Load the video
     (async () => {
@@ -1401,12 +1405,14 @@
       <span class="hevc-warning-icon">⚠</span>
       <span class="hevc-warning-text">
         H.265 video may not play without the HEVC codec.
-        <button
-          class="hevc-warning-link"
-          onclick={() => openUrl("ms-windows-store://pdp/?ProductId=9n4wgh0z6vhq")}
-        >
-          Get HEVC Video Extensions (free)
-        </button>
+        {#if isWindows}
+          <button
+            class="hevc-warning-link"
+            onclick={() => openUrl("ms-windows-store://pdp/?ProductId=9n4wgh0z6vhq")}
+          >
+            Get HEVC Video Extensions (free)
+          </button>
+        {/if}
       </span>
       <button
         class="hevc-warning-dismiss"

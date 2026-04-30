@@ -51,19 +51,18 @@ fn get_ffmpeg_command() -> Command {
 
 fn get_ffprobe_command() -> Command {
     let ffmpeg_path_info = ffmpeg::resolve_ffmpeg_path_info();
-    if ffmpeg_path_info.is_custom {
-        if let Some(custom_ffmpeg) = ffmpeg_path_info.path {
-            let ffmpeg_path = std::path::Path::new(&custom_ffmpeg);
-            let ffprobe_name = if cfg!(target_os = "windows") {
-                "ffprobe.exe"
-            } else {
-                "ffprobe"
-            };
-            if let Some(bin_dir) = ffmpeg_path.parent() {
-                let ffprobe_path = bin_dir.join(ffprobe_name);
-                if ffprobe_path.exists() {
-                    return create_hidden_command(ffprobe_path.to_str().unwrap_or("ffprobe"));
-                }
+    if let Some(ffmpeg_path) = ffmpeg_path_info.path {
+        let ffmpeg_path = std::path::Path::new(&ffmpeg_path);
+        let ffprobe_name = if cfg!(target_os = "windows") {
+            "ffprobe.exe"
+        } else {
+            "ffprobe"
+        };
+
+        if let Some(bin_dir) = ffmpeg_path.parent() {
+            let ffprobe_path = bin_dir.join(ffprobe_name);
+            if ffprobe_path.exists() {
+                return create_hidden_command(ffprobe_path.to_str().unwrap_or("ffprobe"));
             }
         }
     }
@@ -668,6 +667,7 @@ struct ConversionProgress {
 }
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct VideoInfo {
     format: String,
     size_mb: f64,
@@ -1681,10 +1681,14 @@ async fn get_video_info(video_path: String) -> Result<VideoInfo, String> {
     let video_codec = {
         let mut cmd = get_ffprobe_command();
         cmd.args([
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=codec_name",
-            "-of", "json",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "json",
             &video_path,
         ]);
         match run_with_timeout(cmd, TIMEOUT, "ffprobe").await {
@@ -1705,7 +1709,11 @@ async fn get_video_info(video_path: String) -> Result<VideoInfo, String> {
         }
     };
 
-    Ok(VideoInfo { format, size_mb, video_codec })
+    Ok(VideoInfo {
+        format,
+        size_mb,
+        video_codec,
+    })
 }
 
 // Estimate converted file size (rough estimation)
