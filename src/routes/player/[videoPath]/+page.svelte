@@ -40,6 +40,7 @@
     savePipWindowLayout,
   } from "$lib/utils/pipWindow";
   import { loadSubtitleFile, convertSrtToVtt } from "$lib/utils/subtitles";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     formatTime,
     formatEstimatedTime,
@@ -117,6 +118,9 @@
   let generationMessage = $state("");
   let showModelSelector = $state(false);
   let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
+
+  // HEVC codec warning
+  let showHevcWarning = $state(false);
 
   // Context menu state
   let showContextMenu = $state(false);
@@ -250,6 +254,19 @@
           }
         } catch (err) {
           console.log("Embedded audio track detection failed:", err);
+        }
+
+        try {
+          const info = await invoke<VideoInfo>("get_video_info", {
+            videoPath: data.videoPath,
+          });
+          if (disposed) return;
+          currentVideoInfo = info;
+          if (info.videoCodec === "hevc") {
+            showHevcWarning = true;
+          }
+        } catch (err) {
+          console.log("Video codec detection failed:", err);
         }
       }
     })();
@@ -1377,6 +1394,29 @@
       {/if}
     </video>
   </div>
+
+  <!-- HEVC codec warning banner -->
+  {#if showHevcWarning}
+    <div class="hevc-warning-banner">
+      <span class="hevc-warning-icon">⚠</span>
+      <span class="hevc-warning-text">
+        H.265 video may not play without the HEVC codec.
+        <button
+          class="hevc-warning-link"
+          onclick={() => openUrl("ms-windows-store://pdp/?ProductId=9n4wgh0z6vhq")}
+        >
+          Get HEVC Video Extensions (free)
+        </button>
+      </span>
+      <button
+        class="hevc-warning-dismiss"
+        onclick={() => (showHevcWarning = false)}
+        title="Dismiss"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  {/if}
 
   <!-- AI Subtitle Generation Progress Overlay -->
   {#if isGeneratingSubtitles}
@@ -2681,5 +2721,75 @@
     min-width: 180px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
     z-index: 1001;
+  }
+
+  .hevc-warning-banner {
+    position: fixed;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    background: rgba(20, 20, 20, 0.92);
+    border: 1px solid rgba(251, 191, 36, 0.4);
+    border-radius: 10px;
+    padding: 0.6rem 1rem;
+    z-index: 900;
+    max-width: 520px;
+    width: max-content;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+    animation: slideDown 0.25s ease;
+  }
+
+  @keyframes slideDown {
+    from { transform: translateX(-50%) translateY(-8px); opacity: 0; }
+    to   { transform: translateX(-50%) translateY(0);   opacity: 1; }
+  }
+
+  .hevc-warning-icon {
+    color: rgb(251, 191, 36);
+    font-size: 1rem;
+    flex-shrink: 0;
+  }
+
+  .hevc-warning-text {
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.85);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+
+  .hevc-warning-link {
+    background: none;
+    border: none;
+    color: rgb(251, 191, 36);
+    font-size: 0.8rem;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .hevc-warning-link:hover {
+    color: rgb(253, 211, 77);
+  }
+
+  .hevc-warning-dismiss {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.4);
+    cursor: pointer;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    margin-left: 0.2rem;
+  }
+
+  .hevc-warning-dismiss:hover {
+    color: rgba(255, 255, 255, 0.8);
   }
 </style>

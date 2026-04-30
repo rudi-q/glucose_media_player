@@ -660,6 +660,7 @@ struct ConversionProgress {
 struct VideoInfo {
     format: String,
     size_mb: f64,
+    video_codec: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -1664,22 +1665,49 @@ fn get_watch_progress(video_path: String) -> Result<Option<WatchProgress>, Strin
 
 // Get video file info
 #[tauri::command]
-fn get_video_info(video_path: String) -> Result<VideoInfo, String> {
+async fn get_video_info(video_path: String) -> Result<VideoInfo, String> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
     let path = Path::new(&video_path);
 
-    // Get file size
     let metadata = fs::metadata(path).map_err(|e| format!("Failed to get file metadata: {}", e))?;
     let size_bytes = metadata.len();
     let size_mb = size_bytes as f64 / (1024.0 * 1024.0);
 
-    // Get format from extension
     let format = path
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or("unknown")
         .to_uppercase();
 
-    Ok(VideoInfo { format, size_mb })
+    let video_codec = {
+        let mut cmd = get_ffprobe_command();
+        cmd.args([
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name",
+            "-of", "json",
+            &video_path,
+        ]);
+        match run_with_timeout(cmd, TIMEOUT, "ffprobe").await {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                serde_json::from_str::<serde_json::Value>(&stdout)
+                    .ok()
+                    .and_then(|v| {
+                        v["streams"]
+                            .as_array()?
+                            .first()?
+                            .get("codec_name")?
+                            .as_str()
+                            .map(str::to_string)
+                    })
+            }
+            _ => None,
+        }
+    };
+
+    Ok(VideoInfo { format, size_mb, video_codec })
 }
 
 // Estimate converted file size (rough estimation)
