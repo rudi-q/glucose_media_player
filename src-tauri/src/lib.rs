@@ -1,3 +1,4 @@
+mod ffmpeg;
 mod pip_window;
 
 use pip_window::{enter_pip_mode, exit_pip_mode, save_pip_window_layout, settle_pip_window};
@@ -25,7 +26,7 @@ use tauri::Emitter;
 use tauri::RunEvent;
 
 // Helper to create a Command with hidden console window on Windows
-fn create_hidden_command(program: &str) -> Command {
+pub(crate) fn create_hidden_command(program: &str) -> Command {
     let mut cmd = Command::new(program);
 
     #[cfg(target_os = "windows")]
@@ -38,27 +39,35 @@ fn create_hidden_command(program: &str) -> Command {
     cmd
 }
 
-// Resolves the ffmpeg binary path: bundled AppData location first, then system PATH
+// Resolves the ffmpeg binary path: custom config path first, then bundled AppData, then system PATH
 fn get_ffmpeg_command() -> Command {
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
-            let ffmpeg_exe = std::path::Path::new(&app_data)
-                .join("glucose")
-                .join("resources")
-                .join("ffmpeg")
-                .join("bin")
-                .join("ffmpeg.exe");
-            if ffmpeg_exe.exists() {
-                return create_hidden_command(ffmpeg_exe.to_str().unwrap_or("ffmpeg"));
-            }
-        }
+    let path_info = ffmpeg::resolve_ffmpeg_path_info();
+    if let Some(path) = path_info.path {
+        return create_hidden_command(&path);
     }
 
     create_hidden_command("ffmpeg")
 }
 
 fn get_ffprobe_command() -> Command {
+    let ffmpeg_path_info = ffmpeg::resolve_ffmpeg_path_info();
+    if ffmpeg_path_info.is_custom {
+        if let Some(custom_ffmpeg) = ffmpeg_path_info.path {
+            let ffmpeg_path = std::path::Path::new(&custom_ffmpeg);
+            let ffprobe_name = if cfg!(target_os = "windows") {
+                "ffprobe.exe"
+            } else {
+                "ffprobe"
+            };
+            if let Some(bin_dir) = ffmpeg_path.parent() {
+                let ffprobe_path = bin_dir.join(ffprobe_name);
+                if ffprobe_path.exists() {
+                    return create_hidden_command(ffprobe_path.to_str().unwrap_or("ffprobe"));
+                }
+            }
+        }
+    }
+
     #[cfg(target_os = "windows")]
     {
         if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
@@ -629,6 +638,8 @@ struct SubtitleGenerationProgress {
 #[derive(Serialize, Clone)]
 struct SetupStatus {
     ffmpeg_installed: bool,
+    ffmpeg_path: Option<String>,
+    ffmpeg_is_custom: bool,
     models_installed: Vec<String>,
     setup_completed: bool,
 }
@@ -913,43 +924,18 @@ async fn get_video_duration(video_path: &str) -> Option<f64> {
 // Check if FFmpeg is installed
 #[tauri::command]
 fn check_ffmpeg_installed() -> Result<bool, String> {
-    // First check resources folder in AppData\Local
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
-            let ffmpeg_exe = std::path::Path::new(&app_data)
-                .join("glucose")
-                .join("resources")
-                .join("ffmpeg")
-                .join("bin")
-                .join("ffmpeg.exe");
-            let ffmpeg_path = ffmpeg_exe.to_string_lossy();
-            println!("[FFmpeg Check] Checking AppData\\Local: {}", ffmpeg_path);
-            if ffmpeg_exe.exists() {
-                println!(
-                    "[FFmpeg Check] ✓ Found FFmpeg in AppData\\Local: {}",
-                    ffmpeg_path
-                );
-                return Ok(true);
-            }
-            println!("[FFmpeg Check] ✗ FFmpeg not found in AppData\\Local");
+    let path_info = ffmpeg::resolve_ffmpeg_path_info();
+    if let Some(path) = path_info.path {
+        if path_info.is_custom {
+            println!("[FFmpeg Check] ✓ Found FFmpeg at custom path: {}", path);
+        } else {
+            println!("[FFmpeg Check] ✓ Found FFmpeg at: {}", path);
         }
-    }
-
-    // Fall back to PATH
-    println!("[FFmpeg Check] Checking system PATH...");
-    let result = create_hidden_command("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false);
-
-    if result {
-        println!("[FFmpeg Check] ✓ Found FFmpeg in system PATH");
+        Ok(true)
     } else {
         println!("[FFmpeg Check] ✗ FFmpeg not found in system PATH");
+        Ok(false)
     }
-    Ok(result)
 }
 
 // Check which Whisper models are installed
@@ -1024,7 +1010,17 @@ fn check_installed_models() -> Result<Vec<String>, String> {
 // Get setup status
 #[tauri::command]
 fn get_setup_status() -> Result<SetupStatus, String> {
-    let ffmpeg_installed = check_ffmpeg_installed()?;
+    let ffmpeg_path_info = ffmpeg::resolve_ffmpeg_path_info();
+    let ffmpeg_installed = ffmpeg_path_info.path.is_some();
+    if let Some(path) = &ffmpeg_path_info.path {
+        if ffmpeg_path_info.is_custom {
+            println!("[FFmpeg Check] ✓ Found FFmpeg at custom path: {}", path);
+        } else {
+            println!("[FFmpeg Check] ✓ Found FFmpeg at: {}", path);
+        }
+    } else {
+        println!("[FFmpeg Check] ✗ FFmpeg not found");
+    }
     let models_installed = check_installed_models()?;
 
     // Check if setup was completed (stored in config)
@@ -1032,6 +1028,8 @@ fn get_setup_status() -> Result<SetupStatus, String> {
 
     Ok(SetupStatus {
         ffmpeg_installed,
+        ffmpeg_path: ffmpeg_path_info.path,
+        ffmpeg_is_custom: ffmpeg_path_info.is_custom,
         models_installed,
         setup_completed,
     })
@@ -2164,7 +2162,10 @@ pub fn run() {
             enter_pip_mode,
             exit_pip_mode,
             save_pip_window_layout,
-            settle_pip_window
+            settle_pip_window,
+            ffmpeg::get_ffmpeg_path,
+            ffmpeg::pick_ffmpeg_executable,
+            ffmpeg::save_ffmpeg_custom_path
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
