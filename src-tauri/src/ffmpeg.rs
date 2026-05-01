@@ -67,7 +67,7 @@ fn executable_candidates(dir: &Path, name: &str) -> Vec<PathBuf> {
         pathext
             .split(';')
             .filter(|ext| !ext.trim().is_empty())
-            .map(|ext| dir.join(format!("{}{}", name, ext.trim())))
+            .map(|ext| dir.join(format!("{}{}", name, ext.trim().to_lowercase())))
             .collect()
     }
 

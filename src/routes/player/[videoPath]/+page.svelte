@@ -1418,6 +1418,7 @@
         class="hevc-warning-dismiss"
         onclick={() => (showHevcWarning = false)}
         title="Dismiss"
+        aria-label="Dismiss HEVC warning"
       >
         <X size={14} />
       </button>

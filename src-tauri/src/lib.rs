@@ -925,11 +925,11 @@ async fn get_video_duration(video_path: &str) -> Option<f64> {
 #[tauri::command]
 fn check_ffmpeg_installed() -> Result<bool, String> {
     let path_info = ffmpeg::resolve_ffmpeg_path_info();
-    if let Some(path) = path_info.path {
+    if path_info.path.is_some() {
         if path_info.is_custom {
-            println!("[FFmpeg Check] ✓ Found FFmpeg at custom path: {}", path);
+            println!("[FFmpeg Check] ✓ Found custom FFmpeg");
         } else {
-            println!("[FFmpeg Check] ✓ Found FFmpeg at: {}", path);
+            println!("[FFmpeg Check] ✓ Found FFmpeg");
         }
         Ok(true)
     } else {
