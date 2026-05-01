@@ -25,7 +25,14 @@ fn validates_as_ffmpeg(path: &Path) -> bool {
         && crate::create_hidden_command(path.to_string_lossy().as_ref())
             .arg("-version")
             .output()
-            .map(|o| o.status.success())
+            .map(|o| {
+                if !o.status.success() {
+                    return false;
+                }
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                stdout.contains("ffmpeg version") || stderr.contains("ffmpeg version")
+            })
             .unwrap_or(false)
 }
 

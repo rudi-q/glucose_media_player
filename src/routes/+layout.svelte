@@ -300,7 +300,7 @@
 
 {@render children()}
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && showSettings) showSettings = false; }} />
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && showSettings) { e.stopPropagation(); showSettings = false; } }} />
 
 <!-- Settings Overlay -->
 {#if showSettings}
