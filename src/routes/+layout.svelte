@@ -300,6 +300,8 @@
 
 {@render children()}
 
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && showSettings) showSettings = false; }} />
+
 <!-- Settings Overlay -->
 {#if showSettings}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
