@@ -58,6 +58,7 @@
   } from "lucide-svelte";
   import Button from "$lib/components/Button.svelte";
   import LibrarySettings from "$lib/components/LibrarySettings.svelte";
+  import FFmpegSettings from "$lib/components/FFmpegSettings.svelte";
   import UpdateManager, {
     type UpdateManagerAPI,
   } from "$lib/components/UpdateManager.svelte";
@@ -274,6 +275,11 @@
       localStorage.setItem("lastAutoCheckTime", time.toString());
     }
   }
+
+  function ffmpegLocationLabel(status: SetupStatus) {
+    if (!status.ffmpeg_path) return "Not found";
+    return status.ffmpeg_is_custom ? "Custom path" : "Detected at";
+  }
 </script>
 
 <!-- Update System -->
@@ -293,6 +299,8 @@
 {/if}
 
 {@render children()}
+
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && showSettings) { e.stopPropagation(); showSettings = false; } }} />
 
 <!-- Settings Overlay -->
 {#if showSettings}
@@ -381,6 +389,7 @@
                   <div
                     class="requirement-card"
                     class:ready={setupStatus.ffmpeg_installed}
+                    title={setupStatus.ffmpeg_path ?? undefined}
                   >
                     <div class="requirement-info">
                       <span class="requirement-label">FFmpeg</span>
@@ -555,6 +564,8 @@
                 </div>
               {/if}
             </div>
+
+            <FFmpegSettings onPathChange={checkSetupStatus} />
 
             <div class="settings-section">
               <h3>Language Preferences</h3>
@@ -948,7 +959,10 @@
                 <div class="setup-item-title">FFmpeg (Required)</div>
                 <div class="setup-item-desc">
                   {#if setupStatus.ffmpeg_installed}
-                    ✓ Already installed
+                    ✓ {ffmpegLocationLabel(setupStatus)}:
+                    <span title={setupStatus.ffmpeg_path ?? undefined}
+                      >{setupStatus.ffmpeg_path}</span
+                    >
                   {:else}
                     ❌ Not installed - Please install FFmpeg manually
                   {/if}
@@ -1535,6 +1549,7 @@
     padding: 1rem;
     display: flex;
     align-items: center;
+    min-width: 0;
     transition: all 0.2s ease;
   }
 
@@ -1547,6 +1562,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+    min-width: 0;
   }
 
   .requirement-label {
@@ -1940,6 +1956,12 @@
   .setup-item-desc {
     font-size: 0.875rem;
     color: rgba(255, 255, 255, 0.6);
+    line-height: 1.4;
+  }
+
+  .setup-item-desc span {
+    font-family: monospace;
+    overflow-wrap: anywhere;
   }
 
   .model-choices {

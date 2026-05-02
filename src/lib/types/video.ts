@@ -25,8 +25,10 @@ export type VideoFormat = 'MP4' | 'MKV' | 'WEBM' | 'AVI' | 'MOV' | 'FLV' | 'WMV'
  * Video metadata information.
  * @property {VideoFormat} format - Video format as uppercase string token (e.g., 'MP4', 'WEBM', 'MKV')
  * @property {number} sizeMb - File size in megabytes
+ * @property {string | null} videoCodec - Video stream codec name as reported by ffprobe (e.g., 'h264', 'hevc', 'av1')
  */
 export interface VideoInfo {
 	format: VideoFormat;
 	sizeMb: number;
+	videoCodec: string | null;
 }

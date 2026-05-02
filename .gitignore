@@ -1,5 +1,11 @@
 .DS_Store
 node_modules
+
+# Root hidden directories, except GitHub metadata
+/.*/
+!/.github/
+!/.github/**
+
 /build
 /.svelte-kit
 /package
