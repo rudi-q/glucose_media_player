@@ -13,6 +13,7 @@
   import type { VideoFile } from "$lib/types/video";
   import { createFadedMediaPlayback } from "$lib/utils/fadedMediaPlayback";
   import { formatDuration } from "$lib/utils/time";
+  import { getDefaultPlayMode } from "$lib/utils/playerPreferences";
   import Button from "$lib/components/Button.svelte";
   
   // Per-instance cache that persists across remounts within the same component
@@ -486,7 +487,7 @@
       return;
     }
     const savedDefault = localStorage.getItem('glucose_default_mode');
-    const defaultMode = (savedDefault === 'fullscreen' || savedDefault === 'pip') ? savedDefault : 'cinematic';
+    const defaultMode = getDefaultPlayMode(savedDefault);
     const resolvedMode = mode ?? defaultMode;
     const params = new URLSearchParams({ mode: resolvedMode });
     if (restart) params.set('restart', 'true');

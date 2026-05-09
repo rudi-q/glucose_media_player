@@ -72,6 +72,10 @@
   import { getFormattedVersion } from "$lib/utils/version";
   import { isAudio } from "$lib/utils/mediaType";
   import {
+    getDefaultPlayMode,
+    getEndBehavior,
+  } from "$lib/utils/playerPreferences";
+  import {
     appSettings,
     setupStore,
     type SetupStatus,
@@ -95,7 +99,7 @@
 
   const _savedDefaultMode = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_default_mode") : null;
   let defaultPlayMode = $state<"cinematic" | "fullscreen" | "pip">(
-    _savedDefaultMode === "fullscreen" || _savedDefaultMode === "pip" ? _savedDefaultMode : "cinematic"
+    getDefaultPlayMode(_savedDefaultMode)
   );
 
   $effect(() => {
@@ -104,7 +108,7 @@
 
   const _savedEndBehavior = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_end_behavior") : null;
   let endBehavior = $state<"nothing" | "loop" | "next">(
-    _savedEndBehavior === "loop" || _savedEndBehavior === "next" ? _savedEndBehavior : "nothing"
+    getEndBehavior(_savedEndBehavior)
   );
 
   $effect(() => {

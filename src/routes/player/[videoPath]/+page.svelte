@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
@@ -48,6 +49,7 @@
     formatEstimatedTime,
     formatTimeForScreenReader,
   } from "$lib/utils/time";
+  import { getEndBehavior } from "$lib/utils/playerPreferences";
 
   let { data } = $props();
 
@@ -173,6 +175,9 @@
   const getSetupStatus = getContext<() => SetupStatus | null>("setupStatus");
 
   let setupStatus = $state(getSetupStatus());
+  let disposed = false;
+  let videoSetupId = 0;
+  let lastSetupRoute = "";
 
   function getVideoOutputVolume() {
     if (gainNode) return gainNode.gain.value;
@@ -199,95 +204,172 @@
     },
   });
 
+  $effect(() => {
+    const videoPath = data.videoPath;
+    const initialMode = data.initialMode;
+    const routeKey = `${videoPath}\0${initialMode}\0${data.restart}`;
+    if (!videoPath || routeKey === lastSetupRoute) return;
+
+    lastSetupRoute = routeKey;
+    const setupId = ++videoSetupId;
+    void Promise.resolve().then(() => setupVideo(videoPath, initialMode, setupId));
+  });
+
+  function isVideoSetupStale(setupId: number) {
+    return disposed || setupId !== videoSetupId;
+  }
+
+  async function applyInitialViewMode(mode: string) {
+    const nextMode: NonPipViewMode =
+      mode === "fullscreen" ? "fullscreen" : "cinematic";
+
+    if (mode === "pip") {
+      if (viewMode !== "pip") {
+        await enterPipMode();
+      }
+      return;
+    }
+
+    if (viewMode === "pip") {
+      await exitPipMode(nextMode);
+    } else {
+      viewMode = nextMode;
+    }
+  }
+
+  async function cleanupAudioRemuxFiles() {
+    if (audioRemuxPath) {
+      invoke("delete_temp_file", { path: audioRemuxPath }).catch(() => {});
+      audioRemuxPath = null;
+    }
+    for (const path of pendingRemuxCleanupPaths) {
+      invoke("delete_temp_file", { path }).catch(() => {});
+    }
+    pendingRemuxCleanupPaths = [];
+  }
+
+  async function setupVideo(
+    videoPath: string,
+    initialMode: string,
+    setupId: number,
+  ) {
+    if (isVideoSetupStale(setupId)) return;
+
+    if (currentVideoPath && currentVideoPath !== videoPath && videoElement && duration > 0) {
+      await saveWatchProgress();
+      if (isVideoSetupStale(setupId)) return;
+    }
+
+    if (progressSaveInterval) {
+      clearInterval(progressSaveInterval);
+    }
+
+    clearCountdown();
+    showNextVideoOverlay = false;
+    nextVideoPath = null;
+    nextVideoName = "";
+    nextVideoSkipped = false;
+    revokeNextVideoThumbnail();
+
+    ++subtitleLoadId;
+    if (subtitleSrc && subtitleSrc.startsWith("blob:")) {
+      URL.revokeObjectURL(subtitleSrc);
+    }
+    subtitleSrc = null;
+    subtitleFileName = null;
+    embeddedSubtitleTracks = [];
+    selectedEmbeddedLanguage = "en";
+    subtitlesEnabled = true;
+
+    await cleanupAudioRemuxFiles();
+    if (isVideoSetupStale(setupId)) return;
+
+    embeddedAudioTracks = [];
+    selectedAudioTrackIndex = null;
+    isRemuxingAudio = false;
+    pendingSeekTime = null;
+    pendingPaused = null;
+    currentVideoInfo = null;
+    showHevcWarning = false;
+    currentTime = 0;
+    duration = 0;
+    videoSrc = convertFileSrc(videoPath);
+    currentVideoPath = videoPath;
+
+    await applyInitialViewMode(initialMode);
+    if (isVideoSetupStale(setupId)) return;
+
+    // Auto-detect subtitles: external file first, then embedded tracks.
+    // These are split into separate try/catch blocks so a failure in the
+    // external lookup doesn't prevent embedded tracks from being discovered.
+    let externalSubtitleLoaded = false;
+    try {
+      const subtitlePath = await invoke<string | null>(
+        "find_subtitle_for_video",
+        { videoPath },
+      );
+      if (isVideoSetupStale(setupId)) return;
+      if (subtitlePath) {
+        console.log("Auto-loading subtitle:", subtitlePath);
+        await loadSubtitle(subtitlePath);
+        if (isVideoSetupStale(setupId)) return;
+        externalSubtitleLoaded = true;
+      }
+    } catch (err) {
+      console.log("External subtitle lookup failed:", err);
+    }
+
+    if (isVideoSetupStale(setupId)) return;
+
+    try {
+      // Always detect embedded tracks so the subtitle menu can list them
+      const tracks = await invoke<EmbeddedSubtitleTrack[]>(
+        "get_embedded_subtitle_tracks",
+        { videoPath },
+      );
+      if (isVideoSetupStale(setupId)) return;
+      embeddedSubtitleTracks = tracks;
+
+      // Auto-load the first embedded track when no external file was found
+      if (!externalSubtitleLoaded && tracks.length > 0) {
+        await loadEmbeddedSubtitle(tracks[0], videoPath);
+        if (isVideoSetupStale(setupId)) return;
+      }
+    } catch (err) {
+      console.log("Embedded subtitle detection failed:", err);
+    }
+
+    try {
+      const audioTracks = await invoke<EmbeddedAudioTrack[]>(
+        "get_embedded_audio_tracks",
+        { videoPath },
+      );
+      if (isVideoSetupStale(setupId)) return;
+      embeddedAudioTracks = audioTracks;
+      if (audioTracks.length > 0) {
+        const defaultTrack = audioTracks.find((t) => t.is_default);
+        selectedAudioTrackIndex = defaultTrack ? defaultTrack.index : audioTracks[0].index;
+      }
+    } catch (err) {
+      console.log("Embedded audio track detection failed:", err);
+    }
+
+    try {
+      const info = await invoke<VideoInfo>("get_video_info", { videoPath });
+      if (isVideoSetupStale(setupId)) return;
+      currentVideoInfo = info;
+      showHevcWarning = info.videoCodec === "hevc";
+    } catch (err) {
+      console.log("Video codec detection failed:", err);
+    }
+  }
+
   onMount(() => {
-    let disposed = false;
+    disposed = false;
     const unsubs: UnlistenFn[] = [];
     const platform = navigator.platform.toLowerCase();
     const userAgent = navigator.userAgent.toLowerCase();
     isWindows = platform.includes("win") || userAgent.includes("windows");
-
-    // Load the video
-    (async () => {
-      if (data.videoPath) {
-        const src = convertFileSrc(data.videoPath);
-        videoSrc = src;
-        currentVideoPath = data.videoPath;
-
-        // Apply initial view mode from URL query param
-        if (data.initialMode === 'fullscreen') {
-          viewMode = 'fullscreen';
-        } else if (data.initialMode === 'pip') {
-          await enterPipMode();
-        }
-
-        // Auto-detect subtitles: external file first, then embedded tracks.
-        // These are split into separate try/catch blocks so a failure in the
-        // external lookup doesn't prevent embedded tracks from being discovered.
-        let externalSubtitleLoaded = false;
-        try {
-          const subtitlePath = await invoke<string | null>(
-            "find_subtitle_for_video",
-            { videoPath: data.videoPath },
-          );
-          if (disposed) return;
-          if (subtitlePath) {
-            console.log("Auto-loading subtitle:", subtitlePath);
-            await loadSubtitle(subtitlePath);
-            if (disposed) return;
-            externalSubtitleLoaded = true;
-          }
-        } catch (err) {
-          console.log("External subtitle lookup failed:", err);
-        }
-
-        if (disposed) return;
-
-        try {
-          // Always detect embedded tracks so the subtitle menu can list them
-          const tracks = await invoke<EmbeddedSubtitleTrack[]>(
-            "get_embedded_subtitle_tracks",
-            { videoPath: data.videoPath },
-          );
-          if (disposed) return;
-          embeddedSubtitleTracks = tracks;
-
-          // Auto-load the first embedded track when no external file was found
-          if (!externalSubtitleLoaded && tracks.length > 0) {
-            await loadEmbeddedSubtitle(tracks[0]);
-          }
-        } catch (err) {
-          console.log("Embedded subtitle detection failed:", err);
-        }
-
-        try {
-          const audioTracks = await invoke<EmbeddedAudioTrack[]>(
-            "get_embedded_audio_tracks",
-            { videoPath: data.videoPath },
-          );
-          if (disposed) return;
-          embeddedAudioTracks = audioTracks;
-          if (audioTracks.length > 0) {
-            const defaultTrack = audioTracks.find((t) => t.is_default);
-            selectedAudioTrackIndex = defaultTrack ? defaultTrack.index : audioTracks[0].index;
-          }
-        } catch (err) {
-          console.log("Embedded audio track detection failed:", err);
-        }
-
-        try {
-          const info = await invoke<VideoInfo>("get_video_info", {
-            videoPath: data.videoPath,
-          });
-          if (disposed) return;
-          currentVideoInfo = info;
-          if (info.videoCodec === "hevc") {
-            showHevcWarning = true;
-          }
-        } catch (err) {
-          console.log("Video codec detection failed:", err);
-        }
-      }
-    })();
 
     // Register Tauri event listeners
     (async () => {
@@ -358,6 +440,7 @@
 
     return () => {
       disposed = true;
+      videoSetupId++;
       // Clear progress save interval
       if (progressSaveInterval) {
         clearInterval(progressSaveInterval);
@@ -554,11 +637,15 @@
     }
   }
 
-  async function loadEmbeddedSubtitle(track: EmbeddedSubtitleTrack) {
+  async function loadEmbeddedSubtitle(
+    track: EmbeddedSubtitleTrack,
+    videoPath = currentVideoPath ?? data.videoPath,
+  ) {
+    if (!videoPath) return;
     const loadId = ++subtitleLoadId;
     try {
       const srtContent = await invoke<string>("extract_embedded_subtitle", {
-        videoPath: data.videoPath,
+        videoPath,
         streamIndex: track.index,
       });
 
@@ -626,7 +713,6 @@
   }
 
   async function minimizeApp() {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await getCurrentWindow().minimize();
   }
 
@@ -645,7 +731,6 @@
     } catch (err) {
       console.error("Failed to exit app:", err);
       try {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
         const window = getCurrentWindow();
         await window.close();
       } catch (fallbackErr) {
@@ -956,7 +1041,7 @@
       !nextVideoSearchInFlight &&
       !nextVideoSkipped
     ) {
-      const behavior = localStorage.getItem('glucose_end_behavior') ?? 'nothing';
+      const behavior = getEndBehavior(localStorage.getItem('glucose_end_behavior'));
       if (behavior === 'next') {
         startNextVideoCountdown();
       }
@@ -1027,11 +1112,17 @@
   async function startNextVideoCountdown() {
     if (nextVideoSearchInFlight) return;
     nextVideoSearchInFlight = true;
+    const requestedForPath = currentVideoPath;
     try {
       const [videos, progressData] = await Promise.all([
         invoke<VideoFile[]>('get_recent_videos'),
         invoke<Record<string, WatchProgress>>('get_all_watch_progress'),
       ]);
+
+      if (disposed || currentVideoPath !== requestedForPath) return;
+
+      const filterPref = localStorage.getItem('glucose_filter') ?? 'all';
+      if (filterPref === 'audio') return;
 
       // Filter out unavailable/cloud-only and audio-only files
       const available = videos.filter(v => !v.is_cloud_only && !isAudio(v.path));
@@ -1039,7 +1130,7 @@
 
       // Normalize path separators for robust comparison on Windows
       const normalize = (p: string) => p.replace(/\\/g, '/');
-      const normalizedCurrent = normalize(currentVideoPath ?? '');
+      const normalizedCurrent = normalize(requestedForPath ?? '');
 
       // Match gallery sort order
       const sortPref = localStorage.getItem('glucose_sort') ?? 'watched';
@@ -1056,6 +1147,7 @@
 
       const currentIdx = sorted.findIndex(v => normalize(v.path) === normalizedCurrent);
       if (currentIdx === -1 || currentIdx >= sorted.length - 1) return;
+      if (disposed) return;
 
       const next = sorted[currentIdx + 1];
       nextVideoPath = next.path;
@@ -1066,10 +1158,18 @@
 
       // Generate thumbnail async — overlay shows immediately, thumbnail fills in
       generateNextVideoThumbnail(next.path).then(url => {
+        if (disposed || nextVideoPath !== next.path) {
+          if (url) URL.revokeObjectURL(url);
+          return;
+        }
         nextVideoThumbnail = url;
       });
 
       countdownInterval = setInterval(() => {
+        if (disposed) {
+          clearCountdown();
+          return;
+        }
         nextVideoCountdown--;
         if (nextVideoCountdown <= 0) {
           clearCountdown();
@@ -1079,7 +1179,9 @@
     } catch (err) {
       console.error('Failed to find next video:', err);
     } finally {
-      nextVideoSearchInFlight = false;
+      if (!disposed) {
+        nextVideoSearchInFlight = false;
+      }
     }
   }
 
@@ -1117,7 +1219,7 @@
     fadedPlayback.pauseNow();
     await saveWatchProgress();
 
-    const behavior = localStorage.getItem('glucose_end_behavior') ?? 'nothing';
+    const behavior = getEndBehavior(localStorage.getItem('glucose_end_behavior'));
     if (behavior === 'loop') {
       if (videoElement) {
         videoElement.currentTime = 0;
