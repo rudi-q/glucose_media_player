@@ -32,6 +32,7 @@
   } from "$lib/stores/watchProgressStore";
   import type { VideoInfo, VideoFile } from "$lib/types/video";
   import { createFadedMediaPlayback } from "$lib/utils/fadedMediaPlayback";
+  import { isAudio } from "$lib/utils/mediaType";
   import {
     applyPipVideoMode,
     createPipWindowSettler,
@@ -133,8 +134,13 @@
   let showNextVideoOverlay = $state(false);
   let nextVideoPath = $state<string | null>(null);
   let nextVideoName = $state<string>('');
+  let nextVideoThumbnail = $state<string>('');
   let nextVideoCountdown = $state(10);
   let countdownInterval: ReturnType<typeof setInterval> | null = null;
+  // Prevents re-triggering the overlay if the user explicitly cancelled it
+  let nextVideoSkipped = false;
+  // Guards against duplicate in-flight startNextVideoCountdown calls
+  let nextVideoSearchInFlight = false;
 
   // Audio/Volume state
   let showVolumeMenu = $state(false);
@@ -394,6 +400,7 @@
       clearTimeout(volumeMenuAutoTimer);
       clearTimeout(hideControlsTimeout);
       clearCountdown();
+      revokeNextVideoThumbnail();
       fadedPlayback.destroy();
       // Close Web Audio context to free resources
       if (audioCtx) {
@@ -939,6 +946,26 @@
     ) {
       backgroundVideo.currentTime = videoElement.currentTime;
     }
+
+    // Trigger "play next" overlay 10 seconds before the end
+    if (
+      duration > 12 &&
+      currentTime >= duration - 10 &&
+      !showNextVideoOverlay &&
+      countdownInterval === null &&
+      !nextVideoSearchInFlight &&
+      !nextVideoSkipped
+    ) {
+      const behavior = localStorage.getItem('glucose_end_behavior') ?? 'nothing';
+      if (behavior === 'next') {
+        startNextVideoCountdown();
+      }
+    }
+
+    // Reset skip flag if user scrubs back far enough from the end
+    if (nextVideoSkipped && currentTime < duration - 15) {
+      nextVideoSkipped = false;
+    }
   }
 
   function videoBaseName(path: string): string {
@@ -954,39 +981,93 @@
     }
   }
 
+  function generateNextVideoThumbnail(path: string): Promise<string> {
+    return new Promise((resolve) => {
+      const video = document.createElement('video');
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      let settled = false;
+      const timeout = setTimeout(() => settle(''), 8000);
+
+      function settle(url: string) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        video.onloadedmetadata = null;
+        video.onseeked = null;
+        video.onerror = null;
+        try { video.removeAttribute('src'); video.load(); } catch {}
+        resolve(url);
+      }
+
+      video.muted = true;
+      video.preload = 'metadata';
+      video.onerror = () => settle('');
+      video.onloadedmetadata = () => {
+        // Seek to 10% of the video, minimum 2s
+        video.currentTime = Math.max(2, video.duration * 0.1);
+      };
+      video.onseeked = () => {
+        try {
+          const aspect = video.videoWidth / video.videoHeight;
+          if (!Number.isFinite(aspect) || aspect <= 0) { settle(''); return; }
+          canvas.width = 280;
+          canvas.height = Math.round(280 / aspect);
+          ctx!.drawImage(video, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob((blob) => {
+            if (!blob) { settle(''); return; }
+            settle(URL.createObjectURL(blob));
+          }, 'image/jpeg', 0.75);
+        } catch { settle(''); }
+      };
+      video.src = convertFileSrc(path);
+    });
+  }
+
   async function startNextVideoCountdown() {
+    if (nextVideoSearchInFlight) return;
+    nextVideoSearchInFlight = true;
     try {
       const [videos, progressData] = await Promise.all([
         invoke<VideoFile[]>('get_recent_videos'),
         invoke<Record<string, WatchProgress>>('get_all_watch_progress'),
       ]);
 
-      // Filter out unavailable/cloud-only videos
-      const available = videos.filter(v => !v.is_cloud_only);
+      // Filter out unavailable/cloud-only and audio-only files
+      const available = videos.filter(v => !v.is_cloud_only && !isAudio(v.path));
       if (available.length === 0) return;
+
+      // Normalize path separators for robust comparison on Windows
+      const normalize = (p: string) => p.replace(/\\/g, '/');
+      const normalizedCurrent = normalize(currentVideoPath ?? '');
 
       // Match gallery sort order
       const sortPref = localStorage.getItem('glucose_sort') ?? 'watched';
       let sorted: VideoFile[];
       if (sortPref === 'watched') {
         sorted = [...available].sort((a, b) => {
-          const aTime = (progressData[a.path]?.last_watched) ?? 0;
-          const bTime = (progressData[b.path]?.last_watched) ?? 0;
+          const aTime = progressData[a.path]?.last_watched ?? 0;
+          const bTime = progressData[b.path]?.last_watched ?? 0;
           return (bTime - aTime) || (b.modified - a.modified);
         });
       } else {
         sorted = available;
       }
 
-      const currentIdx = sorted.findIndex(v => v.path === currentVideoPath);
-      // No next video if current not found or it's the last one
+      const currentIdx = sorted.findIndex(v => normalize(v.path) === normalizedCurrent);
       if (currentIdx === -1 || currentIdx >= sorted.length - 1) return;
 
       const next = sorted[currentIdx + 1];
       nextVideoPath = next.path;
       nextVideoName = videoBaseName(next.path);
+      nextVideoThumbnail = '';
       nextVideoCountdown = 10;
       showNextVideoOverlay = true;
+
+      // Generate thumbnail async — overlay shows immediately, thumbnail fills in
+      generateNextVideoThumbnail(next.path).then(url => {
+        nextVideoThumbnail = url;
+      });
 
       countdownInterval = setInterval(() => {
         nextVideoCountdown--;
@@ -997,6 +1078,15 @@
       }, 1000);
     } catch (err) {
       console.error('Failed to find next video:', err);
+    } finally {
+      nextVideoSearchInFlight = false;
+    }
+  }
+
+  function revokeNextVideoThumbnail() {
+    if (nextVideoThumbnail) {
+      URL.revokeObjectURL(nextVideoThumbnail);
+      nextVideoThumbnail = '';
     }
   }
 
@@ -1006,14 +1096,21 @@
     const path = nextVideoPath;
     nextVideoPath = null;
     clearCountdown();
+    revokeNextVideoThumbnail();
     const encodedPath = encodeURIComponent(path);
-    await goto(`/player/${encodedPath}?mode=${viewMode}`);
+    try {
+      await goto(`/player/${encodedPath}?mode=${viewMode}`);
+    } catch (err) {
+      console.error('Failed to navigate to next video:', err);
+    }
   }
 
   function cancelNextVideo() {
     clearCountdown();
     showNextVideoOverlay = false;
     nextVideoPath = null;
+    revokeNextVideoThumbnail();
+    nextVideoSkipped = true;
   }
 
   async function handleEnded() {
@@ -1026,8 +1123,9 @@
         videoElement.currentTime = 0;
         await fadedPlayback.play();
       }
-    } else if (behavior === 'next') {
-      await startNextVideoCountdown();
+    } else if (behavior === 'next' && showNextVideoOverlay) {
+      // Card was already showing — video reached the end naturally, play next immediately
+      playNextVideo();
     }
   }
 
@@ -1091,7 +1189,7 @@
   }
 
   function handleProgressHover(e: MouseEvent) {
-    if (!videoElement || !previewVideo || !previewCanvas || isScrubbing) return;
+    if (!videoElement || !previewVideo || isScrubbing) return;
 
     const progressBar = e.currentTarget as HTMLElement;
     const rect = progressBar.getBoundingClientRect();
@@ -1587,17 +1685,15 @@
         aria-valuetext={formatTimeForScreenReader(currentTime)}
         tabindex="0"
       >
-        {#if showPreview}
-          <div class="preview-tooltip" style="left: {previewPosition}px">
-            <canvas
-              bind:this={previewCanvas}
-              width="160"
-              height="90"
-              class="preview-canvas"
-            ></canvas>
-            <div class="preview-time">{formatTime(previewTime)}</div>
-          </div>
-        {/if}
+        <div class="preview-tooltip" class:preview-visible={showPreview} style="left: {previewPosition}px">
+          <canvas
+            bind:this={previewCanvas}
+            width="160"
+            height="90"
+            class="preview-canvas"
+          ></canvas>
+          <div class="preview-time">{formatTime(previewTime)}</div>
+        </div>
         <div
           class="progress-filled"
           style="width: {duration
@@ -1997,17 +2093,24 @@
 
   {#if showNextVideoOverlay && nextVideoPath}
     <div class="next-video-overlay" role="status">
-      <div class="next-video-label">Up Next</div>
-      <div class="next-video-name">{nextVideoName}</div>
-      <div class="next-video-progress-track">
-        <div
-          class="next-video-progress-fill"
-          style="width: {(nextVideoCountdown / 10) * 100}%; transition: width 1s linear;"
-        ></div>
-      </div>
-      <div class="next-video-actions">
-        <button class="next-video-btn next-video-cancel" onclick={cancelNextVideo}>Cancel</button>
-        <button class="next-video-btn next-video-play" onclick={playNextVideo}>Play Now</button>
+      {#if nextVideoThumbnail}
+        <img src={nextVideoThumbnail} alt="" class="next-video-thumbnail" />
+      {:else}
+        <div class="next-video-thumbnail-placeholder"></div>
+      {/if}
+      <div class="next-video-info">
+        <div class="next-video-label">Up Next</div>
+        <div class="next-video-name">{nextVideoName}</div>
+        <div class="next-video-progress-track">
+          <div
+            class="next-video-progress-fill"
+            style="width: {(nextVideoCountdown / 10) * 100}%; transition: width 1s linear;"
+          ></div>
+        </div>
+        <div class="next-video-actions">
+          <button class="next-video-btn next-video-cancel" onclick={cancelNextVideo}>Cancel</button>
+          <button class="next-video-btn next-video-play" onclick={playNextVideo}>Play Now</button>
+        </div>
       </div>
     </div>
   {/if}
@@ -2295,6 +2398,13 @@
     margin-bottom: 12px;
     pointer-events: none;
     z-index: 10;
+    opacity: 0;
+    visibility: hidden;
+  }
+
+  .preview-tooltip.preview-visible {
+    opacity: 1;
+    visibility: visible;
   }
 
   .preview-canvas {
@@ -2921,17 +3031,16 @@
     position: fixed;
     bottom: 5rem;
     right: 2rem;
-    width: 280px;
-    background: rgba(10, 10, 12, 0.85);
+    width: 300px;
+    background: rgba(10, 10, 12, 0.88);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 12px;
-    padding: 1.25rem;
+    overflow: hidden;
     z-index: 90;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
     animation: fadeInUp 0.3s ease;
   }
 
@@ -2940,8 +3049,28 @@
     to   { opacity: 1; transform: translateY(0); }
   }
 
+  .next-video-thumbnail {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    display: block;
+  }
+
+  .next-video-thumbnail-placeholder {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .next-video-info {
+    padding: 0.875rem 1rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+  }
+
   .next-video-label {
-    font-size: 0.65rem;
+    font-size: 0.62rem;
     font-weight: 600;
     letter-spacing: 0.1em;
     text-transform: uppercase;
@@ -2949,7 +3078,7 @@
   }
 
   .next-video-name {
-    font-size: 0.9rem;
+    font-size: 0.875rem;
     font-weight: 500;
     color: #fff;
     line-height: 1.3;
