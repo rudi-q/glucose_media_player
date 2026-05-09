@@ -808,9 +808,9 @@
             <LibrarySettings />
           {:else if selectedTab === "player"}
             <div class="settings-section">
-              <h3>Default View Mode</h3>
+              <h3 id="default-view-mode-label">Default View Mode</h3>
               <p class="settings-description">Choose how videos open when you play them from the gallery.</p>
-              <div class="mode-picker" role="radiogroup">
+              <div class="mode-picker" role="radiogroup" aria-labelledby="default-view-mode-label">
                 <button
                   class="mode-option"
                   class:active={defaultPlayMode === "cinematic"}
@@ -847,9 +847,9 @@
               </div>
             </div>
             <div class="settings-section">
-              <h3>When Video Ends</h3>
+              <h3 id="when-video-ends-label">When Video Ends</h3>
               <p class="settings-description">Choose what happens after a video finishes playing.</p>
-              <div class="mode-picker" role="radiogroup">
+              <div class="mode-picker" role="radiogroup" aria-labelledby="when-video-ends-label">
                 <button
                   class="mode-option"
                   class:active={endBehavior === "nothing"}

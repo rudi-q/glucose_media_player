@@ -5,6 +5,7 @@ const thumbnailPromises = new Map<string, Promise<string>>();
 const thumbnailQueue: Array<{ run: () => void; cancel: () => void }> = [];
 let activeThumbnailJobs = 0;
 const MAX_THUMBNAIL_JOBS = 2;
+let thumbnailCacheVersion = 0;
 
 export function scheduleThumbnailJob(job: () => Promise<string>): Promise<string> {
   return new Promise((resolve) => {
@@ -32,7 +33,8 @@ function createThumbnail(
   seekTime: number | undefined,
   hasSeek: boolean,
   cacheKey: string,
-  isDestroyed: () => boolean
+  isDestroyed: () => boolean,
+  capturedVersion: number
 ): Promise<string> {
   return new Promise((resolve) => {
     const video = document.createElement('video');
@@ -79,7 +81,7 @@ function createThumbnail(
             return;
           }
           const url = URL.createObjectURL(blob);
-          if (isDestroyed()) {
+          if (isDestroyed() || thumbnailCacheVersion !== capturedVersion) {
             URL.revokeObjectURL(url);
             settle('');
             return;
@@ -141,7 +143,8 @@ export async function generateThumbnail(
     return thumbnailPromises.get(cacheKey)!;
   }
 
-  const promise = scheduleThumbnailJob(() => createThumbnail(videoPath, seekTime, hasSeek, cacheKey, isDestroyed))
+  const capturedVersion = thumbnailCacheVersion;
+  const promise = scheduleThumbnailJob(() => createThumbnail(videoPath, seekTime, hasSeek, cacheKey, isDestroyed, capturedVersion))
     .finally(() => thumbnailPromises.delete(cacheKey));
   
   thumbnailPromises.set(cacheKey, promise);
@@ -149,6 +152,7 @@ export async function generateThumbnail(
 }
 
 export function clearThumbnailCache() {
+  thumbnailCacheVersion++;
   for (const item of thumbnailQueue) item.cancel();
   thumbnailQueue.length = 0;
   thumbnailPromises.clear();

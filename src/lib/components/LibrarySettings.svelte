@@ -73,18 +73,26 @@
   let clearRangeSeconds = $state<number>(3600);
   let clearing = $state(false);
   let clearSuccessTimer: ReturnType<typeof setTimeout>;
+  let clearErrorTimer: ReturnType<typeof setTimeout>;
   let showClearSuccess = $state(false);
+  let clearError = $state<string | null>(null);
 
   async function clearHistory() {
+    if (clearRangeSeconds === 0 && !confirm("Clear all watch history? This cannot be undone.")) return;
     clearing = true;
     const cutoff = clearRangeSeconds === 0 ? 0 : Math.floor(Date.now() / 1000) - clearRangeSeconds;
     try {
-      await invoke("clear_watch_history_before", { cutoffTimestamp: cutoff });
-      watchProgressStore.clearBefore(cutoff);
+      await invoke("clear_watch_history_since", { cutoffTimestamp: cutoff });
+      watchProgressStore.clearSince(cutoff);
+      clearError = null;
       showClearSuccess = true;
       clearTimeout(clearSuccessTimer);
       clearSuccessTimer = setTimeout(() => { showClearSuccess = false; }, 3000);
     } catch (err) {
+      showClearSuccess = false;
+      clearError = err instanceof Error ? err.message : String(err);
+      clearTimeout(clearErrorTimer);
+      clearErrorTimer = setTimeout(() => { clearError = null; }, 4000);
       console.error("Failed to clear watch history:", err);
     } finally {
       clearing = false;
@@ -157,6 +165,9 @@
 
   {#if showClearSuccess}
     <div class="clear-success">Watch history cleared.</div>
+  {/if}
+  {#if clearError}
+    <div class="clear-error">{clearError}</div>
   {/if}
 </div>
 
@@ -305,5 +316,15 @@
     border-radius: 6px;
     font-size: 0.8125rem;
     color: rgba(74, 222, 128, 0.9);
+  }
+
+  .clear-error {
+    margin-top: 0.625rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(248, 113, 113, 0.08);
+    border: 1px solid rgba(248, 113, 113, 0.2);
+    border-radius: 6px;
+    font-size: 0.8125rem;
+    color: rgba(248, 113, 113, 0.9);
   }
 </style>

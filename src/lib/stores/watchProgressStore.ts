@@ -25,7 +25,7 @@ function createWatchProgressStore() {
 		return map.get(videoPath);
 	},
 		clear: () => set(new Map()),
-		clearBefore: (cutoff: number) => update((map) => {
+		clearSince: (cutoff: number) => update((map) => {
 			if (cutoff === 0) return new Map();
 			const next = new Map<string, WatchProgress>();
 			for (const [key, val] of map) {

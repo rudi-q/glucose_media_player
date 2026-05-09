@@ -1873,7 +1873,7 @@ fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchPro
 }
 
 #[tauri::command]
-fn clear_watch_history_before(cutoff_timestamp: u64) -> Result<(), String> {
+fn clear_watch_history_since(cutoff_timestamp: u64) -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     let config_dir = home.join(".glucose");
     let progress_file = config_dir.join("watch_progress.json");
@@ -2196,7 +2196,7 @@ pub fn run() {
             save_watch_progress,
             get_watch_progress,
             get_all_watch_progress,
-            clear_watch_history_before,
+            clear_watch_history_since,
             get_video_info,
             convert_video,
             enter_pip_mode,
