@@ -814,10 +814,12 @@
         <Play size={16} />
         <span>Play</span>
       </button>
-      <button class="context-menu-item" onclick={() => { loadVideo(cardContextMenuVideo!.path, undefined, true); showCardContextMenu = false; }}>
-        <RotateCcw size={16} />
-        <span>Play from Beginning</span>
-      </button>
+      {#if !isAudio(cardContextMenuVideo.path)}
+        <button class="context-menu-item" onclick={() => { loadVideo(cardContextMenuVideo!.path, undefined, true); showCardContextMenu = false; }}>
+          <RotateCcw size={16} />
+          <span>Play from Beginning</span>
+        </button>
+      {/if}
       <button class="context-menu-item" onclick={() => openContainingFolder(cardContextMenuVideo!.path)}>
         <FolderOpen size={16} />
         <span>Open Containing Folder</span>

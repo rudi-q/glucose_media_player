@@ -810,10 +810,12 @@
             <div class="settings-section">
               <h3>Default View Mode</h3>
               <p class="settings-description">Choose how videos open when you play them from the gallery.</p>
-              <div class="mode-picker">
+              <div class="mode-picker" role="radiogroup">
                 <button
                   class="mode-option"
                   class:active={defaultPlayMode === "cinematic"}
+                  role="radio"
+                  aria-checked={defaultPlayMode === "cinematic"}
                   onclick={() => (defaultPlayMode = "cinematic")}
                 >
                   <Play size={18} />
@@ -823,6 +825,8 @@
                 <button
                   class="mode-option"
                   class:active={defaultPlayMode === "fullscreen"}
+                  role="radio"
+                  aria-checked={defaultPlayMode === "fullscreen"}
                   onclick={() => (defaultPlayMode = "fullscreen")}
                 >
                   <Maximize2 size={18} />
@@ -832,6 +836,8 @@
                 <button
                   class="mode-option"
                   class:active={defaultPlayMode === "pip"}
+                  role="radio"
+                  aria-checked={defaultPlayMode === "pip"}
                   onclick={() => (defaultPlayMode = "pip")}
                 >
                   <PictureInPicture2 size={18} />
@@ -843,10 +849,12 @@
             <div class="settings-section">
               <h3>When Video Ends</h3>
               <p class="settings-description">Choose what happens after a video finishes playing.</p>
-              <div class="mode-picker">
+              <div class="mode-picker" role="radiogroup">
                 <button
                   class="mode-option"
                   class:active={endBehavior === "nothing"}
+                  role="radio"
+                  aria-checked={endBehavior === "nothing"}
                   onclick={() => (endBehavior = "nothing")}
                 >
                   <Ban size={18} />
@@ -856,6 +864,8 @@
                 <button
                   class="mode-option"
                   class:active={endBehavior === "loop"}
+                  role="radio"
+                  aria-checked={endBehavior === "loop"}
                   onclick={() => (endBehavior = "loop")}
                 >
                   <Repeat size={18} />
@@ -865,6 +875,8 @@
                 <button
                   class="mode-option"
                   class:active={endBehavior === "next"}
+                  role="radio"
+                  aria-checked={endBehavior === "next"}
                   onclick={() => (endBehavior = "next")}
                 >
                   <SkipForward size={18} />

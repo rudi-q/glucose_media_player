@@ -2,7 +2,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 
 export const thumbnailCache = new Map<string, string>();
 const thumbnailPromises = new Map<string, Promise<string>>();
-const thumbnailQueue: Array<() => void> = [];
+const thumbnailQueue: Array<{ run: () => void; cancel: () => void }> = [];
 let activeThumbnailJobs = 0;
 const MAX_THUMBNAIL_JOBS = 2;
 
@@ -15,14 +15,14 @@ export function scheduleThumbnailJob(job: () => Promise<string>): Promise<string
         .catch(() => resolve(''))
         .finally(() => {
           activeThumbnailJobs -= 1;
-          thumbnailQueue.shift()?.();
+          thumbnailQueue.shift()?.run();
         });
     };
 
     if (activeThumbnailJobs < MAX_THUMBNAIL_JOBS) {
       run();
     } else {
-      thumbnailQueue.push(run);
+      thumbnailQueue.push({ run, cancel: () => resolve('') });
     }
   });
 }
@@ -149,6 +149,7 @@ export async function generateThumbnail(
 }
 
 export function clearThumbnailCache() {
+  for (const item of thumbnailQueue) item.cancel();
   thumbnailQueue.length = 0;
   thumbnailPromises.clear();
   for (const thumbnail of thumbnailCache.values()) {
