@@ -1872,6 +1872,37 @@ fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchPro
     Ok(progress_map)
 }
 
+#[tauri::command]
+fn clear_watch_history_before(cutoff_timestamp: u64) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let config_dir = home.join(".glucose");
+    let progress_file = config_dir.join("watch_progress.json");
+
+    if !progress_file.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&progress_file)
+        .map_err(|e| format!("Failed to read progress file: {}", e))?;
+
+    let mut progress_map: std::collections::HashMap<String, WatchProgress> =
+        serde_json::from_str(&content).unwrap_or_else(|_| std::collections::HashMap::new());
+
+    if cutoff_timestamp == 0 {
+        progress_map.clear();
+    } else {
+        progress_map.retain(|_, v| v.last_watched < cutoff_timestamp);
+    }
+
+    let content = serde_json::to_string_pretty(&progress_map)
+        .map_err(|e| format!("Failed to serialize progress: {}", e))?;
+
+    fs::write(progress_file, content)
+        .map_err(|e| format!("Failed to write progress file: {}", e))?;
+
+    Ok(())
+}
+
 fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
     if depth == 0 {
         return;
@@ -2165,6 +2196,7 @@ pub fn run() {
             save_watch_progress,
             get_watch_progress,
             get_all_watch_progress,
+            clear_watch_history_before,
             get_video_info,
             convert_video,
             enter_pip_mode,
