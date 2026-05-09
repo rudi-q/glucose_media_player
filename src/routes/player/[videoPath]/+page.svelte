@@ -142,6 +142,8 @@
   let countdownInterval: ReturnType<typeof setInterval> | null = null;
   // Prevents re-triggering the overlay if the user explicitly cancelled it
   let nextVideoSkipped = false;
+  // Set when lookup determined there is no next video; prevents repeated scans
+  let nextVideoNotFound = false;
   // Guards against duplicate in-flight startNextVideoCountdown calls
   let nextVideoSearchInFlight = false;
 
@@ -270,6 +272,7 @@
     nextVideoPath = null;
     nextVideoName = "";
     nextVideoSkipped = false;
+    nextVideoNotFound = false;
     revokeNextVideoThumbnail();
 
     ++subtitleLoadId;
@@ -1040,7 +1043,8 @@
       !showNextVideoOverlay &&
       countdownInterval === null &&
       !nextVideoSearchInFlight &&
-      !nextVideoSkipped
+      !nextVideoSkipped &&
+      !nextVideoNotFound
     ) {
       const behavior = getEndBehavior(localStorage.getItem('glucose_end_behavior'));
       if (behavior === 'next') {
@@ -1049,8 +1053,9 @@
     }
 
     // Reset skip flag if user scrubs back far enough from the end
-    if (nextVideoSkipped && currentTime < duration - 15) {
+    if ((nextVideoSkipped || nextVideoNotFound) && currentTime < duration - 15) {
       nextVideoSkipped = false;
+      nextVideoNotFound = false;
     }
   }
 
@@ -1080,11 +1085,11 @@
       if (disposed || currentVideoPath !== requestedForPath) return;
 
       const filterPref = localStorage.getItem('glucose_filter') ?? 'all';
-      if (filterPref === 'audio') return;
+      if (filterPref === 'audio') { nextVideoNotFound = true; return; }
 
       // Filter out unavailable/cloud-only and audio-only files
       const available = videos.filter(v => !v.is_cloud_only && !isAudio(v.path));
-      if (available.length === 0) return;
+      if (available.length === 0) { nextVideoNotFound = true; return; }
 
       // Normalize path separators for robust comparison on Windows
       const normalize = (p: string) => p.replace(/\\/g, '/');
@@ -1104,7 +1109,7 @@
       }
 
       const currentIdx = sorted.findIndex(v => normalize(v.path) === normalizedCurrent);
-      if (currentIdx === -1 || currentIdx >= sorted.length - 1) return;
+      if (currentIdx === -1 || currentIdx >= sorted.length - 1) { nextVideoNotFound = true; return; }
       if (disposed) return;
 
       const next = sorted[currentIdx + 1];
@@ -1181,9 +1186,18 @@
         videoElement.currentTime = 0;
         await fadedPlayback.play();
       }
-    } else if (behavior === 'next' && showNextVideoOverlay) {
-      // Card was already showing — video reached the end naturally, play next immediately
-      playNextVideo();
+    } else if (behavior === 'next') {
+      if (showNextVideoOverlay) {
+        // Card was already showing — video reached the end naturally, play next immediately
+        playNextVideo();
+      } else if (!nextVideoSkipped) {
+        // Short video (≤12 s): overlay never started; resolve next now and play immediately
+        await startNextVideoCountdown();
+        if (nextVideoPath) {
+          clearCountdown();
+          playNextVideo();
+        }
+      }
     }
   }
 
@@ -2150,9 +2164,7 @@
   {/if}
 
   {#if showNextVideoOverlay && nextVideoPath}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="next-video-overlay" role="status" onclick={playNextVideo}>
+    <div class="next-video-overlay" role="status">
       <div class="next-video-thumbnail-container">
         {#if nextVideoThumbnail}
           <img src={nextVideoThumbnail} alt="" class="next-video-thumbnail" />
