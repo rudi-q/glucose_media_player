@@ -50,6 +50,7 @@
     formatTimeForScreenReader,
   } from "$lib/utils/time";
   import { getEndBehavior } from "$lib/utils/playerPreferences";
+  import { generateThumbnail } from "$lib/utils/thumbnail";
 
   let { data } = $props();
 
@@ -1066,49 +1067,6 @@
     }
   }
 
-  function generateNextVideoThumbnail(path: string): Promise<string> {
-    return new Promise((resolve) => {
-      const video = document.createElement('video');
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      let settled = false;
-      const timeout = setTimeout(() => settle(''), 8000);
-
-      function settle(url: string) {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        video.onloadedmetadata = null;
-        video.onseeked = null;
-        video.onerror = null;
-        try { video.removeAttribute('src'); video.load(); } catch {}
-        resolve(url);
-      }
-
-      video.muted = true;
-      video.preload = 'metadata';
-      video.onerror = () => settle('');
-      video.onloadedmetadata = () => {
-        // Seek to 10% of the video, minimum 2s
-        video.currentTime = Math.max(2, video.duration * 0.1);
-      };
-      video.onseeked = () => {
-        try {
-          const aspect = video.videoWidth / video.videoHeight;
-          if (!Number.isFinite(aspect) || aspect <= 0) { settle(''); return; }
-          canvas.width = 280;
-          canvas.height = Math.round(280 / aspect);
-          ctx!.drawImage(video, 0, 0, canvas.width, canvas.height);
-          canvas.toBlob((blob) => {
-            if (!blob) { settle(''); return; }
-            settle(URL.createObjectURL(blob));
-          }, 'image/jpeg', 0.75);
-        } catch { settle(''); }
-      };
-      video.src = convertFileSrc(path);
-    });
-  }
-
   async function startNextVideoCountdown() {
     if (nextVideoSearchInFlight) return;
     nextVideoSearchInFlight = true;
@@ -1157,9 +1115,8 @@
       showNextVideoOverlay = true;
 
       // Generate thumbnail async — overlay shows immediately, thumbnail fills in
-      generateNextVideoThumbnail(next.path).then(url => {
+      generateThumbnail(next.path, undefined, () => disposed).then(url => {
         if (disposed || nextVideoPath !== next.path) {
-          if (url) URL.revokeObjectURL(url);
           return;
         }
         nextVideoThumbnail = url;
@@ -1187,7 +1144,6 @@
 
   function revokeNextVideoThumbnail() {
     if (nextVideoThumbnail) {
-      URL.revokeObjectURL(nextVideoThumbnail);
       nextVideoThumbnail = '';
     }
   }
@@ -2194,15 +2150,29 @@
   {/if}
 
   {#if showNextVideoOverlay && nextVideoPath}
-    <div class="next-video-overlay" role="status">
-      {#if nextVideoThumbnail}
-        <img src={nextVideoThumbnail} alt="" class="next-video-thumbnail" />
-      {:else}
-        <div class="next-video-thumbnail-placeholder"></div>
-      {/if}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div class="next-video-overlay" role="status" onclick={playNextVideo}>
+      <div class="next-video-thumbnail-container">
+        {#if nextVideoThumbnail}
+          <img src={nextVideoThumbnail} alt="" class="next-video-thumbnail" />
+        {:else}
+          <div class="next-video-thumbnail-placeholder">
+            <Play size={32} opacity={0.2} />
+          </div>
+        {/if}
+        <div class="next-video-thumbnail-overlay">
+          <div class="next-video-play-icon">
+            <Play size={32} fill="currentColor" />
+          </div>
+        </div>
+      </div>
       <div class="next-video-info">
-        <div class="next-video-label">Up Next</div>
-        <div class="next-video-name">{nextVideoName}</div>
+        <div class="next-video-header">
+          <div class="next-video-label">Up Next</div>
+          <div class="next-video-countdown-text">in {nextVideoCountdown}s</div>
+        </div>
+        <div class="next-video-name" title={nextVideoName}>{nextVideoName}</div>
         <div class="next-video-progress-track">
           <div
             class="next-video-progress-fill"
@@ -2210,8 +2180,12 @@
           ></div>
         </div>
         <div class="next-video-actions">
-          <button class="next-video-btn next-video-cancel" onclick={cancelNextVideo}>Cancel</button>
-          <button class="next-video-btn next-video-play" onclick={playNextVideo}>Play Now</button>
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <button class="next-video-btn next-video-cancel" onclick={(e) => { e.stopPropagation(); cancelNextVideo(); }}>Cancel</button>
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <button class="next-video-btn next-video-play" onclick={(e) => { e.stopPropagation(); playNextVideo(); }}>Play Now</button>
         </div>
       </div>
     </div>
@@ -3128,60 +3102,134 @@
     color: rgba(255, 255, 255, 0.8);
   }
 
-  /* Next video countdown overlay */
+  /* Next video countdown overlay - Netflix Style Card */
   .next-video-overlay {
     position: fixed;
     bottom: 5rem;
-    right: 2rem;
-    width: 300px;
-    background: rgba(10, 10, 12, 0.88);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 12px;
+    right: 2.5rem;
+    width: 340px;
+    background: rgba(18, 18, 22, 0.85);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
     overflow: hidden;
     z-index: 90;
     display: flex;
     flex-direction: column;
-    animation: fadeInUp 0.3s ease;
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    transform-origin: bottom right;
+    animation: scaleIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    cursor: pointer;
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  @keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(12px); }
-    to   { opacity: 1; transform: translateY(0); }
+  .next-video-overlay:hover {
+    transform: scale(1.02);
+  }
+
+  @keyframes scaleIn {
+    from { opacity: 0; transform: scale(0.95) translateY(12px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  .next-video-thumbnail-container {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
   }
 
   .next-video-thumbnail {
     width: 100%;
-    aspect-ratio: 16 / 9;
+    height: 100%;
     object-fit: cover;
     display: block;
+    transition: transform 0.4s ease;
+  }
+
+  .next-video-overlay:hover .next-video-thumbnail {
+    transform: scale(1.05);
   }
 
   .next-video-thumbnail-placeholder {
     width: 100%;
-    aspect-ratio: 16 / 9;
+    height: 100%;
     background: rgba(255, 255, 255, 0.04);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .next-video-thumbnail-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to bottom, transparent 40%, rgba(18, 18, 22, 0.9) 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.3s ease;
+  }
+
+  .next-video-overlay:hover .next-video-thumbnail-overlay {
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.2) 0%, rgba(18, 18, 22, 0.9) 100%);
+  }
+
+  .next-video-play-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    opacity: 0;
+    transform: scale(0.8);
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .next-video-overlay:hover .next-video-play-icon {
+    opacity: 1;
+    transform: scale(1);
   }
 
   .next-video-info {
-    padding: 0.875rem 1rem 1rem;
+    padding: 0 1.25rem 1.25rem;
     display: flex;
     flex-direction: column;
-    gap: 0.375rem;
+    gap: 0.5rem;
+    position: relative;
+    margin-top: -1.5rem; /* Pull up to overlap the gradient */
+    z-index: 2;
+  }
+
+  .next-video-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
   }
 
   .next-video-label {
-    font-size: 0.62rem;
-    font-weight: 600;
-    letter-spacing: 0.1em;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.4);
+    color: #c065b6; /* Accented label */
+  }
+
+  .next-video-countdown-text {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.6);
   }
 
   .next-video-name {
-    font-size: 0.875rem;
-    font-weight: 500;
+    font-size: 1rem;
+    font-weight: 600;
     color: #fff;
     line-height: 1.3;
     overflow: hidden;
@@ -3190,21 +3238,23 @@
     -webkit-line-clamp: 2;
     line-clamp: 2;
     -webkit-box-orient: vertical;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.5);
   }
 
   .next-video-progress-track {
     width: 100%;
-    height: 2px;
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 1px;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
     overflow: hidden;
-    margin: 0.25rem 0;
+    margin: 0.5rem 0;
   }
 
   .next-video-progress-fill {
     height: 100%;
-    background: var(--color-accent, #fff);
-    border-radius: 1px;
+    background: var(--color-accent, #c065b6);
+    border-radius: 2px;
+    box-shadow: 0 0 8px rgba(192, 101, 182, 0.6);
   }
 
   .next-video-actions {
@@ -3215,33 +3265,37 @@
 
   .next-video-btn {
     flex: 1;
-    padding: 0.45rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.78rem;
-    font-weight: 500;
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .next-video-cancel {
-    background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    color: rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.7);
   }
 
   .next-video-cancel:hover {
-    border-color: rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
     color: #fff;
   }
 
   .next-video-play {
-    background: rgba(255, 255, 255, 0.12);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: #fff;
+    background: #fff;
+    border: 1px solid transparent;
+    color: #000;
   }
 
   .next-video-play:hover {
-    background: rgba(255, 255, 255, 0.22);
-    border-color: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.9);
+    transform: scale(1.02);
   }
 </style>

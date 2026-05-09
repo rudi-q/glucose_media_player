@@ -14,6 +14,7 @@
   import { createFadedMediaPlayback } from "$lib/utils/fadedMediaPlayback";
   import { formatDuration } from "$lib/utils/time";
   import { getDefaultPlayMode } from "$lib/utils/playerPreferences";
+  import { generateThumbnail, clearThumbnailCache } from "$lib/utils/thumbnail";
   import Button from "$lib/components/Button.svelte";
   
   // Per-instance cache that persists across remounts within the same component
@@ -27,11 +28,6 @@
   
   let recentVideos = $state<VideoFile[]>([]);
   let loadingRecent = $state(true);
-  let thumbnailCache = $state<Map<string, string>>(new Map());
-  const thumbnailPromises = new Map<string, Promise<string>>();
-  const thumbnailQueue: Array<() => void> = [];
-  let activeThumbnailJobs = 0;
-  const MAX_THUMBNAIL_JOBS = 2;
   let watchProgressMap = $derived($watchProgressStore);
   let selectedVideoIndex = $state(0);
   let showCloseButton = $state(false);
@@ -541,149 +537,7 @@
     return `${mins} min${mins !== 1 ? 's' : ''} remaining`;
   }
   
-  async function generateThumbnail(videoPath: string, seekTime?: number): Promise<string> {
-    const hasSeek = seekTime != null && seekTime > 0;
-    const cacheKey = hasSeek ? `${videoPath}@${Math.floor(seekTime!)}` : videoPath;
-    if (thumbnailCache.has(cacheKey)) {
-      return thumbnailCache.get(cacheKey)!;
-    }
-    if (thumbnailPromises.has(cacheKey)) {
-      return thumbnailPromises.get(cacheKey)!;
-    }
-
-    const promise = scheduleThumbnailJob(() => createThumbnail(videoPath, seekTime, hasSeek, cacheKey))
-      .finally(() => thumbnailPromises.delete(cacheKey));
-    thumbnailPromises.set(cacheKey, promise);
-    return promise;
-  }
-
-  function scheduleThumbnailJob(job: () => Promise<string>): Promise<string> {
-    return new Promise((resolve) => {
-      const run = () => {
-        activeThumbnailJobs += 1;
-        job()
-          .then(resolve)
-          .catch(() => resolve(''))
-          .finally(() => {
-            activeThumbnailJobs -= 1;
-            thumbnailQueue.shift()?.();
-          });
-      };
-
-      if (activeThumbnailJobs < MAX_THUMBNAIL_JOBS) {
-        run();
-      } else {
-        thumbnailQueue.push(run);
-      }
-    });
-  }
-
-  function createThumbnail(videoPath: string, seekTime: number | undefined, hasSeek: boolean, cacheKey: string): Promise<string> {
-    return new Promise((resolve) => {
-      const video = document.createElement('video');
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      let settled = false;
-      const timeout = setTimeout(() => settle(''), 8000);
-
-      function cleanup() {
-        clearTimeout(timeout);
-        video.onloadedmetadata = null;
-        video.onseeked = null;
-        video.onerror = null;
-        try {
-          video.removeAttribute('src');
-          video.load();
-        } catch {}
-      }
-
-      function settle(thumbnail: string) {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve(thumbnail);
-      }
-
-      function capture() {
-        try {
-          const targetWidth = 320;
-          const aspectRatio = video.videoWidth / video.videoHeight;
-
-          if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) {
-            settle('');
-            return;
-          }
-
-          canvas.width = targetWidth;
-          canvas.height = Math.round(targetWidth / aspectRatio);
-
-          ctx!.drawImage(video, 0, 0, canvas.width, canvas.height);
-          canvas.toBlob((blob) => {
-            if (!blob) {
-              settle('');
-              return;
-            }
-            const url = URL.createObjectURL(blob);
-            // Guard against post-unmount blob URL leaks: if the component was
-            // destroyed while this async job was in flight, immediately revoke
-            // the URL we just created and resolve with an empty string.
-            if (destroyed) {
-              URL.revokeObjectURL(url);
-              settle('');
-              return;
-            }
-            thumbnailCache.set(cacheKey, url);
-            settle(url);
-          }, 'image/jpeg', 0.7);
-        } catch (err) {
-          if (import.meta.env.DEV) {
-            console.log('Thumbnail generation skipped:', videoPath, err);
-          }
-          settle('');
-        }
-      }
-
-      if (!ctx) {
-        settle('');
-        return;
-      }
-
-      video.muted = true;
-      video.preload = 'metadata';
-      video.playsInline = true;
-      video.crossOrigin = 'anonymous';
-
-      video.onloadedmetadata = () => {
-        const defaultTime = Number.isFinite(video.duration) ? Math.min(1, video.duration * 0.1) : 0;
-        const targetTime = hasSeek ? seekTime! : defaultTime;
-        if (targetTime <= 0) {
-          capture();
-          return;
-        }
-        try {
-          video.currentTime = targetTime;
-        } catch {
-          capture();
-        }
-      };
-
-      video.onseeked = capture;
-
-      video.onerror = () => settle('');
-      video.src = convertFileSrc(videoPath);
-    });
-  }
-
-  function clearThumbnailCache() {
-    thumbnailQueue.length = 0;
-    thumbnailPromises.clear();
-    for (const thumbnail of thumbnailCache.values()) {
-      if (thumbnail.startsWith('blob:')) {
-        URL.revokeObjectURL(thumbnail);
-      }
-    }
-    thumbnailCache.clear();
-  }
+  const getThumbnail = (path: string, seek?: number) => generateThumbnail(path, seek, () => destroyed);
 
   function handleMainContainerMouseMove() {
     showCloseButton = true;
@@ -839,7 +693,7 @@
                           <Music2 size={40} strokeWidth={1.2} />
                         </div>
                       {:else}
-                        {#await generateThumbnail(video.path, watchProgressMap.get(video.path)?.current_time)}
+                        {#await getThumbnail(video.path, watchProgressMap.get(video.path)?.current_time)}
                           <Play size={48} strokeWidth={1.5} />
                         {:then thumbnail}
                           {#if thumbnail}
