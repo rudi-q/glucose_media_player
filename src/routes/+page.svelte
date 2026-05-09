@@ -4,7 +4,8 @@
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown, Volume2, VolumeX, ListFilter } from "lucide-svelte";
+  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown, Volume2, VolumeX, ListFilter, RotateCcw } from "lucide-svelte";
+  import { getFormattedVersion } from "$lib/utils/version";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { isAudio } from "$lib/utils/mediaType";
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
@@ -478,10 +479,18 @@
     }
   }
   
-  async function loadVideo(path: string, mode?: string) {
+  async function loadVideo(path: string, mode?: string, restart?: boolean) {
     const encodedPath = encodeURIComponent(path);
-    const modeParam = mode ? `?mode=${encodeURIComponent(mode)}` : '';
-    await goto(isAudio(path) ? `/audio/${encodedPath}` : `/player/${encodedPath}${modeParam}`);
+    if (isAudio(path)) {
+      await goto(`/audio/${encodedPath}`);
+      return;
+    }
+    const savedDefault = localStorage.getItem('glucose_default_mode');
+    const defaultMode = (savedDefault === 'fullscreen' || savedDefault === 'pip') ? savedDefault : 'cinematic';
+    const resolvedMode = mode ?? defaultMode;
+    const params = new URLSearchParams({ mode: resolvedMode });
+    if (restart) params.set('restart', 'true');
+    await goto(`/player/${encodedPath}?${params.toString()}`);
   }
 
   async function openContainingFolder(path: string) {
@@ -773,7 +782,10 @@
   <div class="empty-state" class:dragging={isDragging}>
     <div class="library-container">
       <div class="library-header" bind:offsetHeight={libraryHeaderHeight}>
-        <img src="/logo-dark.svg" alt="glucose" class="logo" class:logo-animate={logoReady} />
+        <div class="logo-group">
+          <img src="/logo-dark.svg" alt="glucose" class="logo" class:logo-animate={logoReady} />
+          <span class="version-tag" class:logo-animate={logoReady}>{getFormattedVersion()}</span>
+        </div>
         <div class="header-buttons">
           <button class="sort-toggle" onclick={toggleSortMenu} title="Sort" class:sort-active={sortBy === 'watched'}>
             <ArrowUpDown size={15} />
@@ -947,6 +959,10 @@
         <Play size={16} />
         <span>Play</span>
       </button>
+      <button class="context-menu-item" onclick={() => { loadVideo(cardContextMenuVideo!.path, undefined, true); showCardContextMenu = false; }}>
+        <RotateCcw size={16} />
+        <span>Play from Beginning</span>
+      </button>
       <button class="context-menu-item" onclick={() => openContainingFolder(cardContextMenuVideo!.path)}>
         <FolderOpen size={16} />
         <span>Open Containing Folder</span>
@@ -1057,6 +1073,12 @@
     }
   }
 
+  .logo-group {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.5rem;
+  }
+
   .library-header .logo {
     height: 48px;
     width: auto;
@@ -1065,6 +1087,19 @@
 
   .library-header .logo.logo-animate {
     animation: logo-smoke-in 2.8s ease-out forwards;
+  }
+
+  .version-tag {
+    font-size: 0.65rem;
+    color: var(--color-text-subtle);
+    opacity: 0;
+    font-family: monospace;
+    letter-spacing: 0.05em;
+    padding-bottom: 9px;
+  }
+
+  .version-tag.logo-animate {
+    animation: logo-smoke-in 2.8s ease-out 0.4s forwards;
   }
 
   .header-buttons {

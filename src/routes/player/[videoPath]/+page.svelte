@@ -6,6 +6,7 @@
   import { convertFileSrc } from "@tauri-apps/api/core";
   import {
     X,
+    Minus,
     Settings,
     Play,
     Pause,
@@ -29,7 +30,7 @@
     watchProgressStore,
     type WatchProgress,
   } from "$lib/stores/watchProgressStore";
-  import type { VideoInfo } from "$lib/types/video";
+  import type { VideoInfo, VideoFile } from "$lib/types/video";
   import { createFadedMediaPlayback } from "$lib/utils/fadedMediaPlayback";
   import {
     applyPipVideoMode,
@@ -127,6 +128,13 @@
   let showContextMenu = $state(false);
   let contextMenuPosition = $state({ x: 0, y: 0 });
   let showConvertSubmenu = $state(false);
+
+  // "Play next" countdown overlay state
+  let showNextVideoOverlay = $state(false);
+  let nextVideoPath = $state<string | null>(null);
+  let nextVideoName = $state<string>('');
+  let nextVideoCountdown = $state(10);
+  let countdownInterval: ReturnType<typeof setInterval> | null = null;
 
   // Audio/Volume state
   let showVolumeMenu = $state(false);
@@ -385,6 +393,7 @@
       // Clear volume menu auto-hide timer
       clearTimeout(volumeMenuAutoTimer);
       clearTimeout(hideControlsTimeout);
+      clearCountdown();
       fadedPlayback.destroy();
       // Close Web Audio context to free resources
       if (audioCtx) {
@@ -607,6 +616,11 @@
     }
 
     await goto("/");
+  }
+
+  async function minimizeApp() {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().minimize();
   }
 
   async function closeApp() {
@@ -927,9 +941,94 @@
     }
   }
 
+  function videoBaseName(path: string): string {
+    const fileName = path.split(/[\\/]/).pop() ?? path;
+    const lastDot = fileName.lastIndexOf('.');
+    return lastDot > 0 ? fileName.substring(0, lastDot) : fileName;
+  }
+
+  function clearCountdown() {
+    if (countdownInterval !== null) {
+      clearInterval(countdownInterval);
+      countdownInterval = null;
+    }
+  }
+
+  async function startNextVideoCountdown() {
+    try {
+      const [videos, progressData] = await Promise.all([
+        invoke<VideoFile[]>('get_recent_videos'),
+        invoke<Record<string, WatchProgress>>('get_all_watch_progress'),
+      ]);
+
+      // Filter out unavailable/cloud-only videos
+      const available = videos.filter(v => !v.is_cloud_only);
+      if (available.length === 0) return;
+
+      // Match gallery sort order
+      const sortPref = localStorage.getItem('glucose_sort') ?? 'watched';
+      let sorted: VideoFile[];
+      if (sortPref === 'watched') {
+        sorted = [...available].sort((a, b) => {
+          const aTime = (progressData[a.path]?.last_watched) ?? 0;
+          const bTime = (progressData[b.path]?.last_watched) ?? 0;
+          return (bTime - aTime) || (b.modified - a.modified);
+        });
+      } else {
+        sorted = available;
+      }
+
+      const currentIdx = sorted.findIndex(v => v.path === currentVideoPath);
+      // No next video if current not found or it's the last one
+      if (currentIdx === -1 || currentIdx >= sorted.length - 1) return;
+
+      const next = sorted[currentIdx + 1];
+      nextVideoPath = next.path;
+      nextVideoName = videoBaseName(next.path);
+      nextVideoCountdown = 10;
+      showNextVideoOverlay = true;
+
+      countdownInterval = setInterval(() => {
+        nextVideoCountdown--;
+        if (nextVideoCountdown <= 0) {
+          clearCountdown();
+          playNextVideo();
+        }
+      }, 1000);
+    } catch (err) {
+      console.error('Failed to find next video:', err);
+    }
+  }
+
+  async function playNextVideo() {
+    if (!nextVideoPath) return;
+    showNextVideoOverlay = false;
+    const path = nextVideoPath;
+    nextVideoPath = null;
+    clearCountdown();
+    const encodedPath = encodeURIComponent(path);
+    await goto(`/player/${encodedPath}?mode=${viewMode}`);
+  }
+
+  function cancelNextVideo() {
+    clearCountdown();
+    showNextVideoOverlay = false;
+    nextVideoPath = null;
+  }
+
   async function handleEnded() {
     fadedPlayback.pauseNow();
     await saveWatchProgress();
+
+    const behavior = localStorage.getItem('glucose_end_behavior') ?? 'nothing';
+    if (behavior === 'loop') {
+      if (videoElement) {
+        videoElement.currentTime = 0;
+        await fadedPlayback.play();
+      }
+    } else if (behavior === 'next') {
+      await startNextVideoCountdown();
+    }
   }
 
   async function handleLoadedMetadata() {
@@ -944,7 +1043,7 @@
     if (pendingSeekTime !== null) {
       videoElement.currentTime = pendingSeekTime;
       pendingSeekTime = null;
-    } else if (currentVideoPath) {
+    } else if (currentVideoPath && !data.restart) {
       await invoke<WatchProgress | null>("get_watch_progress", {
         videoPath: currentVideoPath,
       })
@@ -1335,14 +1434,14 @@
   ondrop={(e) => e.preventDefault()}
 >
   {#if viewMode !== "pip"}
-    <button
-      class="close-button"
-      class:visible={showCloseButton}
-      onclick={closeApp}
-      title="Close"
-    >
-      <X size={16} />
-    </button>
+    <div class="window-controls" class:visible={showCloseButton}>
+      <button class="window-btn" onclick={minimizeApp} title="Minimize">
+        <Minus size={16} />
+      </button>
+      <button class="window-btn window-btn-close" onclick={closeApp} title="Close">
+        <X size={16} />
+      </button>
+    </div>
   {/if}
 
   {#if viewMode === "pip"}
@@ -1892,6 +1991,23 @@
           </div>
         </div>
         <p class="generation-message">{conversionMessage}</p>
+      </div>
+    </div>
+  {/if}
+
+  {#if showNextVideoOverlay && nextVideoPath}
+    <div class="next-video-overlay" role="status">
+      <div class="next-video-label">Up Next</div>
+      <div class="next-video-name">{nextVideoName}</div>
+      <div class="next-video-progress-track">
+        <div
+          class="next-video-progress-fill"
+          style="width: {(nextVideoCountdown / 10) * 100}%; transition: width 1s linear;"
+        ></div>
+      </div>
+      <div class="next-video-actions">
+        <button class="next-video-btn next-video-cancel" onclick={cancelNextVideo}>Cancel</button>
+        <button class="next-video-btn next-video-play" onclick={playNextVideo}>Play Now</button>
       </div>
     </div>
   {/if}
@@ -2798,5 +2914,103 @@
 
   .hevc-warning-dismiss:hover {
     color: rgba(255, 255, 255, 0.8);
+  }
+
+  /* Next video countdown overlay */
+  .next-video-overlay {
+    position: fixed;
+    bottom: 5rem;
+    right: 2rem;
+    width: 280px;
+    background: rgba(10, 10, 12, 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 1.25rem;
+    z-index: 90;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    animation: fadeInUp 0.3s ease;
+  }
+
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .next-video-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  .next-video-name {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: #fff;
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .next-video-progress-track {
+    width: 100%;
+    height: 2px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 1px;
+    overflow: hidden;
+    margin: 0.25rem 0;
+  }
+
+  .next-video-progress-fill {
+    height: 100%;
+    background: var(--color-accent, #fff);
+    border-radius: 1px;
+  }
+
+  .next-video-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.25rem;
+  }
+
+  .next-video-btn {
+    flex: 1;
+    padding: 0.45rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .next-video-cancel {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .next-video-cancel:hover {
+    border-color: rgba(255, 255, 255, 0.3);
+    color: #fff;
+  }
+
+  .next-video-play {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+  }
+
+  .next-video-play:hover {
+    background: rgba(255, 255, 255, 0.22);
+    border-color: rgba(255, 255, 255, 0.4);
   }
 </style>

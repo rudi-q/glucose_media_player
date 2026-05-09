@@ -55,6 +55,12 @@
     Star,
     Keyboard,
     FolderOpen,
+    Play,
+    Maximize2,
+    PictureInPicture2,
+    Ban,
+    Repeat,
+    SkipForward,
   } from "lucide-svelte";
   import Button from "$lib/components/Button.svelte";
   import LibrarySettings from "$lib/components/LibrarySettings.svelte";
@@ -84,8 +90,26 @@
   let downloadProgress = $state(0);
   let downloadMessage = $state("");
   let isCheckingForUpdates = $state(false);
-  let selectedTab = $state("ai"); // 'ai' | 'library' | 'shortcuts' | 'updates' | 'community' | 'about'
+  let selectedTab = $state("ai"); // 'ai' | 'library' | 'player' | 'shortcuts' | 'updates' | 'community' | 'about'
   let modelsExpanded = $state(false);
+
+  const _savedDefaultMode = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_default_mode") : null;
+  let defaultPlayMode = $state<"cinematic" | "fullscreen" | "pip">(
+    _savedDefaultMode === "fullscreen" || _savedDefaultMode === "pip" ? _savedDefaultMode : "cinematic"
+  );
+
+  $effect(() => {
+    localStorage.setItem("glucose_default_mode", defaultPlayMode);
+  });
+
+  const _savedEndBehavior = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_end_behavior") : null;
+  let endBehavior = $state<"nothing" | "loop" | "next">(
+    _savedEndBehavior === "loop" || _savedEndBehavior === "next" ? _savedEndBehavior : "nothing"
+  );
+
+  $effect(() => {
+    localStorage.setItem("glucose_end_behavior", endBehavior);
+  });
 
   // Update manager
   let updateManager: UpdateManagerAPI;
@@ -345,6 +369,14 @@
           >
             <FolderOpen size={18} />
             <span>Library</span>
+          </button>
+          <button
+            class="sidebar-tab"
+            class:active={selectedTab === "player"}
+            onclick={() => (selectedTab = "player")}
+          >
+            <Play size={18} />
+            <span>Player</span>
           </button>
           <button
             class="sidebar-tab"
@@ -770,6 +802,73 @@
             </div>
           {:else if selectedTab === "library"}
             <LibrarySettings />
+          {:else if selectedTab === "player"}
+            <div class="settings-section">
+              <h3>Default View Mode</h3>
+              <p class="settings-description">Choose how videos open when you play them from the gallery.</p>
+              <div class="mode-picker">
+                <button
+                  class="mode-option"
+                  class:active={defaultPlayMode === "cinematic"}
+                  onclick={() => (defaultPlayMode = "cinematic")}
+                >
+                  <Play size={18} />
+                  <span class="mode-label">Cinematic</span>
+                  <span class="mode-desc">Focused view with blurred background</span>
+                </button>
+                <button
+                  class="mode-option"
+                  class:active={defaultPlayMode === "fullscreen"}
+                  onclick={() => (defaultPlayMode = "fullscreen")}
+                >
+                  <Maximize2 size={18} />
+                  <span class="mode-label">Fullscreen</span>
+                  <span class="mode-desc">Video fills the entire window</span>
+                </button>
+                <button
+                  class="mode-option"
+                  class:active={defaultPlayMode === "pip"}
+                  onclick={() => (defaultPlayMode = "pip")}
+                >
+                  <PictureInPicture2 size={18} />
+                  <span class="mode-label">Picture-in-Picture</span>
+                  <span class="mode-desc">Floating compact window</span>
+                </button>
+              </div>
+            </div>
+            <div class="settings-section">
+              <h3>When Video Ends</h3>
+              <p class="settings-description">Choose what happens after a video finishes playing.</p>
+              <div class="mode-picker">
+                <button
+                  class="mode-option"
+                  class:active={endBehavior === "nothing"}
+                  onclick={() => (endBehavior = "nothing")}
+                >
+                  <Ban size={18} />
+                  <span class="mode-label">Do Nothing</span>
+                  <span class="mode-desc">Stop at the end of the video</span>
+                </button>
+                <button
+                  class="mode-option"
+                  class:active={endBehavior === "loop"}
+                  onclick={() => (endBehavior = "loop")}
+                >
+                  <Repeat size={18} />
+                  <span class="mode-label">Loop</span>
+                  <span class="mode-desc">Replay the same video</span>
+                </button>
+                <button
+                  class="mode-option"
+                  class:active={endBehavior === "next"}
+                  onclick={() => (endBehavior = "next")}
+                >
+                  <SkipForward size={18} />
+                  <span class="mode-label">Play Next</span>
+                  <span class="mode-desc">Automatically play the next video from your gallery</span>
+                </button>
+              </div>
+            </div>
           {:else if selectedTab === "shortcuts"}
             <div class="settings-section">
               <div class="shortcuts-layout">
@@ -1571,6 +1670,56 @@
     color: rgba(255, 255, 255, 0.4);
     text-transform: uppercase;
     letter-spacing: 0.05em;
+  }
+
+  /* Player Tab Styles */
+  .settings-description {
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+    margin-bottom: 1rem;
+  }
+
+  .mode-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .mode-option {
+    display: flex;
+    align-items: center;
+    gap: 0.875rem;
+    padding: 0.875rem 1rem;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.15s, background 0.15s, color 0.15s;
+  }
+
+  .mode-option:hover {
+    border-color: var(--color-border-strong);
+    color: var(--color-text);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .mode-option.active {
+    border-color: var(--color-accent-border);
+    background: var(--color-accent-subtle);
+    color: var(--color-text);
+  }
+
+  .mode-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    flex: 1;
+  }
+
+  .mode-desc {
+    font-size: 0.75rem;
+    color: var(--color-text-subtle);
   }
 
   /* Shortcuts Tab Styles */

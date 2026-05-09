@@ -44,10 +44,25 @@ body {
   overflow: hidden;
 }
 
-.close-button {
+.window-controls {
   position: fixed;
   top: 1.5rem;
   right: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  z-index: 100;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.window-controls.visible {
+  opacity: 1;
+  pointer-events: all;
+}
+
+.window-btn {
   width: 36px;
   height: 36px;
   display: flex;
@@ -61,19 +76,16 @@ body {
   color: rgba(255, 255, 255, 0.7);
   cursor: pointer;
   transition: all 0.2s ease;
-  z-index: 100;
-  opacity: 0;
-  pointer-events: none;
 }
 
-.close-button.visible {
-  opacity: 1;
-  pointer-events: all;
-}
-
-.close-button:hover {
+.window-btn:hover {
   background: rgba(255, 255, 255, 0.15);
   border-color: rgba(255, 255, 255, 0.3);
   color: #fff;
   transform: scale(1.1);
+}
+
+.window-btn-close:hover {
+  background: rgba(220, 50, 50, 0.6);
+  border-color: rgba(255, 80, 80, 0.4);
 }
