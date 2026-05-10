@@ -139,6 +139,7 @@
   let nextVideoName = $state<string>('');
   let nextVideoThumbnail = $state<string>('');
   let nextVideoCountdown = $state(10);
+  let nextVideoCountdownTotal = $state(10);
   let countdownInterval: ReturnType<typeof setInterval> | null = null;
   // Prevents re-triggering the overlay if the user explicitly cancelled it
   let nextVideoSkipped = false;
@@ -146,6 +147,7 @@
   let nextVideoNotFound = false;
   // Guards against duplicate in-flight startNextVideoCountdown calls
   let nextVideoSearchInFlight = false;
+  let nextVideoSearchPromise: Promise<void> | null = null;
 
   // Audio/Volume state
   let showVolumeMenu = $state(false);
@@ -1075,6 +1077,7 @@
   async function startNextVideoCountdown() {
     if (nextVideoSearchInFlight) return;
     nextVideoSearchInFlight = true;
+    nextVideoSearchPromise = (async () => {
     const requestedForPath = currentVideoPath;
     try {
       const [videos, progressData] = await Promise.all([
@@ -1116,7 +1119,11 @@
       nextVideoPath = next.path;
       nextVideoName = videoBaseName(next.path);
       nextVideoThumbnail = '';
-      nextVideoCountdown = 10;
+      const remaining = videoElement
+        ? Math.max(1, Math.ceil(duration - videoElement.currentTime))
+        : 10;
+      nextVideoCountdown = remaining;
+      nextVideoCountdownTotal = remaining;
       showNextVideoOverlay = true;
 
       // Generate thumbnail async — overlay shows immediately, thumbnail fills in
@@ -1143,8 +1150,11 @@
     } finally {
       if (!disposed) {
         nextVideoSearchInFlight = false;
+        nextVideoSearchPromise = null;
       }
     }
+    })();
+    await nextVideoSearchPromise;
   }
 
   function revokeNextVideoThumbnail() {
@@ -1191,8 +1201,9 @@
         // Card was already showing — video reached the end naturally, play next immediately
         playNextVideo();
       } else if (!nextVideoSkipped) {
-        // Short video (≤12 s): overlay never started; resolve next now and play immediately
-        await startNextVideoCountdown();
+        // Overlay never started — either a short video or the scan was still in flight.
+        // Await the in-flight search if one exists, otherwise start a fresh one.
+        await (nextVideoSearchPromise ?? startNextVideoCountdown());
         if (nextVideoPath) {
           clearCountdown();
           playNextVideo();
@@ -2188,7 +2199,7 @@
         <div class="next-video-progress-track">
           <div
             class="next-video-progress-fill"
-            style="width: {(nextVideoCountdown / 10) * 100}%; transition: width 1s linear;"
+            style="width: {(nextVideoCountdown / nextVideoCountdownTotal) * 100}%; transition: width 1s linear;"
           ></div>
         </div>
         <div class="next-video-actions">
