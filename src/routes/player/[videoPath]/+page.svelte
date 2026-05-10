@@ -1144,6 +1144,7 @@
           clearCountdown();
           return;
         }
+        if (videoElement?.paused || videoElement?.seeking) return;
         nextVideoCountdown--;
         if (nextVideoCountdown <= 0) {
           clearCountdown();
@@ -1170,12 +1171,12 @@
 
   async function playNextVideo() {
     if (!nextVideoPath) return;
-    await saveWatchProgress();
-    showNextVideoOverlay = false;
     const path = nextVideoPath;
     nextVideoPath = null;
     clearCountdown();
     revokeNextVideoThumbnail();
+    showNextVideoOverlay = false;
+    await saveWatchProgress();
     const encodedPath = encodeURIComponent(path);
     try {
       await goto(`/player/${encodedPath}?mode=${viewMode}`);
