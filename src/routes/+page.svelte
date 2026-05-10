@@ -32,8 +32,6 @@
   let loadingRecent = $state(true);
   let watchProgressMap = $derived($watchProgressStore);
   let selectedVideoIndex = $state(0);
-  let showCloseButton = $state(false);
-  let hideCloseButtonTimeout: ReturnType<typeof setTimeout>;
   let showGalleryContextMenu = $state(false);
   let galleryContextMenuPosition = $state({ x: 0, y: 0 });
   let showCardContextMenu = $state(false);
@@ -549,14 +547,6 @@
   
   const getThumbnail = (path: string, seek?: number) => generateThumbnail(path, seek, () => destroyed);
 
-  function handleMainContainerMouseMove() {
-    showCloseButton = true;
-    clearTimeout(hideCloseButtonTimeout);
-    hideCloseButtonTimeout = setTimeout(() => {
-      showCloseButton = false;
-    }, 1000);
-  }
-  
   function toggleSortMenu(e: MouseEvent) {
     if (showSortMenu) { showSortMenu = false; return; }
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -628,17 +618,8 @@
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
-  onmousemove={handleMainContainerMouseMove}
   oncontextmenu={handleGalleryContextMenu}
 >
-  <div class="window-controls" class:visible={showCloseButton}>
-    <button class="window-btn" onclick={minimizeApp} title="Minimize">
-      <Minus size={16} />
-    </button>
-    <button class="window-btn window-btn-close" onclick={closeApp} title="Close">
-      <X size={16} />
-    </button>
-  </div>
   
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -662,6 +643,12 @@
           <Button variant="secondary" onclick={() => showSettings()}>
             Settings
           </Button>
+          <button class="window-btn header-window-btn" onclick={minimizeApp} title="Minimize">
+            <Minus size={15} />
+          </button>
+          <button class="window-btn window-btn-close header-window-btn" onclick={closeApp} title="Close">
+            <X size={15} />
+          </button>
         </div>
       </div>
       
@@ -978,6 +965,15 @@
     -webkit-backdrop-filter: blur(var(--blur-md));
     letter-spacing: 0.025em;
     font-weight: 500;
+  }
+
+  .header-window-btn {
+    width: 32px;
+    height: 32px;
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
   }
 
   /* Open Video — prominent frosted glass */
