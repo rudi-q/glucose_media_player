@@ -1118,7 +1118,7 @@
 
       const currentIdx = sorted.findIndex(v => normalize(v.path) === normalizedCurrent);
       if (currentIdx === -1 || currentIdx >= sorted.length - 1) { nextVideoNotFound = true; return; }
-      if (disposed) return;
+      if (disposed || !videoElement || duration - videoElement.currentTime > 10) return;
 
       const next = sorted[currentIdx + 1];
       nextVideoPath = next.path;
