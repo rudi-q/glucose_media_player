@@ -49,7 +49,7 @@
     formatEstimatedTime,
     formatTimeForScreenReader,
   } from "$lib/utils/time";
-  import { getEndBehavior } from "$lib/utils/playerPreferences";
+  import { getEndBehavior, getFadeDurationMs } from "$lib/utils/playerPreferences";
   import { generateThumbnail } from "$lib/utils/thumbnail";
   import { setWindowTitle } from "$lib/utils/windowTitle";
 
@@ -208,6 +208,8 @@
     onPlayingChange: (playing) => {
       isPlaying = playing;
     },
+    fadeInMs: () => getFadeDurationMs(localStorage.getItem('glucose_fade')),
+    fadeOutMs: () => getFadeDurationMs(localStorage.getItem('glucose_fade')),
   });
 
   $effect(() => {

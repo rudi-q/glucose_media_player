@@ -6,6 +6,7 @@
   import { appSettings } from '$lib/stores/appStore';
   import { watchProgressStore } from '$lib/stores/watchProgressStore';
   import { createFadedMediaPlayback } from '$lib/utils/fadedMediaPlayback';
+  import { getFadeDurationMs } from '$lib/utils/playerPreferences';
   import { formatDuration } from '$lib/utils/time';
   import { X, Minus, Play, Pause, Volume1, Volume2, VolumeX, Home } from 'lucide-svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -96,6 +97,8 @@
     onPlayingChange: (playing) => {
       isPlaying = playing;
     },
+    fadeInMs: () => getFadeDurationMs(localStorage.getItem('glucose_fade')),
+    fadeOutMs: () => getFadeDurationMs(localStorage.getItem('glucose_fade')),
   });
 
   // ── Audio context setup ─────────────────────────────────────────────────────

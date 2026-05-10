@@ -61,6 +61,11 @@
     Ban,
     Repeat,
     SkipForward,
+    ZapOff,
+    Gauge,
+    Waves,
+    Wind,
+    RotateCcw,
   } from "lucide-svelte";
   import Button from "$lib/components/Button.svelte";
   import LibrarySettings from "$lib/components/LibrarySettings.svelte";
@@ -74,6 +79,8 @@
   import {
     getDefaultPlayMode,
     getEndBehavior,
+    getFadeMode,
+    type FadeMode,
   } from "$lib/utils/playerPreferences";
   import {
     appSettings,
@@ -114,6 +121,28 @@
   $effect(() => {
     localStorage.setItem("glucose_end_behavior", endBehavior);
   });
+
+  const _savedFadeMode = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_fade") : null;
+  let fadeMode = $state<FadeMode>(getFadeMode(_savedFadeMode));
+
+  $effect(() => {
+    localStorage.setItem("glucose_fade", fadeMode);
+  });
+
+  const _isFirstRun = _savedDefaultMode === null && _savedEndBehavior === null && _savedFadeMode === null;
+  let showOnboarding = $state(_isFirstRun);
+
+  function resetPlayerPreferences() {
+    defaultPlayMode = getDefaultPlayMode(null);
+    endBehavior = getEndBehavior(null);
+    fadeMode = getFadeMode(null);
+  }
+
+  function clearPlayerPreferences() {
+    localStorage.removeItem('glucose_default_mode');
+    localStorage.removeItem('glucose_end_behavior');
+    localStorage.removeItem('glucose_fade');
+  }
 
   // Update manager
   let updateManager: UpdateManagerAPI;
@@ -885,6 +914,65 @@
                 </button>
               </div>
             </div>
+            <div class="settings-section">
+              <h3 id="playback-fade-label">Play/Pause Fade</h3>
+              <p class="settings-description">Controls how smoothly volume transitions when you play or pause.</p>
+              <div class="mode-picker" role="radiogroup" aria-labelledby="playback-fade-label">
+                <button
+                  class="mode-option"
+                  class:active={fadeMode === "off"}
+                  role="radio"
+                  aria-checked={fadeMode === "off"}
+                  onclick={() => (fadeMode = "off")}
+                >
+                  <ZapOff size={18} />
+                  <span class="mode-label">Off</span>
+                  <span class="mode-desc">Instant volume change, no fade</span>
+                </button>
+                <button
+                  class="mode-option"
+                  class:active={fadeMode === "short"}
+                  role="radio"
+                  aria-checked={fadeMode === "short"}
+                  onclick={() => (fadeMode = "short")}
+                >
+                  <Gauge size={18} />
+                  <span class="mode-label">Short</span>
+                  <span class="mode-desc">Quick 300ms fade</span>
+                </button>
+                <button
+                  class="mode-option"
+                  class:active={fadeMode === "default"}
+                  role="radio"
+                  aria-checked={fadeMode === "default"}
+                  onclick={() => (fadeMode = "default")}
+                >
+                  <Waves size={18} />
+                  <span class="mode-label">Default</span>
+                  <span class="mode-desc">Smooth 800ms fade</span>
+                </button>
+                <button
+                  class="mode-option"
+                  class:active={fadeMode === "long"}
+                  role="radio"
+                  aria-checked={fadeMode === "long"}
+                  onclick={() => (fadeMode = "long")}
+                >
+                  <Wind size={18} />
+                  <span class="mode-label">Long</span>
+                  <span class="mode-desc">Slow 1.5s cinematic fade</span>
+                </button>
+              </div>
+            </div>
+            <div class="reset-prefs-row">
+              <button class="reset-prefs-btn" onclick={resetPlayerPreferences}>
+                <RotateCcw size={13} />
+                Reset to defaults
+              </button>
+              <button class="reset-prefs-btn reset-prefs-btn--clear" onclick={clearPlayerPreferences}>
+                Clear preferences
+              </button>
+            </div>
           {:else if selectedTab === "shortcuts"}
             <div class="settings-section">
               <div class="shortcuts-layout">
@@ -1225,6 +1313,100 @@
           </div>
         {/if}
       {/if}
+    </div>
+  </div>
+{/if}
+
+<!-- First-Run Onboarding -->
+{#if appReady && showOnboarding}
+  <div class="onboarding-overlay" transition:fade={{ duration: 300 }}>
+    <div class="onboarding-modal">
+      <div class="onboarding-header">
+        <h2>How do you like to watch?</h2>
+        <p class="onboarding-subtitle">Set up your preferences to get started.</p>
+      </div>
+
+      <div class="onboarding-body">
+        <div class="settings-section">
+          <h3 id="ob-view-mode-label">Default View Mode</h3>
+          <p class="settings-description">Choose how videos open when you play them from the gallery.</p>
+          <div class="mode-picker" role="radiogroup" aria-labelledby="ob-view-mode-label">
+            <button class="mode-option" class:active={defaultPlayMode === "cinematic"} role="radio" aria-checked={defaultPlayMode === "cinematic"} onclick={() => (defaultPlayMode = "cinematic")}>
+              <Play size={18} />
+              <span class="mode-label">Cinematic</span>
+              <span class="mode-desc">Focused view with blurred background</span>
+            </button>
+            <button class="mode-option" class:active={defaultPlayMode === "fullscreen"} role="radio" aria-checked={defaultPlayMode === "fullscreen"} onclick={() => (defaultPlayMode = "fullscreen")}>
+              <Maximize2 size={18} />
+              <span class="mode-label">Fullscreen</span>
+              <span class="mode-desc">Video fills the entire window</span>
+            </button>
+            <button class="mode-option" class:active={defaultPlayMode === "pip"} role="radio" aria-checked={defaultPlayMode === "pip"} onclick={() => (defaultPlayMode = "pip")}>
+              <PictureInPicture2 size={18} />
+              <span class="mode-label">Picture-in-Picture</span>
+              <span class="mode-desc">Floating compact window</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3 id="ob-end-behavior-label">When Video Ends</h3>
+          <p class="settings-description">Choose what happens after a video finishes playing.</p>
+          <div class="mode-picker" role="radiogroup" aria-labelledby="ob-end-behavior-label">
+            <button class="mode-option" class:active={endBehavior === "nothing"} role="radio" aria-checked={endBehavior === "nothing"} onclick={() => (endBehavior = "nothing")}>
+              <Ban size={18} />
+              <span class="mode-label">Do Nothing</span>
+              <span class="mode-desc">Stop at the end of the video</span>
+            </button>
+            <button class="mode-option" class:active={endBehavior === "loop"} role="radio" aria-checked={endBehavior === "loop"} onclick={() => (endBehavior = "loop")}>
+              <Repeat size={18} />
+              <span class="mode-label">Loop</span>
+              <span class="mode-desc">Replay the same video</span>
+            </button>
+            <button class="mode-option" class:active={endBehavior === "next"} role="radio" aria-checked={endBehavior === "next"} onclick={() => (endBehavior = "next")}>
+              <SkipForward size={18} />
+              <span class="mode-label">Play Next</span>
+              <span class="mode-desc">Automatically play the next video from your gallery</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3 id="ob-fade-label">Play/Pause Fade</h3>
+          <p class="settings-description">Controls how smoothly volume transitions when you play or pause.</p>
+          <div class="mode-picker" role="radiogroup" aria-labelledby="ob-fade-label">
+            <button class="mode-option" class:active={fadeMode === "off"} role="radio" aria-checked={fadeMode === "off"} onclick={() => (fadeMode = "off")}>
+              <ZapOff size={18} />
+              <span class="mode-label">Off</span>
+              <span class="mode-desc">Instant volume change, no fade</span>
+            </button>
+            <button class="mode-option" class:active={fadeMode === "short"} role="radio" aria-checked={fadeMode === "short"} onclick={() => (fadeMode = "short")}>
+              <Gauge size={18} />
+              <span class="mode-label">Short</span>
+              <span class="mode-desc">Quick 300ms fade</span>
+            </button>
+            <button class="mode-option" class:active={fadeMode === "default"} role="radio" aria-checked={fadeMode === "default"} onclick={() => (fadeMode = "default")}>
+              <Waves size={18} />
+              <span class="mode-label">Default</span>
+              <span class="mode-desc">Smooth 800ms fade</span>
+            </button>
+            <button class="mode-option" class:active={fadeMode === "long"} role="radio" aria-checked={fadeMode === "long"} onclick={() => (fadeMode = "long")}>
+              <Wind size={18} />
+              <span class="mode-label">Long</span>
+              <span class="mode-desc">Slow 1.5s cinematic fade</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="onboarding-actions">
+        <button class="onboarding-cta" onclick={() => (showOnboarding = false)}>
+          Get Started
+        </button>
+        <button class="onboarding-skip" onclick={() => (showOnboarding = false)}>
+          Skip / Use Defaults
+        </button>
+      </div>
     </div>
   </div>
 {/if}
@@ -2254,5 +2436,134 @@
   .setup-warning a {
     color: #c065b6;
     text-decoration: underline;
+  }
+
+  /* Reset preferences */
+  .reset-prefs-row {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 1.25rem;
+    margin-top: 0.5rem;
+  }
+
+  .reset-prefs-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    background: none;
+    border: none;
+    color: var(--color-text-subtle);
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0.25rem 0;
+    transition: color 0.15s ease;
+  }
+
+  .reset-prefs-btn:hover {
+    color: #e05a5a;
+  }
+
+  .reset-prefs-btn--clear {
+    color: rgba(255, 255, 255, 0.2);
+  }
+
+  .reset-prefs-btn--clear:hover {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  /* First-Run Onboarding */
+  .onboarding-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2100;
+  }
+
+  .onboarding-modal {
+    background: rgba(20, 20, 20, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    width: 90%;
+    max-width: 640px;
+    max-height: 85vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+    animation: slideUp 0.3s ease;
+  }
+
+  .onboarding-header {
+    text-align: center;
+    padding: 2.5rem 2.5rem 1.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    flex-shrink: 0;
+  }
+
+  .onboarding-header h2 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #fff;
+    margin: 0 0 0.5rem;
+  }
+
+  .onboarding-subtitle {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+
+  .onboarding-body {
+    padding: 2rem 2.5rem;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .onboarding-actions {
+    padding: 1.5rem 2.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    flex-shrink: 0;
+  }
+
+  .onboarding-cta {
+    width: 100%;
+    padding: 0.875rem 2rem;
+    background: var(--color-accent);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+  }
+
+  .onboarding-cta:hover {
+    opacity: 0.85;
+  }
+
+  .onboarding-skip {
+    background: none;
+    border: none;
+    color: var(--color-text-subtle);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .onboarding-skip:hover {
+    color: var(--color-text-muted);
   }
 </style>
