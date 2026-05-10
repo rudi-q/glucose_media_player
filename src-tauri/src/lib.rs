@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use fs2::FileExt;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
@@ -1631,16 +1632,32 @@ fn write_watch_progress(
     Ok(())
 }
 
-#[tauri::command]
-fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> Result<(), String> {
-    let progress_file = watch_progress_path()?;
+// Opens (and creates if needed) a sibling lock file and acquires an exclusive
+// OS-level advisory lock on it. The returned File holds the lock; dropping it
+// releases the lock. This serializes access across processes.
+fn acquire_watch_progress_file_lock(progress_file: &std::path::Path) -> Result<fs::File, String> {
     let config_dir = progress_file.parent().ok_or("Invalid progress file path")?;
     fs::create_dir_all(config_dir)
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    let lock_path = progress_file.with_file_name("watch_progress.lock");
+    let lock_file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(&lock_path)
+        .map_err(|e| format!("Failed to open progress lock file: {}", e))?;
+    lock_file
+        .lock_exclusive()
+        .map_err(|e| format!("Failed to acquire progress file lock: {}", e))?;
+    Ok(lock_file)
+}
 
+#[tauri::command]
+fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> Result<(), String> {
+    let progress_file = watch_progress_path()?;
     let _guard = watch_progress_lock()
         .lock()
         .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock(&progress_file)?;
 
     let mut progress_map = read_watch_progress(&progress_file)?;
 
@@ -1669,6 +1686,7 @@ fn get_watch_progress(video_path: String) -> Result<Option<WatchProgress>, Strin
     let _guard = watch_progress_lock()
         .lock()
         .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock(&progress_file)?;
     let progress_map = read_watch_progress(&progress_file)?;
     Ok(progress_map.get(&video_path).cloned())
 }
@@ -1871,6 +1889,7 @@ fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchPro
     let _guard = watch_progress_lock()
         .lock()
         .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock(&progress_file)?;
     read_watch_progress(&progress_file)
 }
 
@@ -1880,6 +1899,7 @@ fn clear_watch_history_since(cutoff_timestamp: u64) -> Result<(), String> {
     let _guard = watch_progress_lock()
         .lock()
         .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock(&progress_file)?;
 
     let mut progress_map = read_watch_progress(&progress_file)?;
 
