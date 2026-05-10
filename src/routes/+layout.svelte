@@ -139,9 +139,13 @@
   }
 
   function clearPlayerPreferences() {
-    localStorage.removeItem('glucose_default_mode');
-    localStorage.removeItem('glucose_end_behavior');
-    localStorage.removeItem('glucose_fade');
+    resetPlayerPreferences();
+    // Remove keys after the state reset so the $effects don't re-write them before the next tick
+    setTimeout(() => {
+      localStorage.removeItem('glucose_default_mode');
+      localStorage.removeItem('glucose_end_behavior');
+      localStorage.removeItem('glucose_fade');
+    }, 0);
   }
 
   // Update manager
