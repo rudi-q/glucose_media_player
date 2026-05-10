@@ -1172,13 +1172,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "fs2"
-version = "0.4.3"
+name = "fs4"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+checksum = "7e72ed92b67c146290f88e9c89d60ca163ea417a446f61ffd7b72df3e7f1dfd5"
 dependencies = [
- "libc",
- "winapi",
+ "rustix",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1511,7 +1511,7 @@ version = "3.4.0"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
- "fs2",
+ "fs4",
  "futures-util",
  "reqwest",
  "serde",
