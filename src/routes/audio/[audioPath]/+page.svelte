@@ -678,10 +678,10 @@
         ondrop={(e) => e.preventDefault()}
 >
   <div class="window-controls" class:visible={showCloseBtn}>
-    <button class="window-btn" onclick={minimizeApp} title="Minimize">
+    <button class="window-btn" onclick={minimizeApp} title="Minimize" aria-label="Minimize">
       <Minus size={16} />
     </button>
-    <button class="window-btn window-btn-close" onclick={goBack} title="Back to library">
+    <button class="window-btn window-btn-close" onclick={goBack} title="Back to library" aria-label="Back to library">
       <X size={16} />
     </button>
   </div>

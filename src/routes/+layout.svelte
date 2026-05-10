@@ -1407,7 +1407,7 @@
         <button class="onboarding-cta" onclick={() => (showOnboarding = false)}>
           Get Started
         </button>
-        <button class="onboarding-skip" onclick={() => (showOnboarding = false)}>
+        <button class="onboarding-skip" onclick={() => { resetPlayerPreferences(); showOnboarding = false; }}>
           Skip / Use Defaults
         </button>
       </div>

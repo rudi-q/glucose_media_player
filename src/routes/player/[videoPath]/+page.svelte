@@ -1147,8 +1147,11 @@
           return;
         }
         if (videoElement?.paused || videoElement?.seeking) return;
-        nextVideoCountdown--;
-        if (nextVideoCountdown <= 0) {
+        const remaining = videoElement
+          ? Math.max(0, Math.ceil(videoElement.duration - videoElement.currentTime))
+          : 0;
+        nextVideoCountdown = remaining;
+        if (remaining <= 0) {
           clearCountdown();
           playNextVideo();
         }
