@@ -7,12 +7,16 @@
   import { watchProgressStore } from '$lib/stores/watchProgressStore';
   import { createFadedMediaPlayback } from '$lib/utils/fadedMediaPlayback';
   import { formatDuration } from '$lib/utils/time';
-  import { X, Play, Pause, Volume1, Volume2, VolumeX, Home } from 'lucide-svelte';
+  import { X, Minus, Play, Pause, Volume1, Volume2, VolumeX, Home } from 'lucide-svelte';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { setWindowTitle } from '$lib/utils/windowTitle';
 
   let { data } = $props();
   const audioPath: string = $derived(data.audioPath);
   const fileName = $derived(audioPath.split(/[\\/]/).pop() ?? audioPath);
   const displayName = $derived(fileName.replace(/\.[^.]+$/, ''));
+
+  $effect(() => { setWindowTitle(displayName); });
 
   // DOM refs
   let audioEl: HTMLAudioElement;
@@ -498,6 +502,10 @@
     goto('/');
   }
 
+  async function minimizeApp() {
+    await getCurrentWindow().minimize();
+  }
+
   // ── Controls visibility ─────────────────────────────────────────────────────
 
   function showControls() {
@@ -666,10 +674,14 @@
         ondragover={(e) => e.preventDefault()}
         ondrop={(e) => e.preventDefault()}
 >
-  <!-- Close button -->
-  <button class="close-btn" class:visible={showCloseBtn} tabindex={showCloseBtn ? 0 : -1} onclick={goBack} onfocus={() => { showCloseBtn = true; clearTimeout(hideCloseBtnTimer); hideCloseBtnTimer = setTimeout(() => { showCloseBtn = false; }, 1200); }} title="Back to library">
-    <X size={16} />
-  </button>
+  <div class="window-controls" class:visible={showCloseBtn}>
+    <button class="window-btn" onclick={minimizeApp} title="Minimize">
+      <Minus size={16} />
+    </button>
+    <button class="window-btn window-btn-close" onclick={goBack} title="Back to library">
+      <X size={16} />
+    </button>
+  </div>
 
   <!-- Visualizer fills the entire screen -->
   <div class="viz-area">
@@ -813,34 +825,6 @@
     cursor: default;
   }
 
-  .close-btn {
-    position: fixed;
-    top: 12px;
-    right: 12px;
-    z-index: 100;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 6px;
-    color: rgba(255, 255, 255, 0.6);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0;
-    transition: opacity 0.25s ease, color 0.15s ease, background 0.15s ease;
-    pointer-events: none;
-  }
-  .close-btn.visible {
-    opacity: 1;
-    pointer-events: auto;
-  }
-  .close-btn:hover {
-    background: rgba(255, 255, 255, 0.14);
-    color: #fff;
-  }
 
   .viz-area {
     position: absolute;

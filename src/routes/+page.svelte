@@ -1,10 +1,11 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown, Volume2, VolumeX, ListFilter, RotateCcw } from "lucide-svelte";
+  import { X, Minus, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown, Volume2, VolumeX, ListFilter, RotateCcw } from "lucide-svelte";
   import { getFormattedVersion } from "$lib/utils/version";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { isAudio } from "$lib/utils/mediaType";
@@ -15,6 +16,7 @@
   import { formatDuration } from "$lib/utils/time";
   import { getDefaultPlayMode } from "$lib/utils/playerPreferences";
   import { generateThumbnail, clearThumbnailCache } from "$lib/utils/thumbnail";
+  import { setWindowTitle, galleryPageTitle } from "$lib/utils/windowTitle";
   import Button from "$lib/components/Button.svelte";
   
   // Per-instance cache that persists across remounts within the same component
@@ -82,6 +84,10 @@
         })
       : filteredVideos
   );
+
+  $effect(() => {
+    setWindowTitle(galleryPageTitle(sortBy, filterBy));
+  });
 
   $effect(() => {
     localStorage.setItem('glucose_sort', sortBy);
@@ -499,6 +505,10 @@
     }
   }
   
+  async function minimizeApp() {
+    await getCurrentWindow().minimize();
+  }
+
   async function closeApp() {
     console.log('closeApp called');
     try {
@@ -621,15 +631,13 @@
   onmousemove={handleMainContainerMouseMove}
   oncontextmenu={handleGalleryContextMenu}
 >
-  <div class="close-button-wrapper" class:visible={showCloseButton}>
-    <Button
-      variant="secondary"
-      size="sm"
-      onclick={closeApp}
-      title="Close (Esc)"
-    >
+  <div class="window-controls" class:visible={showCloseButton}>
+    <button class="window-btn" onclick={minimizeApp} title="Minimize">
+      <Minus size={16} />
+    </button>
+    <button class="window-btn window-btn-close" onclick={closeApp} title="Close">
       <X size={16} />
-    </Button>
+    </button>
   </div>
   
 
@@ -1236,26 +1244,6 @@
     opacity: 0.5;
   }
 
-  .close-button-wrapper {
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
-    opacity: 0;
-    transition: opacity 0.2s ease;
-    z-index: 1000;
-  }
-
-  .close-button-wrapper.visible {
-    opacity: 1;
-  }
-
-  :global(.close-button-wrapper .btn) {
-    min-width: 32px !important;
-    width: 32px;
-    padding: 0 !important;
-  }
-
-  
   /* Context Menu */
   .context-menu {
     position: fixed;

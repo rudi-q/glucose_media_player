@@ -51,6 +51,7 @@
   } from "$lib/utils/time";
   import { getEndBehavior } from "$lib/utils/playerPreferences";
   import { generateThumbnail } from "$lib/utils/thumbnail";
+  import { setWindowTitle } from "$lib/utils/windowTitle";
 
   let { data } = $props();
 
@@ -207,6 +208,10 @@
     onPlayingChange: (playing) => {
       isPlaying = playing;
     },
+  });
+
+  $effect(() => {
+    setWindowTitle(currentVideoPath ? videoBaseName(currentVideoPath) : null);
   });
 
   $effect(() => {
