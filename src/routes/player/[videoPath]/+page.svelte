@@ -1170,6 +1170,7 @@
 
   async function playNextVideo() {
     if (!nextVideoPath) return;
+    await saveWatchProgress();
     showNextVideoOverlay = false;
     const path = nextVideoPath;
     nextVideoPath = null;
@@ -1621,10 +1622,10 @@
 >
   {#if viewMode !== "pip"}
     <div class="window-controls" class:visible={showCloseButton}>
-      <button class="window-btn" onclick={minimizeApp} title="Minimize">
+      <button class="window-btn" onclick={minimizeApp} title="Minimize" aria-label="Minimize">
         <Minus size={16} />
       </button>
-      <button class="window-btn window-btn-close" onclick={closeApp} title="Close">
+      <button class="window-btn window-btn-close" onclick={closeApp} title="Close" aria-label="Close">
         <X size={16} />
       </button>
     </div>
