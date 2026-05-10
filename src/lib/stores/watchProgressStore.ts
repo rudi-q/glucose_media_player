@@ -24,6 +24,12 @@ function createWatchProgressStore() {
 		const map = get({ subscribe });
 		return map.get(videoPath);
 	},
+		removeEntry: (videoPath: string) =>
+			update((map) => {
+				const newMap = new Map(map);
+				newMap.delete(videoPath);
+				return newMap;
+			}),
 		clear: () => set(new Map()),
 		clearSince: (cutoff: number) => update((map) => {
 			if (cutoff === 0) return new Map();

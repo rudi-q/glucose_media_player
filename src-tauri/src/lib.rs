@@ -1894,6 +1894,19 @@ fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchPro
 }
 
 #[tauri::command]
+fn delete_watch_progress(video_path: String) -> Result<(), String> {
+    let progress_file = watch_progress_path()?;
+    let _guard = watch_progress_lock()
+        .lock()
+        .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock(&progress_file)?;
+
+    let mut progress_map = read_watch_progress(&progress_file)?;
+    progress_map.remove(&video_path);
+    write_watch_progress(&progress_file, &progress_map)
+}
+
+#[tauri::command]
 fn clear_watch_history_since(cutoff_timestamp: u64) -> Result<(), String> {
     let progress_file = watch_progress_path()?;
     let _guard = watch_progress_lock()
@@ -2205,6 +2218,7 @@ pub fn run() {
             save_watch_progress,
             get_watch_progress,
             get_all_watch_progress,
+            delete_watch_progress,
             clear_watch_history_since,
             get_video_info,
             convert_video,

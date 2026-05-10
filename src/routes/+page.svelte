@@ -5,7 +5,7 @@
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { X, Minus, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown, Volume2, VolumeX, ListFilter, RotateCcw } from "lucide-svelte";
+  import { X, Minus, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown, Volume2, VolumeX, ListFilter, RotateCcw, Trash2 } from "lucide-svelte";
   import { getFormattedVersion } from "$lib/utils/version";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { isAudio } from "$lib/utils/mediaType";
@@ -239,7 +239,7 @@
     if (keyboardPreviewTimer !== null) { clearTimeout(keyboardPreviewTimer); keyboardPreviewTimer = null; }
     if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
     const progress = watchProgressMap.get(video.path);
-    if (!progress || !(progress.current_time > 0) || video.is_cloud_only || isAudio(video.path)) return;
+    if (video.is_cloud_only || isAudio(video.path)) return;
     // Only cancel the fade-out timer when we know we're activating a new eligible preview.
     if (previewFadeOutTimer !== null) { clearTimeout(previewFadeOutTimer); previewFadeOutTimer = null; }
     if (hoveredPath === video.path) {
@@ -503,6 +503,16 @@
     }
   }
   
+  async function removeFromWatchHistory(path: string) {
+    showCardContextMenu = false;
+    try {
+      await invoke("delete_watch_progress", { videoPath: path });
+      watchProgressStore.removeEntry(path);
+    } catch (err) {
+      console.error("Failed to remove from watch history:", err);
+    }
+  }
+
   async function minimizeApp() {
     await getCurrentWindow().minimize();
   }
@@ -828,6 +838,13 @@
         <button class="context-menu-item" onclick={() => { loadVideo(cardContextMenuVideo!.path, 'pip'); showCardContextMenu = false; }}>
           <PictureInPicture2 size={16} />
           <span>Open in PiP</span>
+        </button>
+      {/if}
+      {#if watchProgressMap.get(cardContextMenuVideo.path)}
+        <div class="context-menu-separator"></div>
+        <button class="context-menu-item context-menu-item--destructive" onclick={() => removeFromWatchHistory(cardContextMenuVideo!.path)}>
+          <Trash2 size={16} />
+          <span>Remove from Watch History</span>
         </button>
       {/if}
     </div>
@@ -1271,6 +1288,14 @@
 
   .context-menu-item:hover {
     background: var(--color-interactive-hover);
+  }
+
+  .context-menu-item--destructive {
+    color: #f87171;
+  }
+
+  .context-menu-item--destructive:hover {
+    background: rgba(248, 113, 113, 0.12);
   }
 
   .context-menu-separator {
