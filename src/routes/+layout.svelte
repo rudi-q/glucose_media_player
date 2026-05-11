@@ -14,8 +14,10 @@
       "--surface-panel":           theme.surface.panel,
       "--surface-badge":           theme.surface.badge,
       "--color-accent":            theme.color.accent,
+      "--color-accent-hover":      theme.color.accentHover,
       "--color-accent-subtle":     theme.color.accentSubtle,
       "--color-accent-border":     theme.color.accentBorder,
+      "--color-accent-border-hover": theme.color.accentBorderHover,
       "--color-border":            theme.color.border,
       "--color-border-strong":     theme.color.borderStrong,
       "--color-interactive":       theme.color.interactive,
@@ -133,13 +135,22 @@
   const _isFirstRun = _savedDefaultMode === null && _savedEndBehavior === null && _savedFadeMode === null;
   let showOnboarding = $state(_isFirstRun);
   let onboardingModalEl = $state<HTMLDivElement | undefined>(undefined);
+  let onboardingPathsRequestId = 0;
   $effect(() => {
     if (showOnboarding) {
       const prev = document.activeElement as HTMLElement | null;
+      const requestId = ++onboardingPathsRequestId;
       onboardingModalEl?.focus();
       // Seed library folder list from backend defaults / saved config
-      invoke<string[]>("get_gallery_paths").then((p) => { onboardingPaths = p; }).catch(() => {});
-      return () => { prev?.focus(); };
+      invoke<string[]>("get_gallery_paths").then((p) => {
+        if (showOnboarding && requestId === onboardingPathsRequestId && onboardingPaths.length === 0) {
+          onboardingPaths = p;
+        }
+      }).catch(() => {});
+      return () => {
+        onboardingPathsRequestId++;
+        prev?.focus();
+      };
     }
   });
 

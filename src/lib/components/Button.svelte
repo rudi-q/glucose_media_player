@@ -97,7 +97,7 @@
   }
 
   .primary:hover:not(:disabled) {
-    background: #a855a0;
+    background: var(--color-accent-hover);
     box-shadow: 0 4px 12px var(--color-accent-border);
   }
 
@@ -131,7 +131,7 @@
 
   .outline:hover:not(:disabled) {
     background: var(--color-accent-subtle);
-    border-color: rgba(166, 107, 255, 0.5);
+    border-color: var(--color-accent-border-hover);
   }
 
   .btn:active:not(:disabled) {

@@ -728,7 +728,7 @@
       <!-- Controls row -->
       <div class="controls-row">
         <div class="controls-left">
-          <button class="control-button" onclick={goBack} data-tooltip="Back to Gallery">
+          <button class="control-button" onclick={goBack} data-tooltip="Back to Gallery" aria-label="Back to Gallery">
             <Home size={20} />
           </button>
           <div class="time">
@@ -737,7 +737,7 @@
         </div>
 
         <div class="controls-center">
-          <button class="control-button" onclick={togglePlay} data-tooltip={isPlaying ? 'Pause (Space)' : 'Play (Space)'}>
+          <button class="control-button" onclick={togglePlay} data-tooltip={isPlaying ? 'Pause (Space)' : 'Play (Space)'} aria-label={isPlaying ? 'Pause (Space)' : 'Play (Space)'}>
             {#if isPlaying}
               <Pause size={24} fill="currentColor" />
             {:else}
@@ -748,7 +748,7 @@
 
         <div class="controls-right">
           <div class="volume-control">
-            <button class="control-button" onclick={() => { clearTimeout(volumeMenuAutoTimer); showVolumeMenu = !showVolumeMenu; }} data-tooltip="Volume (M)">
+            <button class="control-button" onclick={() => { clearTimeout(volumeMenuAutoTimer); showVolumeMenu = !showVolumeMenu; }} data-tooltip="Volume (M)" aria-label={isMuted || volume === 0 ? 'Unmute volume' : 'Volume'}>
               {#if isMuted || volume === 0}
                 <VolumeX size={20} />
               {:else if volume < 1}

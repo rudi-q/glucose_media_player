@@ -20,30 +20,36 @@ _A powerfully modern, thoughtfully designed media playback experience._
 ## ✨ Features
 
 ### 🤖 On-Device AI & Subtitles
+
 - **100% Private Transcription**: Generate highly accurate subtitles using Whisper running locally. No internet required.
 - **Universal Format Support**: Auto-loads `.srt`, `.vtt`, `.ass`, and directly extracts subtitles embedded in MKV and MP4 files.
 
 ### ⏭️ Intelligent Playback
+
 - **"Up Next" Overlay**: A Netflix-style countdown overlay that smoothly transitions you to the next episode.
 - **Picture-in-Picture Mode**: A compact, draggable window that snaps to corners for easy multitasking.
 
 ### 📂 Smart Gallery & Custom Libraries
+
 - **Intelligent Hover Previews**: Instantly preview video frames by hovering, seamlessly synced with your watch progress.
 - **Time-Based Grouping**: Videos are automatically organized into sections like "Today" and "Yesterday".
 - **Custom Libraries**: Configure exactly which folders Glucose should scan.
 
 ### 🔊 Pro Audio & Visuals
+
 - **Dynamic Audio Visualizer**: A beautifully crafted, real-time visualizer for your music files.
 - **Dual Audio Support**: Seamlessly switch between embedded audio tracks with real-time remuxing.
 - **200% Volume Booster**: Web Audio API-powered boost for quiet files.
 
 ### 📽️ Premium Cinematic Experience
+
 - **Cinematic Blur**: Enjoy your media with a beautifully blurred background for immersive viewing.
 - **Glassmorphic UI**: A stunning design system featuring elegant **Instrument Serif** typography.
 - **Fade-In & Fade-Out Transitions**: Smooth visual and playback volume transitions when pausing or playing.
 - **Intelligent Controls**: Auto-hiding controls that stay out of your way.
 
 ### ⚡ Blazingly Fast & Private
+
 - **Native Performance**: Built with Rust and Tauri for GPU-accelerated rendering and a tiny footprint.
 - **Zero Telemetry**: A staunch commitment to your privacy with cloud-only file detection, no ads, and no tracking.
 
@@ -53,7 +59,7 @@ _A powerfully modern, thoughtfully designed media playback experience._
 
 Download the latest release from the [Releases page](https://github.com/rudi-q/glucose_media_player/releases):
 
-- **Windows**: `glucose_3.4.0_x64_en-US.exe`
+- **Windows**: download the latest Windows installer
 
 ### Getting Started
 

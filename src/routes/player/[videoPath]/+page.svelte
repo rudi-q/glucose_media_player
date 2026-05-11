@@ -2207,7 +2207,18 @@
   <div aria-live="polite" class="sr-only">{showNextVideoOverlay && nextVideoPath ? 'Up Next: ' + nextVideoName : ''}</div>
 
   {#if showNextVideoOverlay && nextVideoPath}
-    <div class="next-video-overlay">
+    <div
+      class="next-video-overlay"
+      role="button"
+      tabindex="0"
+      onclick={playNextVideo}
+      onkeydown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          playNextVideo();
+        }
+      }}
+    >
       <div class="next-video-thumbnail-container">
         {#if nextVideoThumbnail}
           <img src={nextVideoThumbnail} alt="" class="next-video-thumbnail" />
