@@ -1147,6 +1147,12 @@
           clearCountdown();
           return;
         }
+        if (getEndBehavior(localStorage.getItem('glucose_end_behavior')) !== 'next') {
+          clearCountdown();
+          showNextVideoOverlay = false;
+          nextVideoPath = null;
+          return;
+        }
         if (videoElement?.paused || videoElement?.seeking) return;
         const remaining = videoElement
           ? Math.max(0, Math.ceil(videoElement.duration - videoElement.currentTime))
@@ -1154,11 +1160,7 @@
         nextVideoCountdown = remaining;
         if (remaining <= 0) {
           clearCountdown();
-          if (getEndBehavior(localStorage.getItem('glucose_end_behavior')) === 'next') {
-            playNextVideo();
-          } else {
-            nextVideoNotFound = true;
-          }
+          playNextVideo();
         }
       }, 1000);
     } catch (err) {
