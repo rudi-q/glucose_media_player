@@ -2193,8 +2193,10 @@
     </div>
   {/if}
 
+  <div aria-live="polite" class="sr-only">{showNextVideoOverlay && nextVideoPath ? 'Up Next: ' + nextVideoName : ''}</div>
+
   {#if showNextVideoOverlay && nextVideoPath}
-    <div class="next-video-overlay" role="status">
+    <div class="next-video-overlay">
       <div class="next-video-thumbnail-container">
         {#if nextVideoThumbnail}
           <img src={nextVideoThumbnail} alt="" class="next-video-thumbnail" />
@@ -2212,10 +2214,10 @@
       <div class="next-video-info">
         <div class="next-video-header">
           <div class="next-video-label">Up Next</div>
-          <div class="next-video-countdown-text">in {nextVideoCountdown}s</div>
+          <div class="next-video-countdown-text" aria-hidden="true">in {nextVideoCountdown}s</div>
         </div>
         <div class="next-video-name" title={nextVideoName}>{nextVideoName}</div>
-        <div class="next-video-progress-track">
+        <div class="next-video-progress-track" aria-hidden="true">
           <div
             class="next-video-progress-fill"
             style="width: {(nextVideoCountdown / nextVideoCountdownTotal) * 100}%; transition: width 1s linear;"
@@ -2235,6 +2237,18 @@
 </main>
 
 <style>
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
   .player-container.video-player {
     user-select: none;
     background: var(--surface-overlay);

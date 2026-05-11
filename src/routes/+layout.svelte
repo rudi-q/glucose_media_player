@@ -132,7 +132,13 @@
   const _isFirstRun = _savedDefaultMode === null && _savedEndBehavior === null && _savedFadeMode === null;
   let showOnboarding = $state(_isFirstRun);
   let onboardingModalEl = $state<HTMLDivElement | undefined>(undefined);
-  $effect(() => { if (showOnboarding) onboardingModalEl?.focus(); });
+  $effect(() => {
+    if (showOnboarding) {
+      const prev = document.activeElement as HTMLElement | null;
+      onboardingModalEl?.focus();
+      return () => { prev?.focus(); };
+    }
+  });
 
   function resetPlayerPreferences() {
     defaultPlayMode = getDefaultPlayMode(null);
@@ -361,7 +367,7 @@
   </div>
 {/if}
 
-{@render children()}
+<div style="display: contents" inert={showOnboarding}>{@render children()}</div>
 
 <svelte:window onkeydown={(e) => {
   if (e.key === 'Escape') {
