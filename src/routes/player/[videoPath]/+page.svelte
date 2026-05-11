@@ -1093,6 +1093,7 @@
       ]);
 
       if (disposed || currentVideoPath !== requestedForPath) return;
+      if (getEndBehavior(localStorage.getItem('glucose_end_behavior')) !== 'next') { nextVideoNotFound = true; return; }
 
       const filterPref = localStorage.getItem('glucose_filter') ?? 'all';
       if (filterPref === 'audio') { nextVideoNotFound = true; return; }
@@ -1153,7 +1154,11 @@
         nextVideoCountdown = remaining;
         if (remaining <= 0) {
           clearCountdown();
-          playNextVideo();
+          if (getEndBehavior(localStorage.getItem('glucose_end_behavior')) === 'next') {
+            playNextVideo();
+          } else {
+            nextVideoNotFound = true;
+          }
         }
       }, 1000);
     } catch (err) {

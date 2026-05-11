@@ -110,7 +110,7 @@
   );
 
   $effect(() => {
-    localStorage.setItem("glucose_default_mode", defaultPlayMode);
+    if (!showOnboarding) localStorage.setItem("glucose_default_mode", defaultPlayMode);
   });
 
   const _savedEndBehavior = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_end_behavior") : null;
@@ -119,14 +119,14 @@
   );
 
   $effect(() => {
-    localStorage.setItem("glucose_end_behavior", endBehavior);
+    if (!showOnboarding) localStorage.setItem("glucose_end_behavior", endBehavior);
   });
 
   const _savedFadeMode = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_fade") : null;
   let fadeMode = $state<FadeMode>(getFadeMode(_savedFadeMode));
 
   $effect(() => {
-    localStorage.setItem("glucose_fade", fadeMode);
+    if (!showOnboarding) localStorage.setItem("glucose_fade", fadeMode);
   });
 
   const _isFirstRun = _savedDefaultMode === null && _savedEndBehavior === null && _savedFadeMode === null;
