@@ -678,10 +678,10 @@
         ondrop={(e) => e.preventDefault()}
 >
   <div class="window-controls" class:visible={showCloseBtn}>
-    <button class="window-btn" onclick={minimizeApp} title="Minimize" aria-label="Minimize">
+    <button class="window-btn" onclick={minimizeApp} data-tooltip="Minimize" aria-label="Minimize">
       <Minus size={16} />
     </button>
-    <button class="window-btn window-btn-close" onclick={goBack} title="Back to library" aria-label="Back to library">
+    <button class="window-btn window-btn-close" onclick={goBack} data-tooltip="Back to Gallery" aria-label="Back to library">
       <X size={16} />
     </button>
   </div>
@@ -728,7 +728,7 @@
       <!-- Controls row -->
       <div class="controls-row">
         <div class="controls-left">
-          <button class="control-button" onclick={goBack} title="Back to library">
+          <button class="control-button" onclick={goBack} data-tooltip="Back to Gallery">
             <Home size={20} />
           </button>
           <div class="time">
@@ -737,7 +737,7 @@
         </div>
 
         <div class="controls-center">
-          <button class="control-button" onclick={togglePlay} title="Play/Pause (Space)">
+          <button class="control-button" onclick={togglePlay} data-tooltip={isPlaying ? 'Pause (Space)' : 'Play (Space)'}>
             {#if isPlaying}
               <Pause size={24} fill="currentColor" />
             {:else}
@@ -748,7 +748,7 @@
 
         <div class="controls-right">
           <div class="volume-control">
-            <button class="control-button" onclick={() => { clearTimeout(volumeMenuAutoTimer); showVolumeMenu = !showVolumeMenu; }} title="Volume">
+            <button class="control-button" onclick={() => { clearTimeout(volumeMenuAutoTimer); showVolumeMenu = !showVolumeMenu; }} data-tooltip="Volume (M)">
               {#if isMuted || volume === 0}
                 <VolumeX size={20} />
               {:else if volume < 1}
@@ -823,7 +823,7 @@
     display: flex;
     flex-direction: column;
     background: #05070a;
-    font-family: system-ui, sans-serif;
+    font-family: 'Inter Variable', 'Inter', system-ui, sans-serif;
     color: rgba(255, 255, 255, 0.9);
     cursor: default;
   }
@@ -982,6 +982,33 @@
     justify-content: center;
     transition: opacity 0.15s ease, transform 0.15s ease;
     opacity: 0.8;
+    position: relative;
+  }
+
+  .control-button[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%) translateY(4px);
+    background: rgba(14, 14, 18, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.6);
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 200;
+    letter-spacing: 0.01em;
+  }
+
+  .control-button[data-tooltip]:hover::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
   }
 
   .control-button:hover {

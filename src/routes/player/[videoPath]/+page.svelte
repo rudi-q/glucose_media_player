@@ -2820,8 +2820,7 @@
     background-color: rgba(0, 0, 0, 0.8) !important;
     color: #ffffff !important;
     font-size: 1.5em !important;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
-      sans-serif !important;
+    font-family: 'Inter Variable', 'Inter', system-ui, sans-serif !important;
     text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9) !important;
     line-height: 1.4 !important;
     padding: 0.2em 0.5em !important;
