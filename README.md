@@ -59,14 +59,14 @@ _A powerfully modern, thoughtfully designed media playback experience._
 
 Download the latest release from the [Releases page](https://github.com/rudi-q/glucose_media_player/releases):
 
-- **Windows**: download the latest Windows installer
+- **Windows**: Download the latest Windows installer
 
 ### Getting Started
 
 Glucose offers several convenient ways to open your media:
-1. **Drag & Drop** — Drag a video or audio file directly into the glucose window
+1. **Drag & Drop** — Drag a video or audio file directly into the Glucose Media Player window
 2. **Smart Gallery** — Browse and play recently accessed files or custom library folders from the home screen
-3. **File Association** — Set glucose as your default media player and open files directly from File Explorer
+3. **File Association** — Set Glucose Media Player as your default media player and open files directly from File Explorer
 
 ---
 
@@ -83,7 +83,7 @@ Glucose offers several convenient ways to open your media:
 | `P` | Toggle Picture-in-Picture mode |
 | `0` – `9` | Jump to 0%–90% of the file |
 | `Backspace` | Return to gallery |
-| `Escape` | Exit current view mode |
+| `Escape` | Exit fullscreen, close modal, or exit Picture-in-Picture |
 
 ---
 

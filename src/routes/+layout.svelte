@@ -172,6 +172,16 @@
     onboardingPaths = onboardingPaths.filter(p => p !== path);
   }
 
+  async function completeOnboarding() {
+    if (onboardingPaths.length === 0) return;
+    try {
+      await invoke("save_gallery_paths", { paths: onboardingPaths });
+      showOnboarding = false;
+    } catch (err) {
+      console.error("Failed to save gallery paths:", err);
+    }
+  }
+
   function resetPlayerPreferences() {
     defaultPlayMode = getDefaultPlayMode(null);
     endBehavior = getEndBehavior(null);
@@ -403,7 +413,7 @@
 
 <svelte:window onkeydown={(e) => {
   if (e.key === 'Escape') {
-    if (showOnboarding) { showOnboarding = false; }
+    if (showOnboarding) { void completeOnboarding(); }
     else if (showSettings) { e.stopPropagation(); showSettings = false; }
   }
 }} />
@@ -1472,15 +1482,7 @@
       </div>
 
       <div class="onboarding-actions">
-        <button class="onboarding-cta" onclick={async () => {
-          if (onboardingPaths.length === 0) return;
-          try {
-            await invoke("save_gallery_paths", { paths: onboardingPaths });
-            showOnboarding = false;
-          } catch (err) {
-            console.error("Failed to save gallery paths:", err);
-          }
-        }}>
+        <button class="onboarding-cta" onclick={completeOnboarding}>
           Get Started
         </button>
         <button class="onboarding-skip" onclick={() => { resetPlayerPreferences(); showOnboarding = false; }}>
