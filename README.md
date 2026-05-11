@@ -1,7 +1,7 @@
 <div align="center">
   <a href="https://glucose.media"><img src="static/logo-dark.svg" alt="Glucose Media Player" width="400"></a>
 
-_A Sleek & Lightweight VLC Alternative with On-Device AI Subtitles_
+_A powerfully modern, thoughtfully designed media playback experience._
 
 
 [![License: EUPL](https://img.shields.io/badge/License-EUPL%201.2-1a1a1a?style=for-the-badge&logo=opensourceinitiative&logoColor=white&labelColor=0a0a0a)](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12)
@@ -19,154 +19,73 @@ _A Sleek & Lightweight VLC Alternative with On-Device AI Subtitles_
 
 ## ✨ Features
 
-### 🎬 Cinematic Mode
-Enjoy your media with a beautifully blurred background and centered content for truly immersive viewing.
+### 🤖 On-Device AI & Subtitles
+- **100% Private Transcription**: Generate highly accurate subtitles using Whisper running locally. No internet required.
+- **Universal Format Support**: Auto-loads `.srt`, `.vtt`, `.ass`, and directly extracts subtitles embedded in MKV and MP4 files.
 
-### 🖥️ Picture-in-Picture Mode
-Pop the player into a compact, always-on-top window that snaps to the bottom-right corner of your screen — perfect for multitasking.
+### ⏭️ Intelligent Playback
+- **"Up Next" Overlay**: A Netflix-style countdown overlay that smoothly transitions you to the next episode.
+- **Picture-in-Picture Mode**: A compact, draggable window that snaps to corners for easy multitasking.
 
-### 🖼️ Universal Media Support
-- **Videos**: MP4, MKV, AVI, MOV, WebM, WMV, FLV, M4V, MPG, MPEG, OGV
-- **Audio**: MP3, FLAC, WAV, AAC, OGG, Opus, M4A, AIFF, WMA
-- **Subtitles**: SRT, VTT, ASS, SSA, SUB
+### 📂 Smart Gallery & Custom Libraries
+- **Intelligent Hover Previews**: Instantly preview video frames by hovering, seamlessly synced with your watch progress.
+- **Time-Based Grouping**: Videos are automatically organized into sections like "Today" and "Yesterday".
+- **Custom Libraries**: Configure exactly which folders Glucose should scan.
 
-### 🎵 Audio Player with Visualizer
-A dedicated audio mode with a real-time frequency visualizer powered by the Web Audio API — full playback controls, volume management, and progress saving included.
+### 🔊 Pro Audio & Visuals
+- **Dynamic Audio Visualizer**: A beautifully crafted, real-time visualizer for your music files.
+- **Dual Audio Support**: Seamlessly switch between embedded audio tracks with real-time remuxing.
+- **200% Volume Booster**: Web Audio API-powered boost for quiet files.
 
-### 🤖 On-Device AI Subtitles
-Generate subtitles for any video without an internet connection using [Whisper](https://github.com/ggerganov/whisper.cpp) running entirely on your machine. Three model sizes are available to balance speed and accuracy:
+### 📽️ Premium Cinematic Experience
+- **Cinematic Blur**: Enjoy your media with a beautifully blurred background for immersive viewing.
+- **Glassmorphic UI**: A stunning design system featuring elegant **Instrument Serif** typography.
+- **Fade-In & Fade-Out Transitions**: Smooth visual and playback volume transitions when pausing or playing.
+- **Intelligent Controls**: Auto-hiding controls that stay out of your way.
 
-| Model | Size | Best for |
-|-------|------|----------|
-| Tiny | ~75 MB | Fast results, shorter clips |
-| Small | ~466 MB | Good accuracy, most videos |
-| Large v3 Turbo (q5_0) | ~574 MB | Best accuracy, longer content |
-
-Models are downloaded once and stored locally. No data ever leaves your device.
-
-### 📝 Subtitle Support
-- Automatically loads external subtitle files (`.srt`, `.vtt`, `.ass`, `.ssa`, `.sub`) from the same folder as the video
-- Detects and extracts subtitle tracks embedded directly in MKV and MP4 files
-- Manually load any subtitle file from anywhere on disk
-- Toggle subtitles on/off during playback
-
-### 📂 Smart Gallery
-Automatically scans and displays your recent media in a beautiful grid layout, with per-file watch progress indicators so you can pick up where you left off.
-
-### ⏱️ Watch Progress & Resume
-Playback position is saved automatically for both video and audio files. Reopen any file and resume from exactly where you stopped.
-
-### 🎯 Minimal by Design
-No clutter, no distractions. Just your content and elegant controls that appear when you need them.
-
-### ⚡ Blazingly Fast
-Built with Rust and Tauri for native performance with a tiny footprint.
-
-### 🎮 Keyboard-First
-Complete keyboard navigation for power users who value efficiency.
-
-### 🎨 Modern Interface
-- Frameless, transparent window design
-- Smooth animations and transitions
-- Audio output device selection
-- Volume control with visual feedback
-- Timeline scrubbing with video preview thumbnails
-- Fullscreen, cinematic, and picture-in-picture viewing modes
+### ⚡ Blazingly Fast & Private
+- **Native Performance**: Built with Rust and Tauri for GPU-accelerated rendering and a tiny footprint.
+- **Zero Telemetry**: A staunch commitment to your privacy with cloud-only file detection, no ads, and no tracking.
 
 ---
 
 ## 📥 Installation
 
-### Pre-built Binaries
-
 Download the latest release from the [Releases page](https://github.com/rudi-q/glucose_media_player/releases):
 
-- **Windows**: `glucose_3.1.0_x64_en-US.msi` or `.exe`
+- **Windows**: `glucose_3.4.0_x64_en-US.exe`
 
-### Build from Source
+### Getting Started
 
-#### Prerequisites
-
-- [Node.js](https://nodejs.org/) (v18 or later)
-- [pnpm](https://pnpm.io/) (recommended) or npm
-- [Rust](https://www.rust-lang.org/tools/install) (latest stable)
-- [Microsoft Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-
-#### Building
-
-```bash
-# Clone the repository
-git clone https://github.com/rudi-q/glucose_media_player.git
-cd glucose
-
-# Install dependencies
-pnpm install
-
-# Run in development mode
-pnpm tauri:dev
-
-# Build for production
-pnpm tauri:build
-```
-
-The built application will be available in `src-tauri/target/release/bundle/`.
+Glucose offers several convenient ways to open your media:
+1. **Drag & Drop** — Drag a video or audio file directly into the glucose window
+2. **Smart Gallery** — Browse and play recently accessed files or custom library folders from the home screen
+3. **File Association** — Set glucose as your default media player and open files directly from File Explorer
 
 ---
 
-## 🚀 Usage
+## ⌨️ Keyboard Shortcuts
 
-### Opening Media Files
-
-glucose offers several convenient ways to open your media:
-
-1. **Drag & Drop** — Drag a video or audio file into the glucose window
-2. **File Dialog** — Click the "Open" button in the gallery screen
-3. **File Association** — Set glucose as your default media player and open files directly from File Explorer
-4. **Recent Gallery** — Browse and play recently accessed files from the home screen
-
-### Keyboard Shortcuts
-
-#### Playback Controls
 | Key | Action |
 |-----|--------|
-| `Space` or `K` | Play/Pause |
-| `←` | Skip backward 5 seconds |
-| `→` | Skip forward 5 seconds |
-| `↑` | Increase volume |
-| `↓` | Decrease volume |
+| `Space` / `K` | Play/Pause |
+| `←` / `→` | Skip backward/forward 5 seconds |
+| `↑` / `↓` | Increase/Decrease volume |
 | `M` | Mute/Unmute |
-| `C` or `S` | Toggle subtitles on/off (video) |
-| `F` | Cycle view modes (cinematic → fullscreen → PiP) |
+| `C` / `S` | Toggle subtitles on/off (video) |
+| `F` | Toggle Fullscreen |
 | `P` | Toggle Picture-in-Picture mode |
 | `0` – `9` | Jump to 0%–90% of the file |
-
-#### Navigation
-| Key | Action |
-|-----|--------|
 | `Backspace` | Return to gallery |
-| `Escape` | Close application |
-| `Arrow Keys` | Navigate gallery (home screen) |
-| `Enter` | Open selected file from gallery |
+| `Escape` | Exit current view mode |
 
 ---
 
-### Available Scripts
+## 🛠️ Contributing
 
-```bash
-# Development
-pnpm dev              # Start Vite dev server
-pnpm tauri:dev        # Start Tauri in dev mode with hot reload
+Interested in contributing to the project or building from source? Please check our [CONTRIBUTING.md](CONTRIBUTING.md) guide for prerequisites, development setup, and coding standards.
 
-# Code Quality
-pnpm check            # Type-check Svelte/TypeScript code
-pnpm check:watch      # Type-check in watch mode
-pnpm tauri:check      # Check Rust code (cargo check)
-
-# Building
-pnpm build            # Build frontend only
-pnpm tauri:build      # Build complete application
-pnpm preview          # Preview production build locally
-```
+---
 
 ## 📄 License
 
@@ -186,26 +105,9 @@ Refer to our terms of use at [glucose.media/terms](https://glucose.media/terms) 
 
 ---
 
-## 🙏 Acknowledgments
-
-- Built with [Tauri](https://tauri.app/) and [Svelte](https://svelte.dev/)
-- AI subtitles powered by [whisper-rs](https://github.com/tazz4843/whisper-rs) and [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
-- Inspired by minimalist design principles
-- Thanks to all contributors and users
-
----
-
-## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/rudi-q/glucose_media_player/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/rudi-q/glucose_media_player/discussions)
-
----
-
 <div align="center">
-  <p>Made by the maker of <a href="https://github.com/rudi-q/leed_pdf_viewer">LeedPDF</a></p>
+  <p>Maintained by <a href="https://doubl.one">DoublOne Studios</a></p>
   <p>
-    <a href="https://github.com/rudi-q/glucose_media_player">GitHub</a> •
     <a href="https://github.com/rudi-q/glucose_media_player/issues">Report Bug</a> •
     <a href="https://github.com/rudi-q/glucose_media_player/discussions">Request Feature</a>
   </p>
