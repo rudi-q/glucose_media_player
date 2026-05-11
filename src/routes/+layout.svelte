@@ -131,6 +131,8 @@
 
   const _isFirstRun = _savedDefaultMode === null && _savedEndBehavior === null && _savedFadeMode === null;
   let showOnboarding = $state(_isFirstRun);
+  let onboardingModalEl = $state<HTMLDivElement | undefined>(undefined);
+  $effect(() => { if (showOnboarding) onboardingModalEl?.focus(); });
 
   function resetPlayerPreferences() {
     defaultPlayMode = getDefaultPlayMode(null);
@@ -361,7 +363,12 @@
 
 {@render children()}
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && showSettings) { e.stopPropagation(); showSettings = false; } }} />
+<svelte:window onkeydown={(e) => {
+  if (e.key === 'Escape') {
+    if (showOnboarding) { showOnboarding = false; }
+    else if (showSettings) { e.stopPropagation(); showSettings = false; }
+  }
+}} />
 
 <!-- Settings Overlay -->
 {#if showSettings}
@@ -1324,10 +1331,10 @@
 <!-- First-Run Onboarding -->
 {#if appReady && showOnboarding}
   <div class="onboarding-overlay" transition:fade={{ duration: 300 }}>
-    <div class="onboarding-modal">
+    <div class="onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="ob-dialog-title" aria-describedby="ob-dialog-desc" tabindex="-1" bind:this={onboardingModalEl}>
       <div class="onboarding-header">
-        <h2>How do you like to watch?</h2>
-        <p class="onboarding-subtitle">Set up your preferences to get started.</p>
+        <h2 id="ob-dialog-title">How do you like to watch?</h2>
+        <p id="ob-dialog-desc" class="onboarding-subtitle">Set up your preferences to get started.</p>
       </div>
 
       <div class="onboarding-body">

@@ -1093,7 +1093,7 @@
       ]);
 
       if (disposed || currentVideoPath !== requestedForPath) return;
-      if (getEndBehavior(localStorage.getItem('glucose_end_behavior')) !== 'next') { nextVideoNotFound = true; return; }
+      if (getEndBehavior(localStorage.getItem('glucose_end_behavior')) !== 'next') return;
 
       const filterPref = localStorage.getItem('glucose_filter') ?? 'all';
       if (filterPref === 'audio') { nextVideoNotFound = true; return; }
