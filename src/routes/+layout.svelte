@@ -66,6 +66,7 @@
     Waves,
     Wind,
     RotateCcw,
+    Plus,
   } from "lucide-svelte";
   import Button from "$lib/components/Button.svelte";
   import LibrarySettings from "$lib/components/LibrarySettings.svelte";
@@ -136,9 +137,29 @@
     if (showOnboarding) {
       const prev = document.activeElement as HTMLElement | null;
       onboardingModalEl?.focus();
+      // Seed library folder list from backend defaults / saved config
+      invoke<string[]>("get_gallery_paths").then((p) => { onboardingPaths = p; }).catch(() => {});
       return () => { prev?.focus(); };
     }
   });
+
+  let onboardingPaths = $state<string[]>([]);
+
+  function _obNormPath(p: string): string {
+    return p.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '');
+  }
+
+  async function obAddFolder() {
+    const folder = await invoke<string | null>("open_folder_dialog");
+    if (!folder) return;
+    if (onboardingPaths.some(p => _obNormPath(p) === _obNormPath(folder))) return;
+    onboardingPaths = [...onboardingPaths, folder];
+  }
+
+  function obRemoveFolder(path: string) {
+    if (onboardingPaths.length <= 1) return;
+    onboardingPaths = onboardingPaths.filter(p => p !== path);
+  }
 
   function resetPlayerPreferences() {
     defaultPlayMode = getDefaultPlayMode(null);
@@ -1414,10 +1435,38 @@
             </button>
           </div>
         </div>
+
+        <div class="settings-section">
+          <h3 id="ob-library-label">Media Library</h3>
+          <p class="settings-description">These folders are scanned for your videos and audio files, including subfolders.</p>
+          <div class="ob-path-list" role="list" aria-labelledby="ob-library-label">
+            {#each onboardingPaths as path (path)}
+              <div class="ob-path-row" role="listitem">
+                <FolderOpen size={15} />
+                <span class="ob-path-text" title={path}>{path}</span>
+                <button
+                  class="ob-path-remove"
+                  onclick={() => obRemoveFolder(path)}
+                  disabled={onboardingPaths.length <= 1}
+                  title={onboardingPaths.length <= 1 ? "At least one folder is required" : "Remove folder"}
+                  aria-label="Remove {path}"
+                >✕</button>
+              </div>
+            {/each}
+          </div>
+          <button class="ob-add-folder" onclick={obAddFolder}>
+            <Plus size={14} /> Add Folder
+          </button>
+        </div>
       </div>
 
       <div class="onboarding-actions">
-        <button class="onboarding-cta" onclick={() => (showOnboarding = false)}>
+        <button class="onboarding-cta" onclick={async () => {
+          if (onboardingPaths.length > 0) {
+            await invoke("save_gallery_paths", { paths: onboardingPaths }).catch(console.error);
+          }
+          showOnboarding = false;
+        }}>
           Get Started
         </button>
         <button class="onboarding-skip" onclick={() => { resetPlayerPreferences(); showOnboarding = false; }}>
@@ -2582,5 +2631,80 @@
 
   .onboarding-skip:hover {
     color: var(--color-text-muted);
+  }
+
+  .ob-path-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    margin-bottom: 0.875rem;
+  }
+
+  .ob-path-row {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 8px;
+  }
+
+  :global(.ob-path-row svg) {
+    color: rgba(255, 255, 255, 0.35);
+    flex-shrink: 0;
+  }
+
+  .ob-path-text {
+    flex: 1;
+    font-size: 0.75rem;
+    font-family: monospace;
+    color: rgba(255, 255, 255, 0.65);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .ob-path-remove {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0.125rem 0.25rem;
+    border-radius: 4px;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: color 0.15s ease;
+  }
+
+  .ob-path-remove:hover:not(:disabled) {
+    color: rgba(255, 100, 100, 0.8);
+  }
+
+  .ob-path-remove:disabled {
+    opacity: 0.25;
+    cursor: default;
+  }
+
+  .ob-add-folder {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.8125rem;
+    padding: 0.4rem 0.875rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .ob-add-folder:hover {
+    background: rgba(255, 255, 255, 0.09);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.85);
   }
 </style>
