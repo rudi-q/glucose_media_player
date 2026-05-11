@@ -1815,7 +1815,7 @@
 
       <div class="controls-row">
         <div class="controls-left">
-          <button class="control-button" onclick={goHome} data-tooltip="Back to Gallery">
+          <button class="control-button" onclick={goHome} data-tooltip="Back to Gallery" aria-label="Back to Gallery">
             <Home size={20} />
           </button>
           <div class="time">
@@ -1824,7 +1824,7 @@
         </div>
 
         <div class="controls-center">
-          <button class="control-button" onclick={togglePlay} data-tooltip={isPlaying ? "Pause (Space)" : "Play (Space)"}>
+          <button class="control-button" onclick={togglePlay} data-tooltip={isPlaying ? "Pause (Space)" : "Play (Space)"} aria-label={isPlaying ? "Pause (Space)" : "Play (Space)"}>
             {#if isPlaying}
               <Pause size={24} fill="currentColor" />
             {:else}
@@ -1839,6 +1839,7 @@
               class="control-button"
               onclick={toggleVolumeMenu}
               data-tooltip="Volume (M)"
+              aria-label="Volume (M)"
             >
               {#if isMuted || volume === 0}
                 <VolumeX size={20} />
@@ -1872,6 +1873,7 @@
                   class="mute-toggle"
                   onclick={toggleMute}
                   class:muted={isMuted}
+                  aria-label={isMuted ? "Unmute" : "Mute"}
                 >
                   {#if isMuted}
                     <VolumeX size={16} />
@@ -1911,6 +1913,7 @@
               class:subtitle-active={subtitleSrc && subtitlesEnabled}
               class:generating={isGeneratingSubtitles}
               data-tooltip="Subtitles (C)"
+              aria-label="Subtitles (C)"
               onclick={() => (showSubtitleMenu = !showSubtitleMenu)}
               disabled={isGeneratingSubtitles}
             >
@@ -2019,6 +2022,7 @@
             class="control-button"
             onclick={toggleViewMode}
             data-tooltip="View Mode (F)"
+            aria-label="View Mode (F)"
           >
             <Maximize size={20} />
           </button>

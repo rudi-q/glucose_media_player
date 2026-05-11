@@ -169,11 +169,11 @@
 
   function clearPlayerPreferences() {
     resetPlayerPreferences();
-    // Remove keys after the state reset so the $effects don't re-write them before the next tick
+    // Persist explicit defaults so the next launch does not look like first-run onboarding.
     setTimeout(() => {
-      localStorage.removeItem('glucose_default_mode');
-      localStorage.removeItem('glucose_end_behavior');
-      localStorage.removeItem('glucose_fade');
+      localStorage.setItem('glucose_default_mode', getDefaultPlayMode(null));
+      localStorage.setItem('glucose_end_behavior', getEndBehavior(null));
+      localStorage.setItem('glucose_fade', getFadeMode(null));
     }, 0);
   }
 
@@ -1462,10 +1462,13 @@
 
       <div class="onboarding-actions">
         <button class="onboarding-cta" onclick={async () => {
-          if (onboardingPaths.length > 0) {
-            await invoke("save_gallery_paths", { paths: onboardingPaths }).catch(console.error);
+          if (onboardingPaths.length === 0) return;
+          try {
+            await invoke("save_gallery_paths", { paths: onboardingPaths });
+            showOnboarding = false;
+          } catch (err) {
+            console.error("Failed to save gallery paths:", err);
           }
-          showOnboarding = false;
         }}>
           Get Started
         </button>
