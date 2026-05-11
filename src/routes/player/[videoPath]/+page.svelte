@@ -20,6 +20,7 @@
     Maximize,
     Minimize2,
     Loader2,
+    AlertTriangle,
   } from "lucide-svelte";
   import {
     appSettings,
@@ -371,7 +372,13 @@
       const info = await invoke<VideoInfo>("get_video_info", { videoPath });
       if (isVideoSetupStale(setupId)) return;
       currentVideoInfo = info;
-      showHevcWarning = info.videoCodec === "hevc";
+      if (info.videoCodec === "hevc") {
+        // readyState >= 2 (HAVE_CURRENT_DATA) means the browser has already
+        // decoded at least one frame — codec is working, no warning needed.
+        showHevcWarning = !videoElement || videoElement.readyState < 2;
+      } else {
+        showHevcWarning = false;
+      }
     } catch (err) {
       console.log("Video codec detection failed:", err);
     }
@@ -1635,10 +1642,10 @@
 >
   {#if viewMode !== "pip"}
     <div class="window-controls" class:visible={showCloseButton}>
-      <button class="window-btn" onclick={minimizeApp} title="Minimize" aria-label="Minimize">
+      <button class="window-btn" onclick={minimizeApp} data-tooltip="Minimize" aria-label="Minimize">
         <Minus size={16} />
       </button>
-      <button class="window-btn window-btn-close" onclick={closeApp} title="Close" aria-label="Close">
+      <button class="window-btn window-btn-close" onclick={closeApp} data-tooltip="Close" aria-label="Close">
         <X size={16} />
       </button>
     </div>
@@ -1701,7 +1708,7 @@
   <!-- HEVC codec warning banner -->
   {#if showHevcWarning}
     <div class="hevc-warning-banner">
-      <span class="hevc-warning-icon">⚠</span>
+      <AlertTriangle size={15} class="hevc-warning-icon" />
       <span class="hevc-warning-text">
         H.265 video may not play without the HEVC codec.
         {#if isWindows}
@@ -1808,7 +1815,7 @@
 
       <div class="controls-row">
         <div class="controls-left">
-          <button class="control-button" onclick={goHome} title="Home">
+          <button class="control-button" onclick={goHome} data-tooltip="Back to Gallery">
             <Home size={20} />
           </button>
           <div class="time">
@@ -1817,7 +1824,7 @@
         </div>
 
         <div class="controls-center">
-          <button class="control-button" onclick={togglePlay}>
+          <button class="control-button" onclick={togglePlay} data-tooltip={isPlaying ? "Pause (Space)" : "Play (Space)"}>
             {#if isPlaying}
               <Pause size={24} fill="currentColor" />
             {:else}
@@ -1831,9 +1838,9 @@
             <button
               class="control-button"
               onclick={toggleVolumeMenu}
-              title="Volume"
+              data-tooltip="Volume (M)"
             >
-              {#if isMuted}
+              {#if isMuted || volume === 0}
                 <VolumeX size={20} />
               {:else if volume < 1}
                 <Volume1 size={20} />
@@ -1903,7 +1910,7 @@
               class="control-button"
               class:subtitle-active={subtitleSrc && subtitlesEnabled}
               class:generating={isGeneratingSubtitles}
-              title="Subtitles"
+              data-tooltip="Subtitles (C)"
               onclick={() => (showSubtitleMenu = !showSubtitleMenu)}
               disabled={isGeneratingSubtitles}
             >
@@ -2011,7 +2018,7 @@
           <button
             class="control-button"
             onclick={toggleViewMode}
-            title="Toggle view mode (F)"
+            data-tooltip="View Mode (F)"
           >
             <Maximize size={20} />
           </button>
@@ -2597,6 +2604,33 @@
     justify-content: center;
     transition: opacity 0.15s ease;
     opacity: 0.9;
+    position: relative;
+  }
+
+  .control-button[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%) translateY(4px);
+    background: rgba(14, 14, 18, 0.96);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 200;
+    letter-spacing: 0.01em;
+  }
+
+  .control-button[data-tooltip]:hover::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
   }
 
   .control-button:hover {
@@ -3096,14 +3130,15 @@
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    background: rgba(20, 20, 20, 0.92);
-    border: 1px solid rgba(251, 191, 36, 0.4);
+    background: rgba(18, 18, 22, 0.95);
+    border: 1px solid var(--color-border);
+    border-left: 2px solid var(--color-accent);
     border-radius: 10px;
     padding: 0.6rem 1rem;
     z-index: 900;
     max-width: 520px;
     width: max-content;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.7);
     animation: slideDown 0.25s ease;
   }
 
@@ -3112,15 +3147,15 @@
     to   { transform: translateX(-50%) translateY(0);   opacity: 1; }
   }
 
-  .hevc-warning-icon {
-    color: rgb(251, 191, 36);
-    font-size: 1rem;
+  :global(.hevc-warning-icon) {
+    color: var(--color-accent);
+    opacity: 0.8;
     flex-shrink: 0;
   }
 
   .hevc-warning-text {
     font-size: 0.8rem;
-    color: rgba(255, 255, 255, 0.85);
+    color: var(--color-text-muted);
     display: flex;
     align-items: center;
     gap: 0.4rem;
@@ -3130,32 +3165,34 @@
   .hevc-warning-link {
     background: none;
     border: none;
-    color: rgb(251, 191, 36);
+    color: var(--color-accent);
     font-size: 0.8rem;
     cursor: pointer;
     padding: 0;
     text-decoration: underline;
     text-underline-offset: 2px;
+    opacity: 0.85;
   }
 
   .hevc-warning-link:hover {
-    color: rgb(253, 211, 77);
+    opacity: 1;
   }
 
   .hevc-warning-dismiss {
     background: none;
     border: none;
-    color: rgba(255, 255, 255, 0.4);
+    color: var(--color-text-subtle);
     cursor: pointer;
     padding: 0;
     display: flex;
     align-items: center;
     flex-shrink: 0;
     margin-left: 0.2rem;
+    transition: color 0.15s ease;
   }
 
   .hevc-warning-dismiss:hover {
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--color-text-muted);
   }
 
   /* Next video countdown overlay - Netflix Style Card */

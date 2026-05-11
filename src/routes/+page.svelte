@@ -641,10 +641,10 @@
           <span class="version-tag" class:logo-animate={logoReady}>{getFormattedVersion()}</span>
         </div>
         <div class="header-buttons">
-          <button class="sort-toggle" onclick={toggleSortMenu} title="Sort" class:sort-active={sortBy === 'watched'}>
+          <button class="sort-toggle" onclick={toggleSortMenu} data-tooltip="Sort" class:sort-active={sortBy === 'watched'}>
             <ArrowUpDown size={15} />
           </button>
-          <button class="sort-toggle filter-toggle" onclick={toggleFilterMenu} title="Filter" class:sort-active={filterBy !== 'all'}>
+          <button class="sort-toggle filter-toggle" onclick={toggleFilterMenu} data-tooltip="Filter" class:sort-active={filterBy !== 'all'}>
             <ListFilter size={15} />
           </button>
           <Button variant="white" onclick={openFileDialog}>
@@ -653,10 +653,10 @@
           <Button variant="secondary" onclick={() => showSettings()}>
             Settings
           </Button>
-          <button class="window-btn header-window-btn" onclick={minimizeApp} title="Minimize">
+          <button class="window-btn header-window-btn" onclick={minimizeApp} data-tooltip="Minimize">
             <Minus size={15} />
           </button>
-          <button class="window-btn window-btn-close header-window-btn" onclick={closeApp} title="Close">
+          <button class="window-btn window-btn-close header-window-btn" onclick={closeApp} data-tooltip="Close">
             <X size={15} />
           </button>
         </div>
@@ -1317,6 +1317,33 @@
     cursor: pointer;
     transition: all 0.2s ease;
     flex-shrink: 0;
+    position: relative;
+  }
+
+  .sort-toggle[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%) translateY(-4px);
+    background: rgba(14, 14, 18, 0.96);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 200;
+    letter-spacing: 0.01em;
+  }
+
+  .sort-toggle[data-tooltip]:hover::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
   }
 
   .sort-toggle:hover {

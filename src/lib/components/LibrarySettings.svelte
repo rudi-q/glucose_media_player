@@ -192,21 +192,23 @@
   .privacy-notice {
     display: flex;
     align-items: flex-start;
-    gap: 0.5rem;
+    gap: 0.625rem;
     padding: 0.625rem 0.875rem;
-    background: rgba(74, 222, 128, 0.06);
-    border: 1px solid rgba(74, 222, 128, 0.15);
-    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--color-border);
+    border-left: 2px solid var(--color-accent);
+    border-radius: 6px;
     margin-bottom: 1.25rem;
     font-size: 0.75rem;
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--color-text-muted);
     line-height: 1.5;
   }
 
   :global(.privacy-icon) {
-    color: rgba(74, 222, 128, 0.6);
+    color: var(--color-accent);
     flex-shrink: 0;
     margin-top: 1px;
+    opacity: 0.75;
   }
 
   .actions {
