@@ -2646,7 +2646,7 @@
   }
 
   .control-button.generating {
-    color: #c065b6;
+    color: var(--color-accent);
     opacity: 1;
     animation: pulse 1.5s ease-in-out infinite;
   }
@@ -3035,16 +3035,16 @@
 
   .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, #c065b6, #8c77ff);
+    background: linear-gradient(90deg, var(--color-accent), #8c77ff);
     border-radius: 4px;
     transition: width 0.3s ease;
-    box-shadow: 0 0 10px rgba(192, 101, 182, 0.5);
+    box-shadow: 0 0 10px rgba(166, 107, 255, 0.5);
   }
 
   .progress-percentage {
     font-size: 1.25rem;
     font-weight: 600;
-    color: #c065b6;
+    color: var(--color-accent);
     font-variant-numeric: tabular-nums;
   }
 
@@ -3314,7 +3314,7 @@
     font-weight: 700;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: #c065b6; /* Accented label */
+    color: var(--color-accent); /* Accented label */
   }
 
   .next-video-countdown-text {
@@ -3348,9 +3348,9 @@
 
   .next-video-progress-fill {
     height: 100%;
-    background: var(--color-accent, #c065b6);
+    background: var(--color-accent);
     border-radius: 2px;
-    box-shadow: 0 0 8px rgba(192, 101, 182, 0.6);
+    box-shadow: 0 0 8px rgba(166, 107, 255, 0.6);
   }
 
   .next-video-actions {

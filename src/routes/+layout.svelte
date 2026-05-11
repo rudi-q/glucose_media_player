@@ -1621,9 +1621,9 @@
   }
 
   .sidebar-tab.active {
-    background: rgba(192, 101, 182, 0.15);
-    color: #c065b6;
-    border-color: rgba(192, 101, 182, 0.3);
+    background: var(--color-accent-subtle);
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   }
 
@@ -1633,7 +1633,7 @@
     padding: 1.5rem 2.5rem 2.5rem;
     background: radial-gradient(
       circle at top right,
-      rgba(192, 101, 182, 0.03),
+      var(--color-accent-subtle),
       transparent 40%
     );
   }
@@ -1778,16 +1778,16 @@
   .about-logo {
     width: 112px;
     height: auto;
-    filter: drop-shadow(0 0 20px rgba(192, 101, 182, 0.3));
+    filter: drop-shadow(0 0 20px var(--color-accent-border));
     margin-top: 1rem;
   }
 
   .about-version-pill {
     font-size: 0.75rem;
     font-weight: 700;
-    color: #c065b6;
-    background: rgba(192, 101, 182, 0.1);
-    border: 1px solid rgba(192, 101, 182, 0.2);
+    color: var(--color-accent);
+    background: var(--color-accent-subtle);
+    border: 1px solid var(--color-accent-border);
     padding: 0.25rem 0.75rem;
     border-radius: 20px;
     letter-spacing: 0.02em;
@@ -1852,7 +1852,7 @@
   .credit-sub {
     display: block;
     font-size: 0.8125rem;
-    color: #c065b6;
+    color: var(--color-accent);
     font-weight: 500;
   }
 
@@ -1897,7 +1897,7 @@
   }
 
   .about-link-item:hover {
-    color: #c065b6;
+    color: var(--color-accent);
   }
 
   /* Inline AI Settings Styles */
@@ -1920,8 +1920,8 @@
   }
 
   .requirement-card.ready {
-    border-color: rgba(192, 101, 182, 0.2);
-    background: rgba(192, 101, 182, 0.05);
+    border-color: var(--color-accent-border);
+    background: var(--color-accent-subtle);
   }
 
   .requirement-info {
@@ -2006,7 +2006,7 @@
   .shortcut-category-title {
     font-size: 0.7rem;
     font-weight: 500;
-    color: #c065b6;
+    color: var(--color-accent);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     margin-bottom: 1rem;
@@ -2065,7 +2065,7 @@
   }
 
   .requirement-card.ready .requirement-status {
-    color: #c065b6;
+    color: var(--color-accent);
   }
 
   .models-collapsible-card {
@@ -2084,7 +2084,7 @@
 
   .models-collapsible-card.expanded {
     background: rgba(255, 255, 255, 0.03);
-    border-color: rgba(192, 101, 182, 0.2);
+    border-color: var(--color-accent-border);
   }
 
   .collapsible-header {
@@ -2123,11 +2123,11 @@
   .active-model-pill {
     font-size: 0.6875rem;
     font-weight: 700;
-    color: #c065b6;
-    background: rgba(192, 101, 182, 0.1);
+    color: var(--color-accent);
+    background: var(--color-accent-subtle);
     padding: 0.25rem 0.625rem;
     border-radius: 6px;
-    border: 1px solid rgba(192, 101, 182, 0.2);
+    border: 1px solid var(--color-accent-border);
     text-transform: uppercase;
     letter-spacing: 0.02em;
   }
@@ -2141,11 +2141,11 @@
   .downloading-badge-mini {
     font-size: 0.75rem;
     font-weight: 600;
-    color: #c065b6;
+    color: var(--color-accent);
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    background: rgba(192, 101, 182, 0.1);
+    background: var(--color-accent-subtle);
     padding: 0.25rem 0.625rem;
     border-radius: 20px;
   }
@@ -2183,9 +2183,9 @@
   }
 
   .model-mgmt-card.active {
-    background: rgba(192, 101, 182, 0.08);
-    border-color: rgba(192, 101, 182, 0.4);
-    box-shadow: inset 0 0 20px rgba(192, 101, 182, 0.05);
+    background: var(--color-accent-subtle);
+    border-color: var(--color-accent-border);
+    box-shadow: inset 0 0 20px var(--color-accent-subtle);
   }
 
   .model-mgmt-info {
@@ -2211,7 +2211,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #c065b6;
+    color: var(--color-accent);
     flex-shrink: 0;
   }
 
@@ -2263,7 +2263,7 @@
 
   .inline-progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, #c065b6, #8c77ff);
+    background: linear-gradient(90deg, var(--color-accent), #8c77ff);
     border-radius: 10px;
     transition: width 0.3s ease;
   }
@@ -2350,8 +2350,8 @@
   }
 
   .checkbox.checked {
-    background: #c065b6;
-    border-color: #c065b6;
+    background: var(--color-accent);
+    border-color: var(--color-accent);
   }
 
   .setup-item-info {
@@ -2405,8 +2405,8 @@
   }
 
   .model-radio:has(input[type="radio"]:checked) {
-    background: rgba(192, 101, 182, 0.12);
-    border-color: rgba(192, 101, 182, 0.4);
+    background: var(--color-accent-subtle);
+    border-color: var(--color-accent-border);
   }
 
   .model-radio input[type="radio"] {
@@ -2419,7 +2419,7 @@
   }
 
   .model-radio input[type="radio"]:checked + .radio-content .radio-title {
-    color: #c065b6;
+    color: var(--color-accent);
   }
 
   .radio-content {
@@ -2445,11 +2445,11 @@
   .installed-badge {
     font-size: 0.75rem;
     font-weight: 600;
-    color: #c065b6;
-    background: rgba(192, 101, 182, 0.15);
+    color: var(--color-accent);
+    background: var(--color-accent-subtle);
     padding: 0.125rem 0.5rem;
     border-radius: 4px;
-    border: 1px solid rgba(192, 101, 182, 0.3);
+    border: 1px solid var(--color-accent-border);
   }
 
   .radio-desc {
@@ -2472,10 +2472,10 @@
 
   .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, #c065b6, #8c77ff);
+    background: linear-gradient(90deg, var(--color-accent), #8c77ff);
     border-radius: 4px;
     transition: width 0.3s ease;
-    box-shadow: 0 0 10px rgba(192, 101, 182, 0.5);
+    box-shadow: 0 0 10px rgba(166, 107, 255, 0.5);
   }
 
   .download-status {
@@ -2503,7 +2503,7 @@
   }
 
   .setup-warning a {
-    color: #c065b6;
+    color: var(--color-accent);
     text-decoration: underline;
   }
 

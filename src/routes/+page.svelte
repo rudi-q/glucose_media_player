@@ -1398,7 +1398,7 @@
   }
 
   .sort-option.active {
-    color: #c065b6;
-    background: rgba(192, 101, 182, 0.1);
+    color: var(--color-accent);
+    background: var(--color-accent-subtle);
   }
 </style>

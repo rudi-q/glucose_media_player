@@ -92,13 +92,13 @@
 
   /* Variants */
   .primary {
-    background: #C065B6;
+    background: var(--color-accent);
     color: #fff;
   }
 
   .primary:hover:not(:disabled) {
     background: #a855a0;
-    box-shadow: 0 4px 12px rgba(192, 101, 182, 0.3);
+    box-shadow: 0 4px 12px var(--color-accent-border);
   }
 
   .secondary {
@@ -124,14 +124,14 @@
   }
 
   .outline {
-    background: rgba(192, 101, 182, 0.08);
-    color: #C065B6;
-    border-color: rgba(192, 101, 182, 0.3);
+    background: var(--color-accent-subtle);
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
   }
 
   .outline:hover:not(:disabled) {
-    background: rgba(192, 101, 182, 0.15);
-    border-color: rgba(192, 101, 182, 0.5);
+    background: var(--color-accent-subtle);
+    border-color: rgba(166, 107, 255, 0.5);
   }
 
   .btn:active:not(:disabled) {
