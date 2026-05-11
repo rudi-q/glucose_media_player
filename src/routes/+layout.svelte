@@ -190,12 +190,6 @@
 
   function clearPlayerPreferences() {
     resetPlayerPreferences();
-    // Persist explicit defaults so the next launch does not look like first-run onboarding.
-    setTimeout(() => {
-      localStorage.setItem('glucose_default_mode', getDefaultPlayMode(null));
-      localStorage.setItem('glucose_end_behavior', getEndBehavior(null));
-      localStorage.setItem('glucose_fade', getFadeMode(null));
-    }, 0);
   }
 
   // Update manager

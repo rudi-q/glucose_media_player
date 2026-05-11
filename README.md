@@ -79,11 +79,11 @@ Glucose offers several convenient ways to open your media:
 | `↑` / `↓` | Increase/Decrease volume |
 | `M` | Mute/Unmute |
 | `C` / `S` | Toggle subtitles on/off (video) |
-| `F` | Toggle Fullscreen |
+| `F` | Toggle View Mode |
 | `P` | Toggle Picture-in-Picture mode |
 | `0` – `9` | Jump to 0%–90% of the file |
 | `Backspace` | Return to gallery |
-| `Escape` | Exit fullscreen, close modal, or exit Picture-in-Picture |
+| `Escape` | Exit Current Mode / Back to Gallery |
 
 ---
 
