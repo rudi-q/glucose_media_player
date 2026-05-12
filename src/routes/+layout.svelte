@@ -32,7 +32,7 @@
   }
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { onMount, setContext } from "svelte";
+  import { onMount, setContext, tick } from "svelte";
   import { fade } from "svelte/transition";
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
@@ -222,7 +222,9 @@
           onboardingPaths = p;
           if (p.length > 0) onboardingError = null;
         }
-      }).catch(() => {});
+      }).catch((err) => {
+        console.error("get_gallery_paths failed", { err, requestId, onboardingPathsRequestId });
+      });
       return () => {
         onboardingPathsRequestId++;
       };
@@ -341,7 +343,7 @@
     fadeMode = getFadeMode(null);
   }
 
-  function clearPlayerPreferences() {
+  async function clearPlayerPreferences() {
     skipPlayerPreferencePersist = true;
     resetPlayerPreferences();
     if (typeof localStorage !== "undefined") {
@@ -349,9 +351,8 @@
       localStorage.setItem("glucose_end_behavior", endBehavior);
       localStorage.setItem("glucose_fade", fadeMode);
     }
-    queueMicrotask(() => {
-      skipPlayerPreferencePersist = false;
-    });
+    await tick();
+    skipPlayerPreferencePersist = false;
   }
 
   // Update manager
