@@ -1477,7 +1477,7 @@
                   onclick={() => obRemoveFolder(path)}
                   disabled={onboardingPaths.length <= 1}
                   title={onboardingPaths.length <= 1 ? "At least one folder is required" : "Remove folder"}
-                  aria-label="Remove {path}"
+                  aria-label={`Remove ${path}`}
                 >✕</button>
               </div>
             {/each}
