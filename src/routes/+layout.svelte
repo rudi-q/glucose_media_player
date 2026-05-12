@@ -18,6 +18,7 @@
       "--color-accent-subtle":     theme.color.accentSubtle,
       "--color-accent-border":     theme.color.accentBorder,
       "--color-accent-border-hover": theme.color.accentBorderHover,
+      "--color-accent-gradient-end": "#8c77ff",
       "--color-border":            theme.color.border,
       "--color-border-strong":     theme.color.borderStrong,
       "--color-interactive":       theme.color.interactive,
@@ -112,12 +113,6 @@
   let selectedTab = $state("ai"); // 'ai' | 'library' | 'player' | 'shortcuts' | 'updates' | 'community' | 'about'
   let modelsExpanded = $state(false);
   let skipPlayerPreferencePersist = false;
-
-  const PLAYER_PREFERENCE_KEYS = [
-    "glucose_default_mode",
-    "glucose_end_behavior",
-    "glucose_fade",
-  ] as const;
 
   const defaultPlayModeOptions: PlayerPreferenceOption<DefaultPlayMode>[] = [
     {
@@ -2258,7 +2253,7 @@
 
   .inline-progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--color-accent), #8c77ff);
+    background: linear-gradient(90deg, var(--color-accent), var(--color-accent-gradient-end));
     border-radius: 10px;
     transition: width 0.3s ease;
   }
@@ -2467,10 +2462,10 @@
 
   .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--color-accent), #8c77ff);
+    background: linear-gradient(90deg, var(--color-accent), var(--color-accent-gradient-end));
     border-radius: 4px;
     transition: width 0.3s ease;
-    box-shadow: 0 0 10px rgba(166, 107, 255, 0.5);
+    box-shadow: 0 0 10px var(--color-accent-border-hover);
   }
 
   .download-status {
