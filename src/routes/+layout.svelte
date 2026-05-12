@@ -73,6 +73,9 @@
   import Button from "$lib/components/Button.svelte";
   import LibrarySettings from "$lib/components/LibrarySettings.svelte";
   import FFmpegSettings from "$lib/components/FFmpegSettings.svelte";
+  import PlayerPreferencesPicker, {
+    type PlayerPreferenceOption,
+  } from "$lib/components/PlayerPreferencesPicker.svelte";
   import UpdateManager, {
     type UpdateManagerAPI,
   } from "$lib/components/UpdateManager.svelte";
@@ -83,6 +86,8 @@
     getDefaultPlayMode,
     getEndBehavior,
     getFadeMode,
+    type DefaultPlayMode,
+    type EndBehavior,
     type FadeMode,
   } from "$lib/utils/playerPreferences";
   import {
@@ -106,55 +111,192 @@
   let isCheckingForUpdates = $state(false);
   let selectedTab = $state("ai"); // 'ai' | 'library' | 'player' | 'shortcuts' | 'updates' | 'community' | 'about'
   let modelsExpanded = $state(false);
+  let skipPlayerPreferencePersist = false;
+
+  const PLAYER_PREFERENCE_KEYS = [
+    "glucose_default_mode",
+    "glucose_end_behavior",
+    "glucose_fade",
+  ] as const;
+
+  const defaultPlayModeOptions: PlayerPreferenceOption<DefaultPlayMode>[] = [
+    {
+      value: "cinematic",
+      icon: Play,
+      label: "Cinematic",
+      description: "Focused view with blurred background",
+    },
+    {
+      value: "fullscreen",
+      icon: Maximize2,
+      label: "Fullscreen",
+      description: "Video fills the entire window",
+    },
+    {
+      value: "pip",
+      icon: PictureInPicture2,
+      label: "Picture-in-Picture",
+      description: "Floating compact window",
+    },
+  ];
+
+  const endBehaviorOptions: PlayerPreferenceOption<EndBehavior>[] = [
+    {
+      value: "nothing",
+      icon: Ban,
+      label: "Do Nothing",
+      description: "Stop at the end of the video",
+    },
+    {
+      value: "loop",
+      icon: Repeat,
+      label: "Loop",
+      description: "Replay the same video",
+    },
+    {
+      value: "next",
+      icon: SkipForward,
+      label: "Play Next",
+      description: "Automatically play the next video from your gallery",
+    },
+  ];
+
+  const fadeModeOptions: PlayerPreferenceOption<FadeMode>[] = [
+    {
+      value: "off",
+      icon: ZapOff,
+      label: "Off",
+      description: "Instant volume change, no fade",
+    },
+    {
+      value: "short",
+      icon: Gauge,
+      label: "Short",
+      description: "Quick 300ms fade",
+    },
+    {
+      value: "default",
+      icon: Waves,
+      label: "Default",
+      description: "Smooth 800ms fade",
+    },
+    {
+      value: "long",
+      icon: Wind,
+      label: "Long",
+      description: "Slow 1.5s cinematic fade",
+    },
+  ];
 
   const _savedDefaultMode = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_default_mode") : null;
-  let defaultPlayMode = $state<"cinematic" | "fullscreen" | "pip">(
+  let defaultPlayMode = $state<DefaultPlayMode>(
     getDefaultPlayMode(_savedDefaultMode)
   );
 
   $effect(() => {
-    if (!showOnboarding) localStorage.setItem("glucose_default_mode", defaultPlayMode);
+    if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_default_mode", defaultPlayMode);
   });
 
   const _savedEndBehavior = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_end_behavior") : null;
-  let endBehavior = $state<"nothing" | "loop" | "next">(
+  let endBehavior = $state<EndBehavior>(
     getEndBehavior(_savedEndBehavior)
   );
 
   $effect(() => {
-    if (!showOnboarding) localStorage.setItem("glucose_end_behavior", endBehavior);
+    if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_end_behavior", endBehavior);
   });
 
   const _savedFadeMode = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_fade") : null;
   let fadeMode = $state<FadeMode>(getFadeMode(_savedFadeMode));
 
   $effect(() => {
-    if (!showOnboarding) localStorage.setItem("glucose_fade", fadeMode);
+    if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_fade", fadeMode);
   });
 
   const _isFirstRun = _savedDefaultMode === null && _savedEndBehavior === null && _savedFadeMode === null;
   let showOnboarding = $state(_isFirstRun);
   let onboardingModalEl = $state<HTMLDivElement | undefined>(undefined);
+  let onboardingError = $state<string | null>(null);
   let onboardingPathsRequestId = 0;
   $effect(() => {
     if (showOnboarding) {
-      const prev = document.activeElement as HTMLElement | null;
       const requestId = ++onboardingPathsRequestId;
-      onboardingModalEl?.focus();
       // Seed library folder list from backend defaults / saved config
       invoke<string[]>("get_gallery_paths").then((p) => {
         if (showOnboarding && requestId === onboardingPathsRequestId && onboardingPaths.length === 0) {
           onboardingPaths = p;
+          if (p.length > 0) onboardingError = null;
         }
       }).catch(() => {});
       return () => {
         onboardingPathsRequestId++;
-        prev?.focus();
       };
     }
   });
 
   let onboardingPaths = $state<string[]>([]);
+
+  function trapFocus(node: HTMLElement) {
+    const previous = document.activeElement as HTMLElement | null;
+    const focusableSelector = [
+      "a[href]",
+      "button:not([disabled])",
+      "input:not([disabled])",
+      "select:not([disabled])",
+      "textarea:not([disabled])",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+
+    function getFocusable() {
+      return Array.from(node.querySelectorAll<HTMLElement>(focusableSelector))
+        .filter((el) => !el.hasAttribute("disabled") && el.offsetParent !== null);
+    }
+
+    function focusModal() {
+      node.focus();
+    }
+
+    function handleKeydown(event: KeyboardEvent) {
+      if (event.key !== "Tab") return;
+
+      const focusable = getFocusable();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        focusModal();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (event.shiftKey && (active === first || active === node)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    function handleFocusIn(event: FocusEvent) {
+      if (event.target instanceof Node && !node.contains(event.target)) {
+        focusModal();
+      }
+    }
+
+    node.addEventListener("keydown", handleKeydown);
+    document.addEventListener("focusin", handleFocusIn);
+    queueMicrotask(focusModal);
+
+    return {
+      destroy() {
+        node.removeEventListener("keydown", handleKeydown);
+        document.removeEventListener("focusin", handleFocusIn);
+        previous?.focus();
+      },
+    };
+  }
 
   function _obNormPath(p: string): string {
     return p.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '');
@@ -165,6 +307,7 @@
     if (!folder) return;
     if (onboardingPaths.some(p => _obNormPath(p) === _obNormPath(folder))) return;
     onboardingPaths = [...onboardingPaths, folder];
+    onboardingError = null;
   }
 
   function obRemoveFolder(path: string) {
@@ -172,13 +315,21 @@
     onboardingPaths = onboardingPaths.filter(p => p !== path);
   }
 
-  async function completeOnboarding() {
-    if (onboardingPaths.length === 0) return;
+  async function completeOnboarding(): Promise<boolean> {
+    if (onboardingPaths.length === 0) {
+      onboardingError = "Add at least one folder to continue";
+      onboardingModalEl?.focus();
+      return false;
+    }
     try {
       await invoke("save_gallery_paths", { paths: onboardingPaths });
+      onboardingError = null;
       showOnboarding = false;
+      return true;
     } catch (err) {
       console.error("Failed to save gallery paths:", err);
+      onboardingError = "Failed to save folders. Try again.";
+      return false;
     }
   }
 
@@ -189,7 +340,14 @@
   }
 
   function clearPlayerPreferences() {
+    if (typeof localStorage !== "undefined") {
+      for (const key of PLAYER_PREFERENCE_KEYS) localStorage.removeItem(key);
+    }
+    skipPlayerPreferencePersist = true;
     resetPlayerPreferences();
+    queueMicrotask(() => {
+      skipPlayerPreferencePersist = false;
+    });
   }
 
   // Update manager
@@ -407,7 +565,7 @@
 
 <svelte:window onkeydown={(e) => {
   if (e.key === 'Escape') {
-    if (showOnboarding) { void completeOnboarding(); }
+    if (showOnboarding) { e.stopPropagation(); void completeOnboarding(); }
     else if (showSettings) { e.stopPropagation(); showSettings = false; }
   }
 }} />
@@ -889,134 +1047,27 @@
           {:else if selectedTab === "library"}
             <LibrarySettings />
           {:else if selectedTab === "player"}
-            <div class="settings-section">
-              <h3 id="default-view-mode-label">Default View Mode</h3>
-              <p class="settings-description">Choose how videos open when you play them from the gallery.</p>
-              <div class="mode-picker" role="radiogroup" aria-labelledby="default-view-mode-label">
-                <button
-                  class="mode-option"
-                  class:active={defaultPlayMode === "cinematic"}
-                  role="radio"
-                  aria-checked={defaultPlayMode === "cinematic"}
-                  onclick={() => (defaultPlayMode = "cinematic")}
-                >
-                  <Play size={18} />
-                  <span class="mode-label">Cinematic</span>
-                  <span class="mode-desc">Focused view with blurred background</span>
-                </button>
-                <button
-                  class="mode-option"
-                  class:active={defaultPlayMode === "fullscreen"}
-                  role="radio"
-                  aria-checked={defaultPlayMode === "fullscreen"}
-                  onclick={() => (defaultPlayMode = "fullscreen")}
-                >
-                  <Maximize2 size={18} />
-                  <span class="mode-label">Fullscreen</span>
-                  <span class="mode-desc">Video fills the entire window</span>
-                </button>
-                <button
-                  class="mode-option"
-                  class:active={defaultPlayMode === "pip"}
-                  role="radio"
-                  aria-checked={defaultPlayMode === "pip"}
-                  onclick={() => (defaultPlayMode = "pip")}
-                >
-                  <PictureInPicture2 size={18} />
-                  <span class="mode-label">Picture-in-Picture</span>
-                  <span class="mode-desc">Floating compact window</span>
-                </button>
-              </div>
-            </div>
-            <div class="settings-section">
-              <h3 id="when-video-ends-label">When Video Ends</h3>
-              <p class="settings-description">Choose what happens after a video finishes playing.</p>
-              <div class="mode-picker" role="radiogroup" aria-labelledby="when-video-ends-label">
-                <button
-                  class="mode-option"
-                  class:active={endBehavior === "nothing"}
-                  role="radio"
-                  aria-checked={endBehavior === "nothing"}
-                  onclick={() => (endBehavior = "nothing")}
-                >
-                  <Ban size={18} />
-                  <span class="mode-label">Do Nothing</span>
-                  <span class="mode-desc">Stop at the end of the video</span>
-                </button>
-                <button
-                  class="mode-option"
-                  class:active={endBehavior === "loop"}
-                  role="radio"
-                  aria-checked={endBehavior === "loop"}
-                  onclick={() => (endBehavior = "loop")}
-                >
-                  <Repeat size={18} />
-                  <span class="mode-label">Loop</span>
-                  <span class="mode-desc">Replay the same video</span>
-                </button>
-                <button
-                  class="mode-option"
-                  class:active={endBehavior === "next"}
-                  role="radio"
-                  aria-checked={endBehavior === "next"}
-                  onclick={() => (endBehavior = "next")}
-                >
-                  <SkipForward size={18} />
-                  <span class="mode-label">Play Next</span>
-                  <span class="mode-desc">Automatically play the next video from your gallery</span>
-                </button>
-              </div>
-            </div>
-            <div class="settings-section">
-              <h3 id="playback-fade-label">Play/Pause Fade</h3>
-              <p class="settings-description">Controls how smoothly volume transitions when you play or pause.</p>
-              <div class="mode-picker" role="radiogroup" aria-labelledby="playback-fade-label">
-                <button
-                  class="mode-option"
-                  class:active={fadeMode === "off"}
-                  role="radio"
-                  aria-checked={fadeMode === "off"}
-                  onclick={() => (fadeMode = "off")}
-                >
-                  <ZapOff size={18} />
-                  <span class="mode-label">Off</span>
-                  <span class="mode-desc">Instant volume change, no fade</span>
-                </button>
-                <button
-                  class="mode-option"
-                  class:active={fadeMode === "short"}
-                  role="radio"
-                  aria-checked={fadeMode === "short"}
-                  onclick={() => (fadeMode = "short")}
-                >
-                  <Gauge size={18} />
-                  <span class="mode-label">Short</span>
-                  <span class="mode-desc">Quick 300ms fade</span>
-                </button>
-                <button
-                  class="mode-option"
-                  class:active={fadeMode === "default"}
-                  role="radio"
-                  aria-checked={fadeMode === "default"}
-                  onclick={() => (fadeMode = "default")}
-                >
-                  <Waves size={18} />
-                  <span class="mode-label">Default</span>
-                  <span class="mode-desc">Smooth 800ms fade</span>
-                </button>
-                <button
-                  class="mode-option"
-                  class:active={fadeMode === "long"}
-                  role="radio"
-                  aria-checked={fadeMode === "long"}
-                  onclick={() => (fadeMode = "long")}
-                >
-                  <Wind size={18} />
-                  <span class="mode-label">Long</span>
-                  <span class="mode-desc">Slow 1.5s cinematic fade</span>
-                </button>
-              </div>
-            </div>
+            <PlayerPreferencesPicker
+              id="default-view-mode"
+              label="Default View Mode"
+              description="Choose how videos open when you play them from the gallery."
+              bind:value={defaultPlayMode}
+              options={defaultPlayModeOptions}
+            />
+            <PlayerPreferencesPicker
+              id="when-video-ends"
+              label="When Video Ends"
+              description="Choose what happens after a video finishes playing."
+              bind:value={endBehavior}
+              options={endBehaviorOptions}
+            />
+            <PlayerPreferencesPicker
+              id="playback-fade"
+              label="Play/Pause Fade"
+              description="Controls how smoothly volume transitions when you play or pause."
+              bind:value={fadeMode}
+              options={fadeModeOptions}
+            />
             <div class="reset-prefs-row">
               <button class="reset-prefs-btn" onclick={resetPlayerPreferences}>
                 <RotateCcw size={13} />
@@ -1373,83 +1424,45 @@
 <!-- First-Run Onboarding -->
 {#if appReady && showOnboarding}
   <div class="onboarding-overlay" transition:fade={{ duration: 300 }}>
-    <div class="onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="ob-dialog-title" aria-describedby="ob-dialog-desc" tabindex="-1" bind:this={onboardingModalEl}>
+    <div
+      class="onboarding-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="ob-dialog-title"
+      aria-describedby="ob-dialog-desc"
+      tabindex="-1"
+      bind:this={onboardingModalEl}
+      use:trapFocus
+    >
       <div class="onboarding-header">
         <h2 id="ob-dialog-title">How do you like to watch?</h2>
         <p id="ob-dialog-desc" class="onboarding-subtitle">Set up your preferences to get started.</p>
       </div>
 
       <div class="onboarding-body">
-        <div class="settings-section">
-          <h3 id="ob-view-mode-label">Default View Mode</h3>
-          <p class="settings-description">Choose how videos open when you play them from the gallery.</p>
-          <div class="mode-picker" role="radiogroup" aria-labelledby="ob-view-mode-label">
-            <button class="mode-option" class:active={defaultPlayMode === "cinematic"} role="radio" aria-checked={defaultPlayMode === "cinematic"} onclick={() => (defaultPlayMode = "cinematic")}>
-              <Play size={18} />
-              <span class="mode-label">Cinematic</span>
-              <span class="mode-desc">Focused view with blurred background</span>
-            </button>
-            <button class="mode-option" class:active={defaultPlayMode === "fullscreen"} role="radio" aria-checked={defaultPlayMode === "fullscreen"} onclick={() => (defaultPlayMode = "fullscreen")}>
-              <Maximize2 size={18} />
-              <span class="mode-label">Fullscreen</span>
-              <span class="mode-desc">Video fills the entire window</span>
-            </button>
-            <button class="mode-option" class:active={defaultPlayMode === "pip"} role="radio" aria-checked={defaultPlayMode === "pip"} onclick={() => (defaultPlayMode = "pip")}>
-              <PictureInPicture2 size={18} />
-              <span class="mode-label">Picture-in-Picture</span>
-              <span class="mode-desc">Floating compact window</span>
-            </button>
-          </div>
-        </div>
+        <PlayerPreferencesPicker
+          id="ob-view-mode"
+          label="Default View Mode"
+          description="Choose how videos open when you play them from the gallery."
+          bind:value={defaultPlayMode}
+          options={defaultPlayModeOptions}
+        />
 
-        <div class="settings-section">
-          <h3 id="ob-end-behavior-label">When Video Ends</h3>
-          <p class="settings-description">Choose what happens after a video finishes playing.</p>
-          <div class="mode-picker" role="radiogroup" aria-labelledby="ob-end-behavior-label">
-            <button class="mode-option" class:active={endBehavior === "nothing"} role="radio" aria-checked={endBehavior === "nothing"} onclick={() => (endBehavior = "nothing")}>
-              <Ban size={18} />
-              <span class="mode-label">Do Nothing</span>
-              <span class="mode-desc">Stop at the end of the video</span>
-            </button>
-            <button class="mode-option" class:active={endBehavior === "loop"} role="radio" aria-checked={endBehavior === "loop"} onclick={() => (endBehavior = "loop")}>
-              <Repeat size={18} />
-              <span class="mode-label">Loop</span>
-              <span class="mode-desc">Replay the same video</span>
-            </button>
-            <button class="mode-option" class:active={endBehavior === "next"} role="radio" aria-checked={endBehavior === "next"} onclick={() => (endBehavior = "next")}>
-              <SkipForward size={18} />
-              <span class="mode-label">Play Next</span>
-              <span class="mode-desc">Automatically play the next video from your gallery</span>
-            </button>
-          </div>
-        </div>
+        <PlayerPreferencesPicker
+          id="ob-end-behavior"
+          label="When Video Ends"
+          description="Choose what happens after a video finishes playing."
+          bind:value={endBehavior}
+          options={endBehaviorOptions}
+        />
 
-        <div class="settings-section">
-          <h3 id="ob-fade-label">Play/Pause Fade</h3>
-          <p class="settings-description">Controls how smoothly volume transitions when you play or pause.</p>
-          <div class="mode-picker" role="radiogroup" aria-labelledby="ob-fade-label">
-            <button class="mode-option" class:active={fadeMode === "off"} role="radio" aria-checked={fadeMode === "off"} onclick={() => (fadeMode = "off")}>
-              <ZapOff size={18} />
-              <span class="mode-label">Off</span>
-              <span class="mode-desc">Instant volume change, no fade</span>
-            </button>
-            <button class="mode-option" class:active={fadeMode === "short"} role="radio" aria-checked={fadeMode === "short"} onclick={() => (fadeMode = "short")}>
-              <Gauge size={18} />
-              <span class="mode-label">Short</span>
-              <span class="mode-desc">Quick 300ms fade</span>
-            </button>
-            <button class="mode-option" class:active={fadeMode === "default"} role="radio" aria-checked={fadeMode === "default"} onclick={() => (fadeMode = "default")}>
-              <Waves size={18} />
-              <span class="mode-label">Default</span>
-              <span class="mode-desc">Smooth 800ms fade</span>
-            </button>
-            <button class="mode-option" class:active={fadeMode === "long"} role="radio" aria-checked={fadeMode === "long"} onclick={() => (fadeMode = "long")}>
-              <Wind size={18} />
-              <span class="mode-label">Long</span>
-              <span class="mode-desc">Slow 1.5s cinematic fade</span>
-            </button>
-          </div>
-        </div>
+        <PlayerPreferencesPicker
+          id="ob-fade"
+          label="Play/Pause Fade"
+          description="Controls how smoothly volume transitions when you play or pause."
+          bind:value={fadeMode}
+          options={fadeModeOptions}
+        />
 
         <div class="settings-section">
           <h3 id="ob-library-label">Media Library</h3>
@@ -1472,11 +1485,20 @@
           <button class="ob-add-folder" onclick={obAddFolder}>
             <Plus size={14} /> Add Folder
           </button>
+          {#if onboardingError}
+            <p class="onboarding-error" role="alert">{onboardingError}</p>
+          {/if}
         </div>
       </div>
 
       <div class="onboarding-actions">
-        <button class="onboarding-cta" onclick={completeOnboarding}>
+        <button
+          class="onboarding-cta"
+          onclick={() => void completeOnboarding()}
+          disabled={onboardingPaths.length === 0}
+          aria-disabled={onboardingPaths.length === 0}
+          title={onboardingPaths.length === 0 ? "Add at least one folder to continue" : "Finish setup"}
+        >
           Get Started
         </button>
         <button class="onboarding-skip" onclick={() => { resetPlayerPreferences(); showOnboarding = false; }}>
@@ -1951,49 +1973,6 @@
     font-size: 0.8rem;
     color: var(--color-text-muted);
     margin-bottom: 1rem;
-  }
-
-  .mode-picker {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .mode-option {
-    display: flex;
-    align-items: center;
-    gap: 0.875rem;
-    padding: 0.875rem 1rem;
-    background: transparent;
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    text-align: left;
-    transition: border-color 0.15s, background 0.15s, color 0.15s;
-  }
-
-  .mode-option:hover {
-    border-color: var(--color-border-strong);
-    color: var(--color-text);
-    background: rgba(255, 255, 255, 0.03);
-  }
-
-  .mode-option.active {
-    border-color: var(--color-accent-border);
-    background: var(--color-accent-subtle);
-    color: var(--color-text);
-  }
-
-  .mode-label {
-    font-size: 0.875rem;
-    font-weight: 500;
-    flex: 1;
-  }
-
-  .mode-desc {
-    font-size: 0.75rem;
-    color: var(--color-text-subtle);
   }
 
   /* Shortcuts Tab Styles */
@@ -2628,6 +2607,11 @@
     opacity: 0.85;
   }
 
+  .onboarding-cta:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
   .onboarding-skip {
     background: none;
     border: none;
@@ -2716,5 +2700,11 @@
     background: rgba(255, 255, 255, 0.09);
     border-color: rgba(255, 255, 255, 0.2);
     color: rgba(255, 255, 255, 0.85);
+  }
+
+  .onboarding-error {
+    margin: 0.75rem 0 0;
+    color: #ff8f8f;
+    font-size: 0.8125rem;
   }
 </style>

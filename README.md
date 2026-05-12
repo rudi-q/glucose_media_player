@@ -51,7 +51,7 @@ _A powerfully modern, thoughtfully designed media playback experience._
 ### ⚡ Blazingly Fast & Private
 
 - **Native Performance**: Built with Rust and Tauri for GPU-accelerated rendering and a tiny footprint.
-- **Zero Telemetry**: A staunch commitment to your privacy with cloud-only file detection, no ads, and no tracking.
+- **Zero Telemetry**: Detects cloud-only file placeholders locally without uploading file contents, with no ads and no tracking.
 
 ---
 
