@@ -303,7 +303,14 @@
   }
 
   async function obAddFolder() {
-    const folder = await invoke<string | null>("open_folder_dialog");
+    let folder: string | null = null;
+    try {
+      folder = await invoke<string | null>("open_folder_dialog");
+    } catch (err) {
+      console.error("Failed to open folder dialog:", err);
+      onboardingError = "Failed to add folder. Try again.";
+      return;
+    }
     if (!folder) return;
     if (onboardingPaths.some(p => _obNormPath(p) === _obNormPath(folder))) return;
     onboardingPaths = [...onboardingPaths, folder];
@@ -340,11 +347,13 @@
   }
 
   function clearPlayerPreferences() {
-    if (typeof localStorage !== "undefined") {
-      for (const key of PLAYER_PREFERENCE_KEYS) localStorage.removeItem(key);
-    }
     skipPlayerPreferencePersist = true;
     resetPlayerPreferences();
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("glucose_default_mode", defaultPlayMode);
+      localStorage.setItem("glucose_end_behavior", endBehavior);
+      localStorage.setItem("glucose_fade", fadeMode);
+    }
     queueMicrotask(() => {
       skipPlayerPreferencePersist = false;
     });
