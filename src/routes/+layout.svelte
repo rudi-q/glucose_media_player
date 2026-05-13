@@ -1259,7 +1259,7 @@
 <!-- First-Run Setup Dialog -->
 {#if showSetupDialog}
   <div class="setup-overlay">
-    <div class="setup-modal">
+    <div class="setup-modal" tabindex="-1" use:trapFocus>
       <h2>Enable AI Subtitle Generation?</h2>
       <p class="setup-description">
         Automatically generate subtitles from video audio using AI. This feature
