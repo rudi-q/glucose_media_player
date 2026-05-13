@@ -7,7 +7,8 @@ use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Mutex;
+use fs4::FileExt;
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -1593,34 +1594,87 @@ fn read_wav_file(path: &str) -> Result<Vec<f32>, String> {
     Ok(samples)
 }
 
-// Save watch progress for a video
+static WATCH_PROGRESS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn watch_progress_lock() -> &'static Mutex<()> {
+    WATCH_PROGRESS_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn watch_progress_path() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    Ok(home.join(".glucose").join("watch_progress.json"))
+}
+
+fn read_watch_progress(
+    progress_file: &std::path::Path,
+) -> Result<std::collections::HashMap<String, WatchProgress>, String> {
+    match fs::read_to_string(progress_file) {
+        Ok(content) => serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse progress file: {}", e)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok(std::collections::HashMap::new())
+        }
+        Err(e) => Err(format!("Failed to read progress file: {}", e)),
+    }
+}
+
+fn write_watch_progress(
+    progress_file: &std::path::Path,
+    map: &std::collections::HashMap<String, WatchProgress>,
+) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(map)
+        .map_err(|e| format!("Failed to serialize progress: {}", e))?;
+    let temp_file = progress_file.with_extension("json.tmp");
+    fs::write(&temp_file, &content)
+        .map_err(|e| format!("Failed to write temp progress file: {}", e))?;
+    fs::rename(&temp_file, progress_file)
+        .map_err(|e| format!("Failed to replace progress file: {}", e))?;
+    Ok(())
+}
+
+fn open_progress_lock_file(progress_file: &std::path::Path, read: bool) -> Result<fs::File, String> {
+    let config_dir = progress_file.parent().ok_or("Invalid progress file path")?;
+    fs::create_dir_all(config_dir)
+        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    let lock_path = progress_file.with_file_name("watch_progress.lock");
+    fs::OpenOptions::new()
+        .read(read)
+        .write(true)
+        .create(true)
+        .open(&lock_path)
+        .map_err(|e| format!("Failed to open progress lock file: {}", e))
+}
+
+fn acquire_watch_progress_file_lock_exclusive(progress_file: &std::path::Path) -> Result<fs::File, String> {
+    let f = open_progress_lock_file(progress_file, false)?;
+    FileExt::lock(&f)
+        .map_err(|e| format!("Failed to acquire exclusive progress file lock: {}", e))?;
+    Ok(f)
+}
+
+fn acquire_watch_progress_file_lock_shared(progress_file: &std::path::Path) -> Result<fs::File, String> {
+    // lock_shared requires read access on Unix
+    let f = open_progress_lock_file(progress_file, true)?;
+    FileExt::lock_shared(&f)
+        .map_err(|e| format!("Failed to acquire shared progress file lock: {}", e))?;
+    Ok(f)
+}
+
 #[tauri::command]
 fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> Result<(), String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let config_dir = home.join(".glucose");
-    let progress_file = config_dir.join("watch_progress.json");
+    let progress_file = watch_progress_path()?;
+    let _guard = watch_progress_lock()
+        .lock()
+        .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
 
-    // Create config directory if it doesn't exist
-    fs::create_dir_all(&config_dir)
-        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    let mut progress_map = read_watch_progress(&progress_file)?;
 
-    // Load existing progress data or create new
-    let mut progress_map: std::collections::HashMap<String, WatchProgress> =
-        if progress_file.exists() {
-            let content = fs::read_to_string(&progress_file)
-                .map_err(|e| format!("Failed to read progress file: {}", e))?;
-            serde_json::from_str(&content).unwrap_or_else(|_| std::collections::HashMap::new())
-        } else {
-            std::collections::HashMap::new()
-        };
-
-    // Get current time as Unix timestamp
     let last_watched = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_err(|e| format!("Failed to get current time: {}", e))?
         .as_secs();
 
-    // Update or insert progress for this video
     progress_map.insert(
         video_path.clone(),
         WatchProgress {
@@ -1631,33 +1685,18 @@ fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> 
         },
     );
 
-    // Save to file
-    let content = serde_json::to_string_pretty(&progress_map)
-        .map_err(|e| format!("Failed to serialize progress: {}", e))?;
-
-    fs::write(progress_file, content)
-        .map_err(|e| format!("Failed to write progress file: {}", e))?;
-
-    Ok(())
+    write_watch_progress(&progress_file, &progress_map)
 }
 
 // Get watch progress for a video
 #[tauri::command]
 fn get_watch_progress(video_path: String) -> Result<Option<WatchProgress>, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let config_dir = home.join(".glucose");
-    let progress_file = config_dir.join("watch_progress.json");
-
-    if !progress_file.exists() {
-        return Ok(None);
-    }
-
-    let content = fs::read_to_string(&progress_file)
-        .map_err(|e| format!("Failed to read progress file: {}", e))?;
-
-    let progress_map: std::collections::HashMap<String, WatchProgress> =
-        serde_json::from_str(&content).unwrap_or_else(|_| std::collections::HashMap::new());
-
+    let progress_file = watch_progress_path()?;
+    let _guard = watch_progress_lock()
+        .lock()
+        .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock_shared(&progress_file)?;
+    let progress_map = read_watch_progress(&progress_file)?;
     Ok(progress_map.get(&video_path).cloned())
 }
 
@@ -1855,21 +1894,44 @@ fn convert_video_with_ffmpeg(
 // Get all watch progress data
 #[tauri::command]
 fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchProgress>, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let config_dir = home.join(".glucose");
-    let progress_file = config_dir.join("watch_progress.json");
+    let progress_file = watch_progress_path()?;
+    let _guard = watch_progress_lock()
+        .lock()
+        .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock_shared(&progress_file)?;
+    read_watch_progress(&progress_file)
+}
 
-    if !progress_file.exists() {
-        return Ok(std::collections::HashMap::new());
+#[tauri::command]
+fn delete_watch_progress(video_path: String) -> Result<(), String> {
+    let progress_file = watch_progress_path()?;
+    let _guard = watch_progress_lock()
+        .lock()
+        .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
+
+    let mut progress_map = read_watch_progress(&progress_file)?;
+    progress_map.remove(&video_path);
+    write_watch_progress(&progress_file, &progress_map)
+}
+
+#[tauri::command]
+fn clear_watch_history_since(cutoff_timestamp: u64) -> Result<(), String> {
+    let progress_file = watch_progress_path()?;
+    let _guard = watch_progress_lock()
+        .lock()
+        .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
+
+    let mut progress_map = read_watch_progress(&progress_file)?;
+
+    if cutoff_timestamp == 0 {
+        progress_map.clear();
+    } else {
+        progress_map.retain(|_, v| v.last_watched < cutoff_timestamp);
     }
 
-    let content = fs::read_to_string(&progress_file)
-        .map_err(|e| format!("Failed to read progress file: {}", e))?;
-
-    let progress_map: std::collections::HashMap<String, WatchProgress> =
-        serde_json::from_str(&content).unwrap_or_else(|_| std::collections::HashMap::new());
-
-    Ok(progress_map)
+    write_watch_progress(&progress_file, &progress_map)
 }
 
 fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
@@ -2165,6 +2227,8 @@ pub fn run() {
             save_watch_progress,
             get_watch_progress,
             get_all_watch_progress,
+            delete_watch_progress,
+            clear_watch_history_since,
             get_video_info,
             convert_video,
             enter_pip_mode,

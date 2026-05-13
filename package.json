@@ -1,6 +1,6 @@
 {
   "name": "glucose",
-  "version": "3.4.0",
+  "version": "3.5.0",
   "description": "A minimalist video player",
   "type": "module",
   "scripts": {
@@ -22,6 +22,7 @@
     ]
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-fs": "^2.5.1",
     "@tauri-apps/plugin-opener": "^2.5.4",

@@ -1,10 +1,12 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { X, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown, Volume2, VolumeX, ListFilter } from "lucide-svelte";
+  import { X, Minus, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown, Volume2, VolumeX, ListFilter, RotateCcw, Trash2 } from "lucide-svelte";
+  import { getFormattedVersion } from "$lib/utils/version";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { isAudio } from "$lib/utils/mediaType";
   import { watchProgressStore, type WatchProgress } from "$lib/stores/watchProgressStore";
@@ -12,6 +14,9 @@
   import type { VideoFile } from "$lib/types/video";
   import { createFadedMediaPlayback } from "$lib/utils/fadedMediaPlayback";
   import { formatDuration } from "$lib/utils/time";
+  import { getDefaultPlayMode } from "$lib/utils/playerPreferences";
+  import { generateThumbnail, clearThumbnailCache } from "$lib/utils/thumbnail";
+  import { setWindowTitle, galleryPageTitle } from "$lib/utils/windowTitle";
   import Button from "$lib/components/Button.svelte";
   
   // Per-instance cache that persists across remounts within the same component
@@ -25,15 +30,8 @@
   
   let recentVideos = $state<VideoFile[]>([]);
   let loadingRecent = $state(true);
-  let thumbnailCache = $state<Map<string, string>>(new Map());
-  const thumbnailPromises = new Map<string, Promise<string>>();
-  const thumbnailQueue: Array<() => void> = [];
-  let activeThumbnailJobs = 0;
-  const MAX_THUMBNAIL_JOBS = 2;
   let watchProgressMap = $derived($watchProgressStore);
   let selectedVideoIndex = $state(0);
-  let showCloseButton = $state(false);
-  let hideCloseButtonTimeout: ReturnType<typeof setTimeout>;
   let showGalleryContextMenu = $state(false);
   let galleryContextMenuPosition = $state({ x: 0, y: 0 });
   let showCardContextMenu = $state(false);
@@ -84,6 +82,10 @@
         })
       : filteredVideos
   );
+
+  $effect(() => {
+    setWindowTitle(galleryPageTitle(sortBy, filterBy));
+  });
 
   $effect(() => {
     localStorage.setItem('glucose_sort', sortBy);
@@ -237,7 +239,7 @@
     if (keyboardPreviewTimer !== null) { clearTimeout(keyboardPreviewTimer); keyboardPreviewTimer = null; }
     if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
     const progress = watchProgressMap.get(video.path);
-    if (!progress || !(progress.current_time > 0) || video.is_cloud_only || isAudio(video.path)) return;
+    if (video.is_cloud_only || isAudio(video.path)) return;
     // Only cancel the fade-out timer when we know we're activating a new eligible preview.
     if (previewFadeOutTimer !== null) { clearTimeout(previewFadeOutTimer); previewFadeOutTimer = null; }
     if (hoveredPath === video.path) {
@@ -478,10 +480,18 @@
     }
   }
   
-  async function loadVideo(path: string, mode?: string) {
+  async function loadVideo(path: string, mode?: string, restart?: boolean) {
     const encodedPath = encodeURIComponent(path);
-    const modeParam = mode ? `?mode=${encodeURIComponent(mode)}` : '';
-    await goto(isAudio(path) ? `/audio/${encodedPath}` : `/player/${encodedPath}${modeParam}`);
+    if (isAudio(path)) {
+      await goto(`/audio/${encodedPath}`);
+      return;
+    }
+    const savedDefault = localStorage.getItem('glucose_default_mode');
+    const defaultMode = getDefaultPlayMode(savedDefault);
+    const resolvedMode = mode ?? defaultMode;
+    const params = new URLSearchParams({ mode: resolvedMode });
+    if (restart) params.set('restart', 'true');
+    await goto(`/player/${encodedPath}?${params.toString()}`);
   }
 
   async function openContainingFolder(path: string) {
@@ -493,6 +503,20 @@
     }
   }
   
+  async function removeFromWatchHistory(path: string) {
+    showCardContextMenu = false;
+    try {
+      await invoke("delete_watch_progress", { videoPath: path });
+      watchProgressStore.removeEntry(path);
+    } catch (err) {
+      console.error("Failed to remove from watch history:", err);
+    }
+  }
+
+  async function minimizeApp() {
+    await getCurrentWindow().minimize();
+  }
+
   async function closeApp() {
     console.log('closeApp called');
     try {
@@ -531,158 +555,8 @@
     return `${mins} min${mins !== 1 ? 's' : ''} remaining`;
   }
   
-  async function generateThumbnail(videoPath: string, seekTime?: number): Promise<string> {
-    const hasSeek = seekTime != null && seekTime > 0;
-    const cacheKey = hasSeek ? `${videoPath}@${Math.floor(seekTime!)}` : videoPath;
-    if (thumbnailCache.has(cacheKey)) {
-      return thumbnailCache.get(cacheKey)!;
-    }
-    if (thumbnailPromises.has(cacheKey)) {
-      return thumbnailPromises.get(cacheKey)!;
-    }
+  const getThumbnail = (path: string, seek?: number) => generateThumbnail(path, seek, () => destroyed);
 
-    const promise = scheduleThumbnailJob(() => createThumbnail(videoPath, seekTime, hasSeek, cacheKey))
-      .finally(() => thumbnailPromises.delete(cacheKey));
-    thumbnailPromises.set(cacheKey, promise);
-    return promise;
-  }
-
-  function scheduleThumbnailJob(job: () => Promise<string>): Promise<string> {
-    return new Promise((resolve) => {
-      const run = () => {
-        activeThumbnailJobs += 1;
-        job()
-          .then(resolve)
-          .catch(() => resolve(''))
-          .finally(() => {
-            activeThumbnailJobs -= 1;
-            thumbnailQueue.shift()?.();
-          });
-      };
-
-      if (activeThumbnailJobs < MAX_THUMBNAIL_JOBS) {
-        run();
-      } else {
-        thumbnailQueue.push(run);
-      }
-    });
-  }
-
-  function createThumbnail(videoPath: string, seekTime: number | undefined, hasSeek: boolean, cacheKey: string): Promise<string> {
-    return new Promise((resolve) => {
-      const video = document.createElement('video');
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      let settled = false;
-      const timeout = setTimeout(() => settle(''), 8000);
-
-      function cleanup() {
-        clearTimeout(timeout);
-        video.onloadedmetadata = null;
-        video.onseeked = null;
-        video.onerror = null;
-        try {
-          video.removeAttribute('src');
-          video.load();
-        } catch {}
-      }
-
-      function settle(thumbnail: string) {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve(thumbnail);
-      }
-
-      function capture() {
-        try {
-          const targetWidth = 320;
-          const aspectRatio = video.videoWidth / video.videoHeight;
-
-          if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) {
-            settle('');
-            return;
-          }
-
-          canvas.width = targetWidth;
-          canvas.height = Math.round(targetWidth / aspectRatio);
-
-          ctx!.drawImage(video, 0, 0, canvas.width, canvas.height);
-          canvas.toBlob((blob) => {
-            if (!blob) {
-              settle('');
-              return;
-            }
-            const url = URL.createObjectURL(blob);
-            // Guard against post-unmount blob URL leaks: if the component was
-            // destroyed while this async job was in flight, immediately revoke
-            // the URL we just created and resolve with an empty string.
-            if (destroyed) {
-              URL.revokeObjectURL(url);
-              settle('');
-              return;
-            }
-            thumbnailCache.set(cacheKey, url);
-            settle(url);
-          }, 'image/jpeg', 0.7);
-        } catch (err) {
-          if (import.meta.env.DEV) {
-            console.log('Thumbnail generation skipped:', videoPath, err);
-          }
-          settle('');
-        }
-      }
-
-      if (!ctx) {
-        settle('');
-        return;
-      }
-
-      video.muted = true;
-      video.preload = 'metadata';
-      video.playsInline = true;
-      video.crossOrigin = 'anonymous';
-
-      video.onloadedmetadata = () => {
-        const defaultTime = Number.isFinite(video.duration) ? Math.min(1, video.duration * 0.1) : 0;
-        const targetTime = hasSeek ? seekTime! : defaultTime;
-        if (targetTime <= 0) {
-          capture();
-          return;
-        }
-        try {
-          video.currentTime = targetTime;
-        } catch {
-          capture();
-        }
-      };
-
-      video.onseeked = capture;
-
-      video.onerror = () => settle('');
-      video.src = convertFileSrc(videoPath);
-    });
-  }
-
-  function clearThumbnailCache() {
-    thumbnailQueue.length = 0;
-    thumbnailPromises.clear();
-    for (const thumbnail of thumbnailCache.values()) {
-      if (thumbnail.startsWith('blob:')) {
-        URL.revokeObjectURL(thumbnail);
-      }
-    }
-    thumbnailCache.clear();
-  }
-
-  function handleMainContainerMouseMove() {
-    showCloseButton = true;
-    clearTimeout(hideCloseButtonTimeout);
-    hideCloseButtonTimeout = setTimeout(() => {
-      showCloseButton = false;
-    }, 1000);
-  }
-  
   function toggleSortMenu(e: MouseEvent) {
     if (showSortMenu) { showSortMenu = false; return; }
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -754,31 +628,23 @@
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
-  onmousemove={handleMainContainerMouseMove}
   oncontextmenu={handleGalleryContextMenu}
 >
-  <div class="close-button-wrapper" class:visible={showCloseButton}>
-    <Button
-      variant="secondary"
-      size="sm"
-      onclick={closeApp}
-      title="Close (Esc)"
-    >
-      <X size={16} />
-    </Button>
-  </div>
   
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="empty-state" class:dragging={isDragging}>
     <div class="library-container">
       <div class="library-header" bind:offsetHeight={libraryHeaderHeight}>
-        <img src="/logo-dark.svg" alt="glucose" class="logo" class:logo-animate={logoReady} />
+        <div class="logo-group">
+          <img src="/logo-dark.svg" alt="glucose" class="logo" class:logo-animate={logoReady} />
+          <span class="version-tag" class:logo-animate={logoReady}>{getFormattedVersion()}</span>
+        </div>
         <div class="header-buttons">
-          <button class="sort-toggle" onclick={toggleSortMenu} title="Sort" class:sort-active={sortBy === 'watched'}>
+          <button class="sort-toggle" onclick={toggleSortMenu} data-tooltip="Sort" aria-label="Sort" class:sort-active={sortBy === 'watched'}>
             <ArrowUpDown size={15} />
           </button>
-          <button class="sort-toggle filter-toggle" onclick={toggleFilterMenu} title="Filter" class:sort-active={filterBy !== 'all'}>
+          <button class="sort-toggle filter-toggle" onclick={toggleFilterMenu} data-tooltip="Filter" aria-label="Filter" class:sort-active={filterBy !== 'all'}>
             <ListFilter size={15} />
           </button>
           <Button variant="white" onclick={openFileDialog}>
@@ -787,6 +653,12 @@
           <Button variant="secondary" onclick={() => showSettings()}>
             Settings
           </Button>
+          <button class="window-btn header-window-btn" onclick={minimizeApp} data-tooltip="Minimize" aria-label="Minimize">
+            <Minus size={15} />
+          </button>
+          <button class="window-btn window-btn-close header-window-btn" onclick={closeApp} data-tooltip="Close" aria-label="Close">
+            <X size={15} />
+          </button>
         </div>
       </div>
       
@@ -826,7 +698,7 @@
                           <Music2 size={40} strokeWidth={1.2} />
                         </div>
                       {:else}
-                        {#await generateThumbnail(video.path, watchProgressMap.get(video.path)?.current_time)}
+                        {#await getThumbnail(video.path, watchProgressMap.get(video.path)?.current_time)}
                           <Play size={48} strokeWidth={1.5} />
                         {:then thumbnail}
                           {#if thumbnail}
@@ -947,6 +819,12 @@
         <Play size={16} />
         <span>Play</span>
       </button>
+      {#if !isAudio(cardContextMenuVideo.path)}
+        <button class="context-menu-item" onclick={() => { loadVideo(cardContextMenuVideo!.path, undefined, true); showCardContextMenu = false; }}>
+          <RotateCcw size={16} />
+          <span>Play from Beginning</span>
+        </button>
+      {/if}
       <button class="context-menu-item" onclick={() => openContainingFolder(cardContextMenuVideo!.path)}>
         <FolderOpen size={16} />
         <span>Open Containing Folder</span>
@@ -960,6 +838,13 @@
         <button class="context-menu-item" onclick={() => { loadVideo(cardContextMenuVideo!.path, 'pip'); showCardContextMenu = false; }}>
           <PictureInPicture2 size={16} />
           <span>Open in PiP</span>
+        </button>
+      {/if}
+      {#if watchProgressMap.get(cardContextMenuVideo.path)}
+        <div class="context-menu-separator"></div>
+        <button class="context-menu-item context-menu-item--destructive" onclick={() => removeFromWatchHistory(cardContextMenuVideo!.path)}>
+          <Trash2 size={16} />
+          <span>Remove from Watch History</span>
         </button>
       {/if}
     </div>
@@ -1057,6 +942,12 @@
     }
   }
 
+  .logo-group {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.5rem;
+  }
+
   .library-header .logo {
     height: 48px;
     width: auto;
@@ -1065,6 +956,19 @@
 
   .library-header .logo.logo-animate {
     animation: logo-smoke-in 2.8s ease-out forwards;
+  }
+
+  .version-tag {
+    font-size: 0.65rem;
+    color: var(--color-text-subtle);
+    opacity: 0;
+    font-family: monospace;
+    letter-spacing: 0.05em;
+    padding-bottom: 9px;
+  }
+
+  .version-tag.logo-animate {
+    animation: logo-smoke-in 2.8s ease-out 0.4s forwards;
   }
 
   .header-buttons {
@@ -1078,6 +982,15 @@
     -webkit-backdrop-filter: blur(var(--blur-md));
     letter-spacing: 0.025em;
     font-weight: 500;
+  }
+
+  .header-window-btn {
+    width: 32px;
+    height: 32px;
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
   }
 
   /* Open Video — prominent frosted glass */
@@ -1344,26 +1257,6 @@
     opacity: 0.5;
   }
 
-  .close-button-wrapper {
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
-    opacity: 0;
-    transition: opacity 0.2s ease;
-    z-index: 1000;
-  }
-
-  .close-button-wrapper.visible {
-    opacity: 1;
-  }
-
-  :global(.close-button-wrapper .btn) {
-    min-width: 32px !important;
-    width: 32px;
-    padding: 0 !important;
-  }
-
-  
   /* Context Menu */
   .context-menu {
     position: fixed;
@@ -1397,6 +1290,14 @@
     background: var(--color-interactive-hover);
   }
 
+  .context-menu-item--destructive {
+    color: #f87171;
+  }
+
+  .context-menu-item--destructive:hover {
+    background: rgba(248, 113, 113, 0.12);
+  }
+
   .context-menu-separator {
     height: 1px;
     background: var(--color-interactive);
@@ -1416,6 +1317,33 @@
     cursor: pointer;
     transition: all 0.2s ease;
     flex-shrink: 0;
+    position: relative;
+  }
+
+  .sort-toggle[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%) translateY(-4px);
+    background: rgba(14, 14, 18, 0.96);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 200;
+    letter-spacing: 0.01em;
+  }
+
+  .sort-toggle[data-tooltip]:hover::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
   }
 
   .sort-toggle:hover {
@@ -1470,7 +1398,7 @@
   }
 
   .sort-option.active {
-    color: #c065b6;
-    background: rgba(192, 101, 182, 0.1);
+    color: var(--color-accent);
+    background: var(--color-accent-subtle);
   }
 </style>

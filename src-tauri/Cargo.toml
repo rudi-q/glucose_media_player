@@ -1,6 +1,6 @@
 [package]
 name = "glucose"
-version = "3.4.0"
+version = "3.5.0"
 description = "A minimalist video player"
 edition = "2021"
 
@@ -31,6 +31,7 @@ tokio = { version = "1.51.0", features = ["full"] }
 reqwest = { version = "0.13.2", features = ["stream"] }
 futures-util = "0.3.32"
 anyhow = "1.0"
+fs4 = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tauri-plugin-updater = "2.10.0"
