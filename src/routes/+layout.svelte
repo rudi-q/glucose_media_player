@@ -348,9 +348,9 @@
     skipPlayerPreferencePersist = true;
     resetPlayerPreferences();
     if (typeof localStorage !== "undefined") {
-      localStorage.setItem("glucose_default_mode", defaultPlayMode);
-      localStorage.setItem("glucose_end_behavior", endBehavior);
-      localStorage.setItem("glucose_fade", fadeMode);
+      localStorage.removeItem("glucose_default_mode");
+      localStorage.removeItem("glucose_end_behavior");
+      localStorage.removeItem("glucose_fade");
     }
     await tick();
     skipPlayerPreferencePersist = false;
