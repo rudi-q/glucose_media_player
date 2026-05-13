@@ -16,6 +16,7 @@
     "accentSubtle": "rgba(166, 107, 255, 0.15)",
     "accentBorder": "rgba(166, 107, 255, 0.35)",
     "accentBorderHover": "rgba(166, 107, 255, 0.5)",
+    "accentGradientEnd": "#8c77ff",
     "border": "rgba(255, 255, 255, 0.1)",
     "borderStrong": "rgba(255, 255, 255, 0.2)",
     "interactive": "rgba(255, 255, 255, 0.08)",

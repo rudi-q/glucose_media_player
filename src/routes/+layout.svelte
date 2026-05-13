@@ -18,7 +18,7 @@
       "--color-accent-subtle":     theme.color.accentSubtle,
       "--color-accent-border":     theme.color.accentBorder,
       "--color-accent-border-hover": theme.color.accentBorderHover,
-      "--color-accent-gradient-end": "#8c77ff",
+      "--color-accent-gradient-end": theme.color.accentGradientEnd,
       "--color-border":            theme.color.border,
       "--color-border-strong":     theme.color.borderStrong,
       "--color-interactive":       theme.color.interactive,
@@ -1259,8 +1259,8 @@
 <!-- First-Run Setup Dialog -->
 {#if showSetupDialog}
   <div class="setup-overlay">
-    <div class="setup-modal" tabindex="-1" use:trapFocus>
-      <h2>Enable AI Subtitle Generation?</h2>
+    <div class="setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-dialog-title" tabindex="-1" use:trapFocus>
+      <h2 id="setup-dialog-title">Enable AI Subtitle Generation?</h2>
       <p class="setup-description">
         Automatically generate subtitles from video audio using AI. This feature
         requires downloading additional components.
