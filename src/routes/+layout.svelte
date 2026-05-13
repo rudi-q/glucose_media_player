@@ -309,8 +309,9 @@
       return;
     }
     if (!folder) return;
-    if (onboardingPaths.some(p => _obNormPath(p) === _obNormPath(folder))) return;
-    onboardingPaths = [...onboardingPaths, folder];
+    const folderPath = folder;
+    if (onboardingPaths.some(p => _obNormPath(p) === _obNormPath(folderPath))) return;
+    onboardingPaths = [...onboardingPaths, folderPath];
     onboardingError = null;
   }
 
