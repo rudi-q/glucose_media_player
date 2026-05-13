@@ -320,6 +320,12 @@
     onboardingPaths = onboardingPaths.filter(p => p !== path);
   }
 
+  function _maybeShowSetupDialog() {
+    if (setupStatus && !setupStatus.setup_completed && setupStatus.models_installed.length === 0) {
+      showSetupDialog = true;
+    }
+  }
+
   async function completeOnboarding(): Promise<boolean> {
     if (onboardingPaths.length === 0) {
       onboardingError = "Add at least one folder to continue";
@@ -330,12 +336,19 @@
       await invoke("save_gallery_paths", { paths: onboardingPaths });
       onboardingError = null;
       showOnboarding = false;
+      _maybeShowSetupDialog();
       return true;
     } catch (err) {
       console.error("Failed to save gallery paths:", err);
       onboardingError = "Failed to save folders. Try again.";
       return false;
     }
+  }
+
+  function skipOnboarding() {
+    resetPlayerPreferences();
+    showOnboarding = false;
+    _maybeShowSetupDialog();
   }
 
   function resetPlayerPreferences() {
@@ -467,10 +480,10 @@
       const status = await invoke<SetupStatus>("get_setup_status");
       setupStore.setStatus(status);
 
-      // Show setup dialog on first launch if not completed
+      // Show setup dialog on first launch if not completed (deferred until after onboarding)
       if (!status.setup_completed && status.models_installed.length === 0) {
         setTimeout(() => {
-          showSetupDialog = true;
+          if (!showOnboarding) showSetupDialog = true;
         }, 1500);
       }
     } catch (err) {
@@ -1507,7 +1520,7 @@
         >
           Get Started
         </button>
-        <button class="onboarding-skip" onclick={() => { resetPlayerPreferences(); showOnboarding = false; }}>
+        <button class="onboarding-skip" onclick={skipOnboarding}>
           Skip / Use Defaults
         </button>
       </div>
