@@ -1226,36 +1226,86 @@ async fn download_file_with_progress(
     Ok(())
 }
 
+// Find an installed Whisper model file, checking AppData (Windows) before the home directory.
+// Returns None if the model is not found in either location.
+fn find_model_path(model_name: &str) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "windows")]
+    if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
+        let p = std::path::Path::new(&app_data)
+            .join("glucose")
+            .join("resources")
+            .join("models")
+            .join(model_name);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let p = home.join(".whisper").join("models").join(model_name);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    None
+}
+
+// Verify the video file has at least one audio stream before attempting extraction.
+async fn check_video_has_audio(video_path: &str) -> Result<(), String> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+    let mut cmd = get_ffprobe_command();
+    cmd.args([
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=codec_type",
+        "-of",
+        "default=noprint_wrappers=1",
+        video_path,
+    ]);
+    let output = run_with_timeout(cmd, TIMEOUT, "ffprobe").await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to inspect video for audio streams: {}", stderr));
+    }
+    if String::from_utf8_lossy(&output.stdout).trim().is_empty() {
+        return Err(
+            "This video has no audio track. AI subtitle generation requires audio.".to_string(),
+        );
+    }
+    Ok(())
+}
+
 // Helper function to extract audio from video using FFmpeg
-fn extract_audio_from_video(video_path: &str, output_audio_path: &str) -> Result<(), String> {
+async fn extract_audio_from_video(video_path: &str, output_audio_path: &str) -> Result<(), String> {
     #[cfg(debug_assertions)]
     println!("Extracting audio from video: {}", video_path);
 
-    let output = get_ffmpeg_command()
-        .args([
-            "-i",
-            video_path,
-            "-vn", // No video
-            "-acodec",
-            "pcm_s16le", // PCM 16-bit little-endian
-            "-ar",
-            "16000", // Sample rate 16kHz (Whisper's expected rate)
-            "-ac",
-            "1",  // Mono channel
-            "-y", // Overwrite output file
-            output_audio_path,
-        ])
-        .output()
-        .map_err(|e| {
-            format!(
-                "Failed to execute ffmpeg: {}. Make sure FFmpeg is installed and in PATH.",
-                e
-            )
-        })?;
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600); // 10 minutes
+
+    let mut cmd = get_ffmpeg_command();
+    cmd.args([
+        "-i",
+        video_path,
+        "-vn", // No video
+        "-acodec",
+        "pcm_s16le", // PCM 16-bit little-endian
+        "-ar",
+        "16000", // Sample rate 16kHz (Whisper's expected rate)
+        "-ac",
+        "1",  // Mono channel
+        "-y", // Overwrite output file
+        output_audio_path,
+    ]);
+
+    let output = run_with_timeout(cmd, TIMEOUT, "ffmpeg").await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("FFmpeg failed: {}", stderr));
+        return Err(format!("FFmpeg failed to extract audio: {}", stderr));
     }
 
     #[cfg(debug_assertions)]
@@ -1329,14 +1379,28 @@ async fn generate_subtitles(
         .file_stem()
         .ok_or("Could not get video filename")?;
 
-    // Create temporary audio file path
-    let temp_audio_path =
-        video_dir.join(format!("{}_temp_audio.wav", video_stem.to_string_lossy()));
+    // Write temp audio to the system temp directory, not the video's directory,
+    // to avoid permission issues on read-only mounts or restricted paths.
+    let temp_audio_path = std::env::temp_dir()
+        .join(format!("{}_temp_audio.wav", video_stem.to_string_lossy()));
     let temp_audio_str = temp_audio_path.to_string_lossy().to_string();
 
-    // Output subtitle path
+    // Output subtitle path (alongside the video file)
     let subtitle_path = video_dir.join(format!("{}.srt", video_stem.to_string_lossy()));
     let subtitle_path_str = subtitle_path.to_string_lossy().to_string();
+
+    // Check the video has an audio track before doing any heavy work
+    if let Err(e) = check_video_has_audio(&video_path).await {
+        let _ = app_handle.emit(
+            "subtitle-generation-progress",
+            SubtitleGenerationProgress {
+                stage: "error".to_string(),
+                progress: 0.0,
+                message: e.clone(),
+            },
+        );
+        return Err(e);
+    }
 
     // Step 1: Extract audio from video
     let _ = app_handle.emit(
@@ -1348,7 +1412,12 @@ async fn generate_subtitles(
         },
     );
 
-    extract_audio_from_video(&video_path, &temp_audio_str)?;
+    extract_audio_from_video(&video_path, &temp_audio_str)
+        .await
+        .map_err(|e| {
+            let _ = fs::remove_file(&temp_audio_str);
+            e
+        })?;
 
     // Step 2: Load Whisper model
     let _ = app_handle.emit(
@@ -1360,7 +1429,6 @@ async fn generate_subtitles(
         },
     );
 
-    // Get model path from user's home directory or use default location
     let model_name = match model_size.as_str() {
         "tiny" => "ggml-tiny.bin",
         "small" => "ggml-small.bin",
@@ -1368,30 +1436,26 @@ async fn generate_subtitles(
         _ => "ggml-tiny.bin",
     };
 
-    let model_path = dirs::home_dir().ok_or("Could not find home directory")?;
-    let model_path = model_path.join(".whisper").join("models").join(model_name);
-
-    if !model_path.exists() {
-        let error_msg = format!(
-            "Whisper model not found at: {}\n\nPlease download the model first. You can download it from:\nhttps://huggingface.co/ggerganov/whisper.cpp/tree/main\n\nPlace it in: {}",
-            model_path.display(),
-            model_path.parent().unwrap().display()
-        );
-
-        // Clean up temp audio file
-        let _ = fs::remove_file(&temp_audio_str);
-
-        let _ = app_handle.emit(
-            "subtitle-generation-progress",
-            SubtitleGenerationProgress {
-                stage: "error".to_string(),
-                progress: 0.0,
-                message: error_msg.clone(),
-            },
-        );
-
-        return Err(error_msg);
-    }
+    // Find the model in AppData (Windows) or home directory
+    let model_path = match find_model_path(model_name) {
+        Some(p) => p,
+        None => {
+            let error_msg = format!(
+                "Whisper {} model not found. Please download it from the Settings page.",
+                model_size
+            );
+            let _ = fs::remove_file(&temp_audio_str);
+            let _ = app_handle.emit(
+                "subtitle-generation-progress",
+                SubtitleGenerationProgress {
+                    stage: "error".to_string(),
+                    progress: 0.0,
+                    message: error_msg.clone(),
+                },
+            );
+            return Err(error_msg);
+        }
+    };
 
     // Step 3: Transcribe audio with Whisper
     let _ = app_handle.emit(
@@ -1420,7 +1484,12 @@ async fn generate_subtitles(
         )
     })
     .await
-    .map_err(|e| format!("Transcription task failed: {}", e))??;
+    .map_err(|e| format!("Transcription task failed: {}", e))
+    .and_then(|r| r)
+    .map_err(|e| {
+        let _ = fs::remove_file(&temp_audio_str);
+        e
+    })?;
 
     // Clean up temporary audio file
     let _ = fs::remove_file(&temp_audio_str);

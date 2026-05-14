@@ -406,9 +406,11 @@
                 isGeneratingSubtitles = false;
                 generationProgress = 0;
                 generationMessage = "";
-              }, 2000);
+              }, 500);
             } else if (event.payload.stage === "error") {
               isGeneratingSubtitles = false;
+              generationProgress = 0;
+              generationMessage = "";
             }
           },
         ),
