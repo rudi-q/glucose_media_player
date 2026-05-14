@@ -8,7 +8,11 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use fs4::FileExt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
+
+// Signals an in-progress subtitle generation to abort at the next whisper checkpoint.
+static SUBTITLE_CANCEL: AtomicBool = AtomicBool::new(false);
 use std::thread;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -939,6 +943,29 @@ fn check_ffmpeg_installed() -> Result<bool, String> {
     }
 }
 
+// Returns the candidate directories to search for Whisper model files, in priority order.
+// Windows checks AppData\Local\glucose\resources\models first, then home\.whisper\models.
+// Non-Windows checks only home\.whisper\models.
+fn model_candidate_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
+        dirs.push(
+            std::path::Path::new(&app_data)
+                .join("glucose")
+                .join("resources")
+                .join("models"),
+        );
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".whisper").join("models"));
+    }
+
+    dirs
+}
+
 // Check which Whisper models are installed
 #[tauri::command]
 fn check_installed_models() -> Result<Vec<String>, String> {
@@ -951,56 +978,21 @@ fn check_installed_models() -> Result<Vec<String>, String> {
 
     println!("[Models Check] Starting model check...");
 
-    // Check resources folder in AppData\Local first
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
-            let resources_models_dir = std::path::Path::new(&app_data)
-                .join("glucose")
-                .join("resources")
-                .join("models");
-            let resources_path = resources_models_dir.to_string_lossy();
-            println!("[Models Check] Checking AppData\\Local: {}", resources_path);
-            if resources_models_dir.exists() {
-                println!("[Models Check] AppData\\Local models folder exists");
-                for (filename, model_name) in &model_files {
-                    let model_path = resources_models_dir.join(filename);
-                    if model_path.exists() {
-                        println!(
-                            "[Models Check] ✓ Found {} in AppData\\Local: {}",
-                            model_name, filename
-                        );
-                        models.push(model_name.to_string());
-                    } else {
-                        println!("[Models Check] ✗ {} not found in AppData\\Local", filename);
-                    }
-                }
-            } else {
-                println!("[Models Check] AppData\\Local models folder does not exist");
-            }
+    for dir in model_candidate_dirs() {
+        println!("[Models Check] Checking: {}", dir.display());
+        if !dir.exists() {
+            println!("[Models Check] Directory does not exist");
+            continue;
         }
-    }
-
-    // Check home directory
-    if let Some(home) = dirs::home_dir() {
-        let models_dir = home.join(".whisper").join("models");
-        let home_path = models_dir.to_string_lossy();
-        println!("[Models Check] Checking home directory: {}", home_path);
-        if models_dir.exists() {
-            println!("[Models Check] Home models folder exists");
-            for (filename, model_name) in &model_files {
-                if models_dir.join(filename).exists() && !models.contains(&model_name.to_string()) {
-                    println!(
-                        "[Models Check] ✓ Found {} in home: {}",
-                        model_name, filename
-                    );
-                    models.push(model_name.to_string());
-                } else if !models.contains(&model_name.to_string()) {
-                    println!("[Models Check] ✗ {} not found in home", filename);
-                }
+        println!("[Models Check] Directory exists");
+        for (filename, model_name) in &model_files {
+            let model_path = dir.join(filename);
+            if model_path.exists() && !models.contains(&model_name.to_string()) {
+                println!("[Models Check] ✓ Found {}: {}", model_name, filename);
+                models.push(model_name.to_string());
+            } else if !models.contains(&model_name.to_string()) {
+                println!("[Models Check] ✗ {} not found", filename);
             }
-        } else {
-            println!("[Models Check] Home models folder does not exist");
         }
     }
 
@@ -1226,36 +1218,75 @@ async fn download_file_with_progress(
     Ok(())
 }
 
+// Find an installed Whisper model file across all candidate directories.
+// Returns None if the model is not present in any location.
+fn find_model_path(model_name: &str) -> Option<std::path::PathBuf> {
+    model_candidate_dirs()
+        .into_iter()
+        .map(|dir| dir.join(model_name))
+        .find(|p| p.exists())
+}
+
+// Verify the video file has at least one audio stream before attempting extraction.
+// Returns Some(error) only when ffprobe ran successfully and confirmed no audio track.
+// Returns None when ffprobe is unavailable or errored — callers should proceed and
+// let FFmpeg surface the real failure rather than blocking on a missing preflight tool.
+async fn check_video_has_audio(video_path: &str) -> Option<String> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+    let mut cmd = get_ffprobe_command();
+    cmd.args([
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=codec_type",
+        "-of",
+        "default=noprint_wrappers=1",
+        video_path,
+    ]);
+    let output = match run_with_timeout(cmd, TIMEOUT, "ffprobe").await {
+        Ok(o) => o,
+        Err(_) => return None, // ffprobe not available — skip the check
+    };
+    if !output.status.success() {
+        return None; // ffprobe errored (e.g. unreadable file) — let FFmpeg handle it
+    }
+    if String::from_utf8_lossy(&output.stdout).trim().is_empty() {
+        return Some(
+            "This video has no audio track. AI subtitle generation requires audio.".to_string(),
+        );
+    }
+    None
+}
+
 // Helper function to extract audio from video using FFmpeg
-fn extract_audio_from_video(video_path: &str, output_audio_path: &str) -> Result<(), String> {
+async fn extract_audio_from_video(video_path: &str, output_audio_path: &str) -> Result<(), String> {
     #[cfg(debug_assertions)]
     println!("Extracting audio from video: {}", video_path);
 
-    let output = get_ffmpeg_command()
-        .args([
-            "-i",
-            video_path,
-            "-vn", // No video
-            "-acodec",
-            "pcm_s16le", // PCM 16-bit little-endian
-            "-ar",
-            "16000", // Sample rate 16kHz (Whisper's expected rate)
-            "-ac",
-            "1",  // Mono channel
-            "-y", // Overwrite output file
-            output_audio_path,
-        ])
-        .output()
-        .map_err(|e| {
-            format!(
-                "Failed to execute ffmpeg: {}. Make sure FFmpeg is installed and in PATH.",
-                e
-            )
-        })?;
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600); // 10 minutes
+
+    let mut cmd = get_ffmpeg_command();
+    cmd.args([
+        "-i",
+        video_path,
+        "-vn", // No video
+        "-acodec",
+        "pcm_s16le", // PCM 16-bit little-endian
+        "-ar",
+        "16000", // Sample rate 16kHz (Whisper's expected rate)
+        "-ac",
+        "1",  // Mono channel
+        "-y", // Overwrite output file
+        output_audio_path,
+    ]);
+
+    let output = run_with_timeout(cmd, TIMEOUT, "ffmpeg").await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("FFmpeg failed: {}", stderr));
+        return Err(format!("FFmpeg failed to extract audio: {}", stderr));
     }
 
     #[cfg(debug_assertions)]
@@ -1311,6 +1342,9 @@ async fn generate_subtitles(
         println!("Model size: {}", model_size);
     }
 
+    // Clear any stale cancel signal from a previous run before starting.
+    SUBTITLE_CANCEL.store(false, Ordering::Relaxed);
+
     // Emit initial progress
     let _ = app_handle.emit(
         "subtitle-generation-progress",
@@ -1329,14 +1363,54 @@ async fn generate_subtitles(
         .file_stem()
         .ok_or("Could not get video filename")?;
 
-    // Create temporary audio file path
-    let temp_audio_path =
-        video_dir.join(format!("{}_temp_audio.wav", video_stem.to_string_lossy()));
-    let temp_audio_str = temp_audio_path.to_string_lossy().to_string();
+    // Check the video has an audio track before creating any temp files.
+    // Skipped gracefully if ffprobe is unavailable — FFmpeg will surface the failure instead.
+    if let Some(e) = check_video_has_audio(&video_path).await {
+        let _ = app_handle.emit(
+            "subtitle-generation-progress",
+            SubtitleGenerationProgress {
+                stage: "error".to_string(),
+                progress: 0.0,
+                message: e.clone(),
+            },
+        );
+        return Err(e);
+    }
 
-    // Output subtitle path
+    // Output subtitle path (alongside the video file)
     let subtitle_path = video_dir.join(format!("{}.srt", video_stem.to_string_lossy()));
     let subtitle_path_str = subtitle_path.to_string_lossy().to_string();
+
+    // Create a uniquely named temp audio file in the system temp directory,
+    // using the same pid+nanos+create_new pattern as remux_with_audio_track.
+    let temp_dir = std::env::temp_dir();
+    let mut temp_audio_path_opt: Option<std::path::PathBuf> = None;
+    for i in 0..100u128 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let candidate = temp_dir.join(format!(
+            "glucose_subtitle_{}_{}.wav",
+            std::process::id(),
+            nanos + i,
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(_) => {
+                temp_audio_path_opt = Some(candidate);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("Failed to create temporary audio file: {}", e)),
+        }
+    }
+    let temp_audio_path = temp_audio_path_opt
+        .ok_or_else(|| "Failed to generate a unique temporary audio file path".to_string())?;
+    let temp_audio_str = temp_audio_path.to_string_lossy().to_string();
 
     // Step 1: Extract audio from video
     let _ = app_handle.emit(
@@ -1348,7 +1422,12 @@ async fn generate_subtitles(
         },
     );
 
-    extract_audio_from_video(&video_path, &temp_audio_str)?;
+    extract_audio_from_video(&video_path, &temp_audio_str)
+        .await
+        .map_err(|e| {
+            let _ = fs::remove_file(&temp_audio_str);
+            e
+        })?;
 
     // Step 2: Load Whisper model
     let _ = app_handle.emit(
@@ -1360,7 +1439,6 @@ async fn generate_subtitles(
         },
     );
 
-    // Get model path from user's home directory or use default location
     let model_name = match model_size.as_str() {
         "tiny" => "ggml-tiny.bin",
         "small" => "ggml-small.bin",
@@ -1368,30 +1446,26 @@ async fn generate_subtitles(
         _ => "ggml-tiny.bin",
     };
 
-    let model_path = dirs::home_dir().ok_or("Could not find home directory")?;
-    let model_path = model_path.join(".whisper").join("models").join(model_name);
-
-    if !model_path.exists() {
-        let error_msg = format!(
-            "Whisper model not found at: {}\n\nPlease download the model first. You can download it from:\nhttps://huggingface.co/ggerganov/whisper.cpp/tree/main\n\nPlace it in: {}",
-            model_path.display(),
-            model_path.parent().unwrap().display()
-        );
-
-        // Clean up temp audio file
-        let _ = fs::remove_file(&temp_audio_str);
-
-        let _ = app_handle.emit(
-            "subtitle-generation-progress",
-            SubtitleGenerationProgress {
-                stage: "error".to_string(),
-                progress: 0.0,
-                message: error_msg.clone(),
-            },
-        );
-
-        return Err(error_msg);
-    }
+    // Find the model in AppData (Windows) or home directory
+    let model_path = match find_model_path(model_name) {
+        Some(p) => p,
+        None => {
+            let error_msg = format!(
+                "Whisper {} model not found. Please download it from the Settings page.",
+                model_size
+            );
+            let _ = fs::remove_file(&temp_audio_str);
+            let _ = app_handle.emit(
+                "subtitle-generation-progress",
+                SubtitleGenerationProgress {
+                    stage: "error".to_string(),
+                    progress: 0.0,
+                    message: error_msg.clone(),
+                },
+            );
+            return Err(error_msg);
+        }
+    };
 
     // Step 3: Transcribe audio with Whisper
     let _ = app_handle.emit(
@@ -1410,7 +1484,7 @@ async fn generate_subtitles(
     let app_handle_clone = app_handle.clone();
     let language_clone = language.clone();
 
-    tokio::task::spawn_blocking(move || {
+    let transcription_result = tokio::task::spawn_blocking(move || {
         transcribe_audio_with_whisper(
             &model_path_clone.to_string_lossy(),
             &temp_audio_clone,
@@ -1420,10 +1494,26 @@ async fn generate_subtitles(
         )
     })
     .await
-    .map_err(|e| format!("Transcription task failed: {}", e))??;
+    .map_err(|e| format!("Transcription task failed: {}", e))
+    .and_then(|r| r);
 
-    // Clean up temporary audio file
+    // Always clean up the temp audio file regardless of outcome.
     let _ = fs::remove_file(&temp_audio_str);
+
+    if let Err(e) = transcription_result {
+        if SUBTITLE_CANCEL.load(Ordering::Relaxed) {
+            let _ = app_handle.emit(
+                "subtitle-generation-progress",
+                SubtitleGenerationProgress {
+                    stage: "cancelled".to_string(),
+                    progress: 0.0,
+                    message: "Subtitle generation cancelled.".to_string(),
+                },
+            );
+            return Err("cancelled".to_string());
+        }
+        return Err(e);
+    }
 
     // Step 4: Complete
     let _ = app_handle.emit(
@@ -1436,6 +1526,11 @@ async fn generate_subtitles(
     );
 
     Ok(subtitle_path_str)
+}
+
+#[tauri::command]
+fn cancel_subtitle_generation() {
+    SUBTITLE_CANCEL.store(true, Ordering::Relaxed);
 }
 
 // Transcribe audio using whisper-rs
@@ -1476,6 +1571,24 @@ fn transcribe_audio_with_whisper(
     params.set_max_len(0); // Disable max length limit per segment
     params.set_split_on_word(true); // Split on word boundaries
 
+    // Emit real-time progress during state.full() via whisper's native progress callback.
+    // Whisper reports 0-100; we map that to the 50-90% band in our UI.
+    let app_handle_cb = app_handle.clone();
+    params.set_progress_callback_safe(move |progress: i32| {
+        let mapped = 50.0 + (progress as f32 / 100.0) * 40.0;
+        let _ = app_handle_cb.emit(
+            "subtitle-generation-progress",
+            SubtitleGenerationProgress {
+                stage: "transcribing".to_string(),
+                progress: mapped,
+                message: "Transcribing audio with AI...".to_string(),
+            },
+        );
+    });
+
+    // Abort callback — checked at each whisper processing boundary.
+    params.set_abort_callback_safe(|| SUBTITLE_CANCEL.load(Ordering::Relaxed));
+
     // Run transcription
     let mut state = ctx
         .create_state()
@@ -1488,7 +1601,7 @@ fn transcribe_audio_with_whisper(
     #[cfg(debug_assertions)]
     println!("Transcription complete, extracting segments...");
 
-    // Extract segments with timestamps
+    // Extract segments — progress was already reported live via the callback above.
     let num_segments = state.full_n_segments();
 
     #[cfg(debug_assertions)]
@@ -1497,41 +1610,20 @@ fn transcribe_audio_with_whisper(
     let mut segments = Vec::new();
 
     for i in 0..num_segments {
-        // 1. Fetch the segment object for this loop iteration
-        // USING .ok_or_else() INSTEAD OF .map_err() because get_segment returns an Option
         let segment = state
             .get_segment(i)
             .ok_or_else(|| format!("Failed to get segment {}", i))?;
 
-        // 2. Grab the timestamps from the object
-        let start_timestamp = segment.start_timestamp();
-        let end_timestamp = segment.end_timestamp();
+        let start_seconds = segment.start_timestamp() as f64 / 100.0;
+        let end_seconds = segment.end_timestamp() as f64 / 100.0;
 
-        // 3. Grab the text
         let text = segment
             .to_str()
             .map_err(|e| format!("Failed to parse segment text: {}", e))?
             .to_string();
 
-        // Convert from Whisper's timestamp units (10ms) to seconds
-        let start_seconds = start_timestamp as f64 / 100.0;
-        let end_seconds = end_timestamp as f64 / 100.0;
-
         if !text.trim().is_empty() {
             segments.push((start_seconds, end_seconds, text));
-        }
-
-        // Emit progress periodically
-        if i % 10 == 0 {
-            let progress = 50.0 + (i as f32 / num_segments as f32) * 40.0;
-            let _ = app_handle.emit(
-                "subtitle-generation-progress",
-                SubtitleGenerationProgress {
-                    stage: "transcribing".to_string(),
-                    progress,
-                    message: format!("Processing segment {} of {}...", i + 1, num_segments),
-                },
-            );
         }
     }
 
@@ -2219,6 +2311,7 @@ pub fn run() {
             remux_with_audio_track,
             delete_temp_file,
             generate_subtitles,
+            cancel_subtitle_generation,
             check_ffmpeg_installed,
             check_installed_models,
             get_setup_status,

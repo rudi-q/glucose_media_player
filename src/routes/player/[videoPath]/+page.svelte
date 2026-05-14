@@ -123,6 +123,11 @@
   let isGeneratingSubtitles = $state(false);
   let generationProgress = $state(0);
   let generationMessage = $state("");
+  let generationStartTime = 0;        // wall-clock ms when generation began
+  let transcriptionStartTime = 0;     // wall-clock ms when whisper progress first moved
+  let generationVideoDuration = 0;    // video duration captured at generation start
+  let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  let isCancelling = $state(false);   // true after cancel button clicked, suppresses error alert
   let showModelSelector = $state(false);
   let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
 
@@ -181,7 +186,7 @@
   const showSetupDialog = getContext<() => void>("showSetupDialog");
   const getSetupStatus = getContext<() => SetupStatus | null>("setupStatus");
 
-  let setupStatus = $state(getSetupStatus());
+  const setupStatus = $derived(getSetupStatus());
   let disposed = false;
   let videoSetupId = 0;
   let lastSetupRoute = "";
@@ -398,17 +403,54 @@
         listen<{ stage: string; progress: number; message: string }>(
           "subtitle-generation-progress",
           (event) => {
-            generationProgress = event.payload.progress;
-            generationMessage = event.payload.message;
+            const { stage, progress, message } = event.payload;
+            generationProgress = progress;
+            generationMessage = message;
 
-            if (event.payload.stage === "complete") {
+            if (stage === "transcribing") {
+              // Start timing from the initial 50% event so elapsed and whisperFraction
+              // share the same baseline — both measured from progress=50, not the first callback.
+              if (transcriptionStartTime === 0) {
+                transcriptionStartTime = Date.now();
+              }
+              // Overlay a live "~X remaining" estimate once we have enough data
+              if (transcriptionStartTime > 0) {
+                const whisperFraction = (progress - 50) / 40; // 0–1 within transcription
+                const elapsed = (Date.now() - transcriptionStartTime) / 1000;
+                if (whisperFraction > 0.05 && elapsed > 1) {
+                  const remaining = (elapsed / whisperFraction) * (1 - whisperFraction);
+                  generationMessage = `Transcribing... ${formatEstimatedTime(remaining)} remaining`;
+                }
+              }
+              // Reset the watchdog — if 60 s pass with no transcription event,
+              // whisper has likely hung and we surface a warning.
+              if (watchdogTimer !== null) clearTimeout(watchdogTimer);
+              watchdogTimer = setTimeout(() => {
+                if (isGeneratingSubtitles) {
+                  generationMessage =
+                    "Still running — Whisper may be processing slowly on this machine. Please wait.";
+                }
+              }, 60_000);
+            } else if (stage === "complete") {
+              if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
+              isCancelling = false;
               setTimeout(() => {
                 isGeneratingSubtitles = false;
                 generationProgress = 0;
                 generationMessage = "";
-              }, 2000);
-            } else if (event.payload.stage === "error") {
+              }, 500);
+            } else if (stage === "cancelled") {
+              if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
+              isCancelling = false;
               isGeneratingSubtitles = false;
+              generationProgress = 0;
+              generationMessage = "";
+            } else if (stage === "error") {
+              if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
+              isCancelling = false;
+              isGeneratingSubtitles = false;
+              generationProgress = 0;
+              generationMessage = "";
             }
           },
         ),
@@ -499,6 +541,8 @@
       if (viewMode === "pip") {
         exitNativePipWindow().catch(() => resetPipBodyBackground());
       }
+      // Clear subtitle generation watchdog
+      if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
       // Clear volume menu auto-hide timer
       clearTimeout(volumeMenuAutoTimer);
       clearTimeout(hideControlsTimeout);
@@ -1593,6 +1637,10 @@
     isGeneratingSubtitles = true;
     generationProgress = 0;
     generationMessage = "Starting subtitle generation...";
+    generationStartTime = Date.now();
+    transcriptionStartTime = 0;
+    generationVideoDuration = duration ?? 0;
+    if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
 
     try {
       // Get current subtitle language from store at call time
@@ -1603,33 +1651,58 @@
         language: currentSettings.subtitleLanguage,
       });
 
+      // Store the actual elapsed/duration ratio so future estimates are calibrated
+      // to this machine's performance for this model.
+      if (generationVideoDuration > 0) {
+        const elapsed = (Date.now() - generationStartTime) / 1000;
+        const coefficient = elapsed / generationVideoDuration;
+        localStorage.setItem(`glucose_whisper_coef_${modelSize}`, String(coefficient));
+      }
+
       // Auto-load the generated subtitle
       await loadSubtitle(subtitlePath);
     } catch (err) {
-      console.error("Failed to generate subtitles:", err);
-      alert(`Subtitle generation failed: ${err}`);
+      if (!isCancelling && String(err) !== "cancelled") {
+        console.error("Failed to generate subtitles:", err);
+        alert(`Subtitle generation failed: ${err}`);
+      }
+      isCancelling = false;
       isGeneratingSubtitles = false;
       generationProgress = 0;
       generationMessage = "";
     }
   }
 
+  async function cancelSubtitleGeneration() {
+    isCancelling = true;
+    try {
+      await invoke("cancel_subtitle_generation");
+    } catch (e) {
+      console.error("cancel_subtitle_generation invoke failed:", e);
+      isCancelling = false;
+    }
+  }
+
   function getEstimatedTranscriptionTime(modelKey: string): string {
     if (!duration) return "Unknown";
 
-    const coefficients: Record<string, { min: number; max: number }> = {
+    // Prefer a coefficient measured on this machine from a previous run.
+    const stored = localStorage.getItem(`glucose_whisper_coef_${modelKey}`);
+    const calibrated = stored ? parseFloat(stored) : NaN;
+    if (!isNaN(calibrated) && calibrated > 0) {
+      return formatEstimatedTime(duration * calibrated);
+    }
+
+    // Fall back to conservative hardware-agnostic defaults.
+    const fallback: Record<string, { min: number; max: number }> = {
       tiny: { min: 0.15, max: 0.25 },
       small: { min: 0.6, max: 0.8 },
       "large-v3-turbo": { min: 0.9, max: 1.2 },
     };
-
-    const coef = coefficients[modelKey];
+    const coef = fallback[modelKey];
     if (!coef) return "Unknown";
 
-    const avgCoef = (coef.min + coef.max) / 2;
-    const estimatedSeconds = duration * avgCoef;
-
-    return formatEstimatedTime(estimatedSeconds);
+    return formatEstimatedTime(duration * ((coef.min + coef.max) / 2));
   }
 </script>
 
@@ -1751,6 +1824,14 @@
           </div>
         </div>
         <p class="generation-message">{generationMessage}</p>
+        <button
+          class="cancel-generation-btn"
+          onclick={cancelSubtitleGeneration}
+          disabled={isCancelling}
+        >
+          {isCancelling ? "Cancelling..." : "Cancel"}
+        </button>
+        <p class="generation-hint">Do not close Glucose while generation is in progress.</p>
       </div>
     </div>
   {/if}
@@ -3064,6 +3145,34 @@
     color: rgba(255, 255, 255, 0.7);
     line-height: 1.5;
     margin: 0;
+  }
+
+  .cancel-generation-btn {
+    margin-top: 1.25rem;
+    padding: 0.45rem 1.25rem;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease;
+  }
+
+  .cancel-generation-btn:hover:not(:disabled) {
+    border-color: rgba(255, 255, 255, 0.38);
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .cancel-generation-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .generation-hint {
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.3);
   }
 
   /* Context Menu */

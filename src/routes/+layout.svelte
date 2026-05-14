@@ -408,20 +408,22 @@
       const results = await Promise.allSettled([
         listen<string>("open-file", async (event) => {
           const encodedPath = encodeURIComponent(event.payload);
+          const params = new URLSearchParams({ mode: defaultPlayMode });
           await goto(
             isAudio(event.payload)
               ? `/audio/${encodedPath}`
-              : `/player/${encodedPath}`,
+              : `/player/${encodedPath}?${params.toString()}`,
           );
           invoke("mark_file_processed").catch(console.error);
         }),
         listen<string[]>("tauri://drag-drop", async (event) => {
           if (event.payload && event.payload.length > 0) {
             const encodedPath = encodeURIComponent(event.payload[0]);
+            const params = new URLSearchParams({ mode: defaultPlayMode });
             await goto(
               isAudio(event.payload[0])
                 ? `/audio/${encodedPath}`
-                : `/player/${encodedPath}`,
+                : `/player/${encodedPath}?${params.toString()}`,
             );
           }
         }),
