@@ -1662,7 +1662,7 @@
       // Auto-load the generated subtitle
       await loadSubtitle(subtitlePath);
     } catch (err) {
-      if (!isCancelling) {
+      if (!isCancelling && String(err) !== "cancelled") {
         console.error("Failed to generate subtitles:", err);
         alert(`Subtitle generation failed: ${err}`);
       }
