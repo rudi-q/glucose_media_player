@@ -186,7 +186,7 @@
   const showSetupDialog = getContext<() => void>("showSetupDialog");
   const getSetupStatus = getContext<() => SetupStatus | null>("setupStatus");
 
-  let setupStatus = $state(getSetupStatus());
+  const setupStatus = $derived(getSetupStatus());
   let disposed = false;
   let videoSetupId = 0;
   let lastSetupRoute = "";
@@ -1831,6 +1831,7 @@
         >
           {isCancelling ? "Cancelling..." : "Cancel"}
         </button>
+        <p class="generation-hint">Do not close Glucose while generation is in progress.</p>
       </div>
     </div>
   {/if}
@@ -3144,6 +3145,34 @@
     color: rgba(255, 255, 255, 0.7);
     line-height: 1.5;
     margin: 0;
+  }
+
+  .cancel-generation-btn {
+    margin-top: 1.25rem;
+    padding: 0.45rem 1.25rem;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease;
+  }
+
+  .cancel-generation-btn:hover:not(:disabled) {
+    border-color: rgba(255, 255, 255, 0.38);
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .cancel-generation-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .generation-hint {
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.3);
   }
 
   /* Context Menu */
