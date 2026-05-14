@@ -126,6 +126,7 @@
   let generationStartTime = 0;        // wall-clock ms when generation began
   let transcriptionStartTime = 0;     // wall-clock ms when whisper progress first moved
   let generationVideoDuration = 0;    // video duration captured at generation start
+  let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
   let showModelSelector = $state(false);
   let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
 
@@ -419,13 +420,24 @@
                   generationMessage = `Transcribing... ${formatEstimatedTime(remaining)} remaining`;
                 }
               }
+              // Reset the watchdog — if 60 s pass with no transcription event,
+              // whisper has likely hung and we surface a warning.
+              if (watchdogTimer !== null) clearTimeout(watchdogTimer);
+              watchdogTimer = setTimeout(() => {
+                if (isGeneratingSubtitles) {
+                  generationMessage =
+                    "Still running — Whisper may be processing slowly on this machine. Please wait.";
+                }
+              }, 60_000);
             } else if (stage === "complete") {
+              if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
               setTimeout(() => {
                 isGeneratingSubtitles = false;
                 generationProgress = 0;
                 generationMessage = "";
               }, 500);
             } else if (stage === "error") {
+              if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
               isGeneratingSubtitles = false;
               generationProgress = 0;
               generationMessage = "";
@@ -519,6 +531,8 @@
       if (viewMode === "pip") {
         exitNativePipWindow().catch(() => resetPipBodyBackground());
       }
+      // Clear subtitle generation watchdog
+      if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
       // Clear volume menu auto-hide timer
       clearTimeout(volumeMenuAutoTimer);
       clearTimeout(hideControlsTimeout);
@@ -1616,6 +1630,7 @@
     generationStartTime = Date.now();
     transcriptionStartTime = 0;
     generationVideoDuration = duration ?? 0;
+    if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
 
     try {
       // Get current subtitle language from store at call time
