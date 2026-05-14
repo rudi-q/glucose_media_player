@@ -1548,6 +1548,21 @@ fn transcribe_audio_with_whisper(
     params.set_max_len(0); // Disable max length limit per segment
     params.set_split_on_word(true); // Split on word boundaries
 
+    // Emit real-time progress during state.full() via whisper's native progress callback.
+    // Whisper reports 0-100; we map that to the 50-90% band in our UI.
+    let app_handle_cb = app_handle.clone();
+    params.set_progress_callback_safe(move |progress: i32| {
+        let mapped = 50.0 + (progress as f32 / 100.0) * 40.0;
+        let _ = app_handle_cb.emit(
+            "subtitle-generation-progress",
+            SubtitleGenerationProgress {
+                stage: "transcribing".to_string(),
+                progress: mapped,
+                message: "Transcribing audio with AI...".to_string(),
+            },
+        );
+    });
+
     // Run transcription
     let mut state = ctx
         .create_state()
@@ -1560,7 +1575,7 @@ fn transcribe_audio_with_whisper(
     #[cfg(debug_assertions)]
     println!("Transcription complete, extracting segments...");
 
-    // Extract segments with timestamps
+    // Extract segments — progress was already reported live via the callback above.
     let num_segments = state.full_n_segments();
 
     #[cfg(debug_assertions)]
@@ -1569,41 +1584,20 @@ fn transcribe_audio_with_whisper(
     let mut segments = Vec::new();
 
     for i in 0..num_segments {
-        // 1. Fetch the segment object for this loop iteration
-        // USING .ok_or_else() INSTEAD OF .map_err() because get_segment returns an Option
         let segment = state
             .get_segment(i)
             .ok_or_else(|| format!("Failed to get segment {}", i))?;
 
-        // 2. Grab the timestamps from the object
-        let start_timestamp = segment.start_timestamp();
-        let end_timestamp = segment.end_timestamp();
+        let start_seconds = segment.start_timestamp() as f64 / 100.0;
+        let end_seconds = segment.end_timestamp() as f64 / 100.0;
 
-        // 3. Grab the text
         let text = segment
             .to_str()
             .map_err(|e| format!("Failed to parse segment text: {}", e))?
             .to_string();
 
-        // Convert from Whisper's timestamp units (10ms) to seconds
-        let start_seconds = start_timestamp as f64 / 100.0;
-        let end_seconds = end_timestamp as f64 / 100.0;
-
         if !text.trim().is_empty() {
             segments.push((start_seconds, end_seconds, text));
-        }
-
-        // Emit progress periodically
-        if i % 10 == 0 {
-            let progress = 50.0 + (i as f32 / num_segments as f32) * 40.0;
-            let _ = app_handle.emit(
-                "subtitle-generation-progress",
-                SubtitleGenerationProgress {
-                    stage: "transcribing".to_string(),
-                    progress,
-                    message: format!("Processing segment {} of {}...", i + 1, num_segments),
-                },
-            );
         }
     }
 

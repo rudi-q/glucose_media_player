@@ -123,6 +123,9 @@
   let isGeneratingSubtitles = $state(false);
   let generationProgress = $state(0);
   let generationMessage = $state("");
+  let generationStartTime = 0;        // wall-clock ms when generation began
+  let transcriptionStartTime = 0;     // wall-clock ms when whisper progress first moved
+  let generationVideoDuration = 0;    // video duration captured at generation start
   let showModelSelector = $state(false);
   let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
 
@@ -398,16 +401,31 @@
         listen<{ stage: string; progress: number; message: string }>(
           "subtitle-generation-progress",
           (event) => {
-            generationProgress = event.payload.progress;
-            generationMessage = event.payload.message;
+            const { stage, progress, message } = event.payload;
+            generationProgress = progress;
+            generationMessage = message;
 
-            if (event.payload.stage === "complete") {
+            if (stage === "transcribing") {
+              // Mark when whisper's progress first moves past the 50% threshold
+              if (transcriptionStartTime === 0 && progress > 50) {
+                transcriptionStartTime = Date.now();
+              }
+              // Overlay a live "~X remaining" estimate once we have enough data
+              if (transcriptionStartTime > 0) {
+                const whisperFraction = (progress - 50) / 40; // 0–1 within transcription
+                const elapsed = (Date.now() - transcriptionStartTime) / 1000;
+                if (whisperFraction > 0.05 && elapsed > 1) {
+                  const remaining = (elapsed / whisperFraction) * (1 - whisperFraction);
+                  generationMessage = `Transcribing... ${formatEstimatedTime(remaining)} remaining`;
+                }
+              }
+            } else if (stage === "complete") {
               setTimeout(() => {
                 isGeneratingSubtitles = false;
                 generationProgress = 0;
                 generationMessage = "";
               }, 500);
-            } else if (event.payload.stage === "error") {
+            } else if (stage === "error") {
               isGeneratingSubtitles = false;
               generationProgress = 0;
               generationMessage = "";
@@ -1595,6 +1613,9 @@
     isGeneratingSubtitles = true;
     generationProgress = 0;
     generationMessage = "Starting subtitle generation...";
+    generationStartTime = Date.now();
+    transcriptionStartTime = 0;
+    generationVideoDuration = duration ?? 0;
 
     try {
       // Get current subtitle language from store at call time
@@ -1604,6 +1625,14 @@
         modelSize: modelSize,
         language: currentSettings.subtitleLanguage,
       });
+
+      // Store the actual elapsed/duration ratio so future estimates are calibrated
+      // to this machine's performance for this model.
+      if (generationVideoDuration > 0) {
+        const elapsed = (Date.now() - generationStartTime) / 1000;
+        const coefficient = elapsed / generationVideoDuration;
+        localStorage.setItem(`glucose_whisper_coef_${modelSize}`, String(coefficient));
+      }
 
       // Auto-load the generated subtitle
       await loadSubtitle(subtitlePath);
@@ -1619,19 +1648,23 @@
   function getEstimatedTranscriptionTime(modelKey: string): string {
     if (!duration) return "Unknown";
 
-    const coefficients: Record<string, { min: number; max: number }> = {
+    // Prefer a coefficient measured on this machine from a previous run.
+    const stored = localStorage.getItem(`glucose_whisper_coef_${modelKey}`);
+    const calibrated = stored ? parseFloat(stored) : NaN;
+    if (!isNaN(calibrated) && calibrated > 0) {
+      return formatEstimatedTime(duration * calibrated);
+    }
+
+    // Fall back to conservative hardware-agnostic defaults.
+    const fallback: Record<string, { min: number; max: number }> = {
       tiny: { min: 0.15, max: 0.25 },
       small: { min: 0.6, max: 0.8 },
       "large-v3-turbo": { min: 0.9, max: 1.2 },
     };
-
-    const coef = coefficients[modelKey];
+    const coef = fallback[modelKey];
     if (!coef) return "Unknown";
 
-    const avgCoef = (coef.min + coef.max) / 2;
-    const estimatedSeconds = duration * avgCoef;
-
-    return formatEstimatedTime(estimatedSeconds);
+    return formatEstimatedTime(duration * ((coef.min + coef.max) / 2));
   }
 </script>
 
