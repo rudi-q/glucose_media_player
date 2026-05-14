@@ -1677,7 +1677,8 @@
     isCancelling = true;
     try {
       await invoke("cancel_subtitle_generation");
-    } catch {
+    } catch (e) {
+      console.error("cancel_subtitle_generation invoke failed:", e);
       isCancelling = false;
     }
   }
