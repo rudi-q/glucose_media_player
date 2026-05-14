@@ -1675,7 +1675,11 @@
 
   async function cancelSubtitleGeneration() {
     isCancelling = true;
-    await invoke("cancel_subtitle_generation");
+    try {
+      await invoke("cancel_subtitle_generation");
+    } catch {
+      isCancelling = false;
+    }
   }
 
   function getEstimatedTranscriptionTime(modelKey: string): string {

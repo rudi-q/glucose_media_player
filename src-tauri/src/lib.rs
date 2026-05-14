@@ -1363,6 +1363,24 @@ async fn generate_subtitles(
         .file_stem()
         .ok_or("Could not get video filename")?;
 
+    // Check the video has an audio track before creating any temp files.
+    // Skipped gracefully if ffprobe is unavailable — FFmpeg will surface the failure instead.
+    if let Some(e) = check_video_has_audio(&video_path).await {
+        let _ = app_handle.emit(
+            "subtitle-generation-progress",
+            SubtitleGenerationProgress {
+                stage: "error".to_string(),
+                progress: 0.0,
+                message: e.clone(),
+            },
+        );
+        return Err(e);
+    }
+
+    // Output subtitle path (alongside the video file)
+    let subtitle_path = video_dir.join(format!("{}.srt", video_stem.to_string_lossy()));
+    let subtitle_path_str = subtitle_path.to_string_lossy().to_string();
+
     // Create a uniquely named temp audio file in the system temp directory,
     // using the same pid+nanos+create_new pattern as remux_with_audio_track.
     let temp_dir = std::env::temp_dir();
@@ -1393,24 +1411,6 @@ async fn generate_subtitles(
     let temp_audio_path = temp_audio_path_opt
         .ok_or_else(|| "Failed to generate a unique temporary audio file path".to_string())?;
     let temp_audio_str = temp_audio_path.to_string_lossy().to_string();
-
-    // Output subtitle path (alongside the video file)
-    let subtitle_path = video_dir.join(format!("{}.srt", video_stem.to_string_lossy()));
-    let subtitle_path_str = subtitle_path.to_string_lossy().to_string();
-
-    // Check the video has an audio track before doing any heavy work.
-    // Skipped gracefully if ffprobe is unavailable — FFmpeg will surface the failure instead.
-    if let Some(e) = check_video_has_audio(&video_path).await {
-        let _ = app_handle.emit(
-            "subtitle-generation-progress",
-            SubtitleGenerationProgress {
-                stage: "error".to_string(),
-                progress: 0.0,
-                message: e.clone(),
-            },
-        );
-        return Err(e);
-    }
 
     // Step 1: Extract audio from video
     let _ = app_handle.emit(
