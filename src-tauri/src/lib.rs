@@ -8,7 +8,11 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use fs4::FileExt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
+
+// Signals an in-progress subtitle generation to abort at the next whisper checkpoint.
+static SUBTITLE_CANCEL: AtomicBool = AtomicBool::new(false);
 use std::thread;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -1338,6 +1342,9 @@ async fn generate_subtitles(
         println!("Model size: {}", model_size);
     }
 
+    // Clear any stale cancel signal from a previous run before starting.
+    SUBTITLE_CANCEL.store(false, Ordering::Relaxed);
+
     // Emit initial progress
     let _ = app_handle.emit(
         "subtitle-generation-progress",
@@ -1477,7 +1484,7 @@ async fn generate_subtitles(
     let app_handle_clone = app_handle.clone();
     let language_clone = language.clone();
 
-    tokio::task::spawn_blocking(move || {
+    let transcription_result = tokio::task::spawn_blocking(move || {
         transcribe_audio_with_whisper(
             &model_path_clone.to_string_lossy(),
             &temp_audio_clone,
@@ -1488,14 +1495,25 @@ async fn generate_subtitles(
     })
     .await
     .map_err(|e| format!("Transcription task failed: {}", e))
-    .and_then(|r| r)
-    .map_err(|e| {
-        let _ = fs::remove_file(&temp_audio_str);
-        e
-    })?;
+    .and_then(|r| r);
 
-    // Clean up temporary audio file
+    // Always clean up the temp audio file regardless of outcome.
     let _ = fs::remove_file(&temp_audio_str);
+
+    if let Err(e) = transcription_result {
+        if SUBTITLE_CANCEL.load(Ordering::Relaxed) {
+            let _ = app_handle.emit(
+                "subtitle-generation-progress",
+                SubtitleGenerationProgress {
+                    stage: "cancelled".to_string(),
+                    progress: 0.0,
+                    message: "Subtitle generation cancelled.".to_string(),
+                },
+            );
+            return Err("cancelled".to_string());
+        }
+        return Err(e);
+    }
 
     // Step 4: Complete
     let _ = app_handle.emit(
@@ -1508,6 +1526,11 @@ async fn generate_subtitles(
     );
 
     Ok(subtitle_path_str)
+}
+
+#[tauri::command]
+fn cancel_subtitle_generation() {
+    SUBTITLE_CANCEL.store(true, Ordering::Relaxed);
 }
 
 // Transcribe audio using whisper-rs
@@ -1562,6 +1585,9 @@ fn transcribe_audio_with_whisper(
             },
         );
     });
+
+    // Abort callback — checked at each whisper processing boundary.
+    params.set_abort_callback_safe(|| SUBTITLE_CANCEL.load(Ordering::Relaxed));
 
     // Run transcription
     let mut state = ctx
@@ -2285,6 +2311,7 @@ pub fn run() {
             remux_with_audio_track,
             delete_temp_file,
             generate_subtitles,
+            cancel_subtitle_generation,
             check_ffmpeg_installed,
             check_installed_models,
             get_setup_status,

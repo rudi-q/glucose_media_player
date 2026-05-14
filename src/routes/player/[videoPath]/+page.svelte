@@ -127,6 +127,7 @@
   let transcriptionStartTime = 0;     // wall-clock ms when whisper progress first moved
   let generationVideoDuration = 0;    // video duration captured at generation start
   let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  let isCancelling = $state(false);   // true after cancel button clicked, suppresses error alert
   let showModelSelector = $state(false);
   let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
 
@@ -432,13 +433,21 @@
               }, 60_000);
             } else if (stage === "complete") {
               if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
+              isCancelling = false;
               setTimeout(() => {
                 isGeneratingSubtitles = false;
                 generationProgress = 0;
                 generationMessage = "";
               }, 500);
+            } else if (stage === "cancelled") {
+              if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
+              isCancelling = false;
+              isGeneratingSubtitles = false;
+              generationProgress = 0;
+              generationMessage = "";
             } else if (stage === "error") {
               if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
+              isCancelling = false;
               isGeneratingSubtitles = false;
               generationProgress = 0;
               generationMessage = "";
@@ -1653,12 +1662,20 @@
       // Auto-load the generated subtitle
       await loadSubtitle(subtitlePath);
     } catch (err) {
-      console.error("Failed to generate subtitles:", err);
-      alert(`Subtitle generation failed: ${err}`);
+      if (!isCancelling) {
+        console.error("Failed to generate subtitles:", err);
+        alert(`Subtitle generation failed: ${err}`);
+      }
+      isCancelling = false;
       isGeneratingSubtitles = false;
       generationProgress = 0;
       generationMessage = "";
     }
+  }
+
+  async function cancelSubtitleGeneration() {
+    isCancelling = true;
+    await invoke("cancel_subtitle_generation");
   }
 
   function getEstimatedTranscriptionTime(modelKey: string): string {
@@ -1802,6 +1819,13 @@
           </div>
         </div>
         <p class="generation-message">{generationMessage}</p>
+        <button
+          class="cancel-generation-btn"
+          onclick={cancelSubtitleGeneration}
+          disabled={isCancelling}
+        >
+          {isCancelling ? "Cancelling..." : "Cancel"}
+        </button>
       </div>
     </div>
   {/if}
