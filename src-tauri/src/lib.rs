@@ -939,6 +939,29 @@ fn check_ffmpeg_installed() -> Result<bool, String> {
     }
 }
 
+// Returns the candidate directories to search for Whisper model files, in priority order.
+// Windows checks AppData\Local\glucose\resources\models first, then home\.whisper\models.
+// Non-Windows checks only home\.whisper\models.
+fn model_candidate_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
+        dirs.push(
+            std::path::Path::new(&app_data)
+                .join("glucose")
+                .join("resources")
+                .join("models"),
+        );
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".whisper").join("models"));
+    }
+
+    dirs
+}
+
 // Check which Whisper models are installed
 #[tauri::command]
 fn check_installed_models() -> Result<Vec<String>, String> {
@@ -951,56 +974,21 @@ fn check_installed_models() -> Result<Vec<String>, String> {
 
     println!("[Models Check] Starting model check...");
 
-    // Check resources folder in AppData\Local first
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
-            let resources_models_dir = std::path::Path::new(&app_data)
-                .join("glucose")
-                .join("resources")
-                .join("models");
-            let resources_path = resources_models_dir.to_string_lossy();
-            println!("[Models Check] Checking AppData\\Local: {}", resources_path);
-            if resources_models_dir.exists() {
-                println!("[Models Check] AppData\\Local models folder exists");
-                for (filename, model_name) in &model_files {
-                    let model_path = resources_models_dir.join(filename);
-                    if model_path.exists() {
-                        println!(
-                            "[Models Check] ✓ Found {} in AppData\\Local: {}",
-                            model_name, filename
-                        );
-                        models.push(model_name.to_string());
-                    } else {
-                        println!("[Models Check] ✗ {} not found in AppData\\Local", filename);
-                    }
-                }
-            } else {
-                println!("[Models Check] AppData\\Local models folder does not exist");
-            }
+    for dir in model_candidate_dirs() {
+        println!("[Models Check] Checking: {}", dir.display());
+        if !dir.exists() {
+            println!("[Models Check] Directory does not exist");
+            continue;
         }
-    }
-
-    // Check home directory
-    if let Some(home) = dirs::home_dir() {
-        let models_dir = home.join(".whisper").join("models");
-        let home_path = models_dir.to_string_lossy();
-        println!("[Models Check] Checking home directory: {}", home_path);
-        if models_dir.exists() {
-            println!("[Models Check] Home models folder exists");
-            for (filename, model_name) in &model_files {
-                if models_dir.join(filename).exists() && !models.contains(&model_name.to_string()) {
-                    println!(
-                        "[Models Check] ✓ Found {} in home: {}",
-                        model_name, filename
-                    );
-                    models.push(model_name.to_string());
-                } else if !models.contains(&model_name.to_string()) {
-                    println!("[Models Check] ✗ {} not found in home", filename);
-                }
+        println!("[Models Check] Directory exists");
+        for (filename, model_name) in &model_files {
+            let model_path = dir.join(filename);
+            if model_path.exists() && !models.contains(&model_name.to_string()) {
+                println!("[Models Check] ✓ Found {}: {}", model_name, filename);
+                models.push(model_name.to_string());
+            } else if !models.contains(&model_name.to_string()) {
+                println!("[Models Check] ✗ {} not found", filename);
             }
-        } else {
-            println!("[Models Check] Home models folder does not exist");
         }
     }
 
@@ -1226,29 +1214,13 @@ async fn download_file_with_progress(
     Ok(())
 }
 
-// Find an installed Whisper model file, checking AppData (Windows) before the home directory.
-// Returns None if the model is not found in either location.
+// Find an installed Whisper model file across all candidate directories.
+// Returns None if the model is not present in any location.
 fn find_model_path(model_name: &str) -> Option<std::path::PathBuf> {
-    #[cfg(target_os = "windows")]
-    if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
-        let p = std::path::Path::new(&app_data)
-            .join("glucose")
-            .join("resources")
-            .join("models")
-            .join(model_name);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-
-    if let Some(home) = dirs::home_dir() {
-        let p = home.join(".whisper").join("models").join(model_name);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-
-    None
+    model_candidate_dirs()
+        .into_iter()
+        .map(|dir| dir.join(model_name))
+        .find(|p| p.exists())
 }
 
 // Verify the video file has at least one audio stream before attempting extraction.
@@ -1384,10 +1356,35 @@ async fn generate_subtitles(
         .file_stem()
         .ok_or("Could not get video filename")?;
 
-    // Write temp audio to the system temp directory, not the video's directory,
-    // to avoid permission issues on read-only mounts or restricted paths.
-    let temp_audio_path = std::env::temp_dir()
-        .join(format!("{}_temp_audio.wav", video_stem.to_string_lossy()));
+    // Create a uniquely named temp audio file in the system temp directory,
+    // using the same pid+nanos+create_new pattern as remux_with_audio_track.
+    let temp_dir = std::env::temp_dir();
+    let mut temp_audio_path_opt: Option<std::path::PathBuf> = None;
+    for i in 0..100u128 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let candidate = temp_dir.join(format!(
+            "glucose_subtitle_{}_{}.wav",
+            std::process::id(),
+            nanos + i,
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(_) => {
+                temp_audio_path_opt = Some(candidate);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("Failed to create temporary audio file: {}", e)),
+        }
+    }
+    let temp_audio_path = temp_audio_path_opt
+        .ok_or_else(|| "Failed to generate a unique temporary audio file path".to_string())?;
     let temp_audio_str = temp_audio_path.to_string_lossy().to_string();
 
     // Output subtitle path (alongside the video file)
