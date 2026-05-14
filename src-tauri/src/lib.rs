@@ -1252,7 +1252,10 @@ fn find_model_path(model_name: &str) -> Option<std::path::PathBuf> {
 }
 
 // Verify the video file has at least one audio stream before attempting extraction.
-async fn check_video_has_audio(video_path: &str) -> Result<(), String> {
+// Returns Some(error) only when ffprobe ran successfully and confirmed no audio track.
+// Returns None when ffprobe is unavailable or errored — callers should proceed and
+// let FFmpeg surface the real failure rather than blocking on a missing preflight tool.
+async fn check_video_has_audio(video_path: &str) -> Option<String> {
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
     let mut cmd = get_ffprobe_command();
     cmd.args([
@@ -1266,17 +1269,19 @@ async fn check_video_has_audio(video_path: &str) -> Result<(), String> {
         "default=noprint_wrappers=1",
         video_path,
     ]);
-    let output = run_with_timeout(cmd, TIMEOUT, "ffprobe").await?;
+    let output = match run_with_timeout(cmd, TIMEOUT, "ffprobe").await {
+        Ok(o) => o,
+        Err(_) => return None, // ffprobe not available — skip the check
+    };
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to inspect video for audio streams: {}", stderr));
+        return None; // ffprobe errored (e.g. unreadable file) — let FFmpeg handle it
     }
     if String::from_utf8_lossy(&output.stdout).trim().is_empty() {
-        return Err(
+        return Some(
             "This video has no audio track. AI subtitle generation requires audio.".to_string(),
         );
     }
-    Ok(())
+    None
 }
 
 // Helper function to extract audio from video using FFmpeg
@@ -1389,8 +1394,9 @@ async fn generate_subtitles(
     let subtitle_path = video_dir.join(format!("{}.srt", video_stem.to_string_lossy()));
     let subtitle_path_str = subtitle_path.to_string_lossy().to_string();
 
-    // Check the video has an audio track before doing any heavy work
-    if let Err(e) = check_video_has_audio(&video_path).await {
+    // Check the video has an audio track before doing any heavy work.
+    // Skipped gracefully if ffprobe is unavailable — FFmpeg will surface the failure instead.
+    if let Some(e) = check_video_has_audio(&video_path).await {
         let _ = app_handle.emit(
             "subtitle-generation-progress",
             SubtitleGenerationProgress {
