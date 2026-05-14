@@ -407,8 +407,9 @@
             generationMessage = message;
 
             if (stage === "transcribing") {
-              // Mark when whisper's progress first moves past the 50% threshold
-              if (transcriptionStartTime === 0 && progress > 50) {
+              // Start timing from the initial 50% event so elapsed and whisperFraction
+              // share the same baseline — both measured from progress=50, not the first callback.
+              if (transcriptionStartTime === 0) {
                 transcriptionStartTime = Date.now();
               }
               // Overlay a live "~X remaining" estimate once we have enough data
