@@ -5,6 +5,14 @@
 
   let { onClose }: { onClose: () => void } = $props();
 
+  $effect(() => {
+    function handleKeydown(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', handleKeydown);
+    return () => document.removeEventListener('keydown', handleKeydown);
+  });
+
   const FONT_FAMILIES = [
     { label: 'Inter', value: "'Inter Variable', Inter, system-ui, sans-serif" },
     { label: 'Georgia', value: "'Georgia', 'Times New Roman', serif" },
@@ -43,7 +51,7 @@
   }
 </script>
 
-<div class="style-panel" role="dialog" aria-label="Subtitle style settings">
+<div class="style-panel" role="dialog" aria-modal="true" aria-label="Subtitle style settings">
   <div class="panel-header">
     <span class="panel-title">Subtitle Style</span>
     <button class="close-btn" onclick={onClose} aria-label="Close"><X size={14} /></button>
