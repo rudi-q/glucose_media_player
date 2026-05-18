@@ -1,6 +1,6 @@
 [package]
 name = "glucose"
-version = "3.3.1"
+version = "3.3.2"
 description = "A minimalist video player"
 edition = "2021"
 
@@ -26,12 +26,18 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "5.0.1"
 urlencoding = "2.1.3"
-whisper-rs = "0.16.0"
+# AI subtitle generation deps — commented out for Mac App Store submission.
+# Uncomment along with the AI code in src/lib.rs to re-enable.
+# whisper-rs = "0.16.0"
 tokio = { version = "1.51.0", features = ["full"] }
-reqwest = { version = "0.13.2", features = ["stream"] }
-futures-util = "0.3.32"
+# reqwest = { version = "0.13.2", features = ["stream"] }
+# futures-util = "0.3.32"
 anyhow = "1.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tauri-plugin-updater = "2.10.0"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+base64 = "0.22.1"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSError", "NSObject", "NSString", "NSURL"] }

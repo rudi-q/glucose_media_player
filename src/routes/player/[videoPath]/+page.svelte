@@ -1585,10 +1585,12 @@
                     >Open .srt, .vtt or compatible file</span
                   >
                 </button>
+                <!-- "Generate with AI" option commented out for Mac App Store first submission.
                 <button class="model-option" onclick={openAIFromUnifiedMenu}>
                   <span class="model-name">Generate with AI</span>
                   <span class="model-desc">Auto-generate using Whisper AI</span>
                 </button>
+                -->
                 {#if embeddedSubtitleTracks.length > 0}
                   <div class="subtitle-menu-divider"></div>
                   {#each embeddedSubtitleTracks as track}

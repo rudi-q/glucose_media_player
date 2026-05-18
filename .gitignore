@@ -22,6 +22,14 @@ src-tauri/latest.json
 src-tauri/*.key
 src-tauri/*.key.pub
 
+# Bundled sidecar binaries — fetched locally, not stored in git (large, platform-specific)
+src-tauri/binaries/
+
+# Signed installer / packaged build artifacts
+*.pkg
+*.dmg
+*.app
+
 # Shell scripts in root
 /*.sh
 

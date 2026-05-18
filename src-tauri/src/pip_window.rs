@@ -504,8 +504,7 @@ fn clamp_i32(value: i32, min: i32, max: i32) -> i32 {
 }
 
 fn user_config_path() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    Ok(home.join(".glucose").join("config.json"))
+    crate::storage::config_file_path()
 }
 
 fn load_saved_pip_layout() -> Result<Option<PipWindowLayout>, String> {

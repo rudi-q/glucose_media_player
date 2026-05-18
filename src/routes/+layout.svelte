@@ -83,11 +83,13 @@
   let downloadProgress = $state(0);
   let downloadMessage = $state("");
   let isCheckingForUpdates = $state(false);
-  let selectedTab = $state("ai"); // 'ai' | 'library' | 'shortcuts' | 'updates' | 'community' | 'about'
+  // Default tab was "ai"; switched to "library" while the AI Settings tab is commented out for MAS submission.
+  let selectedTab = $state("library"); // 'ai' | 'library' | 'shortcuts' | 'updates' | 'community' | 'about'
   let modelsExpanded = $state(false);
+  let updaterSupported = $state(false);
 
   // Update manager
-  let updateManager: UpdateManagerAPI;
+  let updateManager = $state<UpdateManagerAPI | undefined>(undefined);
   let isOnGallery = $state(true);
 
   // Initialize from localStorage if available
@@ -172,8 +174,12 @@
       }
     })();
 
-    // Check setup status on first launch, then reveal the app
-    checkSetupStatus().finally(() => {
+    Promise.allSettled([
+      checkSetupStatus(),
+      invoke<boolean>("updater_supported").then((supported) => {
+        updaterSupported = supported;
+      }),
+    ]).finally(() => {
       appReady = true;
     });
 
@@ -197,12 +203,13 @@
       const status = await invoke<SetupStatus>("get_setup_status");
       setupStore.setStatus(status);
 
-      // Show setup dialog on first launch if not completed
-      if (!status.setup_completed && status.models_installed.length === 0) {
-        setTimeout(() => {
-          showSetupDialog = true;
-        }, 1500);
-      }
+      // AI setup dialog auto-popup commented out for Mac App Store submission.
+      // // Show setup dialog on first launch if not completed
+      // if (!status.setup_completed && status.models_installed.length === 0) {
+      //   setTimeout(() => {
+      //     showSetupDialog = true;
+      //   }, 1500);
+      // }
     } catch (err) {
       console.error("Failed to check setup status:", err);
     }
@@ -276,15 +283,17 @@
   }
 </script>
 
-<!-- Update System -->
-<UpdateManager
-  bind:this={updateManager}
-  disableAutoCheck={!isOnGallery}
-  onAutoCheckStart={handleAutoCheckStart}
-  onAutoCheckTimeUpdate={handleAutoCheckTimeUpdate}
-  {lastAutoCheckTime}
-/>
-<UpdateNotification />
+{#if updaterSupported}
+  <!-- Update System -->
+  <UpdateManager
+    bind:this={updateManager}
+    disableAutoCheck={!isOnGallery}
+    onAutoCheckStart={handleAutoCheckStart}
+    onAutoCheckTimeUpdate={handleAutoCheckTimeUpdate}
+    {lastAutoCheckTime}
+  />
+  <UpdateNotification />
+{/if}
 
 {#if !appReady}
   <div class="splash-screen" out:fade={{ duration: 250 }}>
@@ -322,6 +331,7 @@
 
       <div class="settings-layout">
         <div class="settings-sidebar">
+          <!-- AI Settings tab commented out for Mac App Store first submission.
           <button
             class="sidebar-tab"
             class:active={selectedTab === "ai"}
@@ -330,6 +340,7 @@
             <Cpu size={18} />
             <span>AI Settings</span>
           </button>
+          -->
           <button
             class="sidebar-tab"
             class:active={selectedTab === "library"}
@@ -346,14 +357,16 @@
             <Keyboard size={18} />
             <span>Shortcuts</span>
           </button>
-          <button
-            class="sidebar-tab"
-            class:active={selectedTab === "updates"}
-            onclick={() => (selectedTab = "updates")}
-          >
-            <Download size={18} />
-            <span>Updates</span>
-          </button>
+          {#if updaterSupported}
+            <button
+              class="sidebar-tab"
+              class:active={selectedTab === "updates"}
+              onclick={() => (selectedTab = "updates")}
+            >
+              <Download size={18} />
+              <span>Updates</span>
+            </button>
+          {/if}
           <button
             class="sidebar-tab"
             class:active={selectedTab === "community"}
@@ -706,6 +719,7 @@
                   </div>
                 </div>
 
+                <!-- "Report inappropriate AI subtitles" item commented out for MAS submission.
                 <div class="settings-item">
                   <div class="settings-item-label">
                     <div class="settings-item-title">Report Subtitles</div>
@@ -723,6 +737,8 @@
                     </Button>
                   </div>
                 </div>
+                -->
+
 
                 <div class="settings-item">
                   <div class="settings-item-label">
@@ -735,6 +751,7 @@
                     class="settings-item-action"
                     style="gap: 0.5rem; display: flex; flex-wrap: wrap; justify-content: flex-end;"
                   >
+                    <!-- Sponsor button removed for Mac App Store (guideline 3.1.1 — external payments must use IAP).
                     <Button
                       variant="primary"
                       size="sm"
@@ -743,6 +760,7 @@
                     >
                       <Heart size={14} fill="white" /> Sponsor
                     </Button>
+                    -->
                     <Button
                       variant="secondary"
                       size="sm"
@@ -856,8 +874,12 @@
                     class="about-logo"
                   />
                   <p class="about-description">
+                    <!-- "AI-powered" wording removed for Mac App Store submission. Original:
                     A lightweight, AI-powered minimalist video player designed
                     for seamless playback and accessibility.
+                    -->
+                    A lightweight, minimalist video player designed for seamless
+                    playback and accessibility.
                   </p>
                 </div>
                 <span class="about-version-pill">{getFormattedVersion()}</span>
