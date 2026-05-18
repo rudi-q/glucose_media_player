@@ -44,6 +44,8 @@
     savePipWindowLayout,
   } from "$lib/utils/pipWindow";
   import { loadSubtitleFile, convertSrtToVtt } from "$lib/utils/subtitles";
+  import SubtitleOverlay from "$lib/subtitle/SubtitleOverlay.svelte";
+  import SubtitleStylePanel from "$lib/subtitle/SubtitleStylePanel.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     formatTime,
@@ -61,7 +63,6 @@
   let backgroundVideo = $state<HTMLVideoElement>();
   let previewVideo = $state<HTMLVideoElement>();
   let previewCanvas = $state<HTMLCanvasElement>();
-  let trackElement = $state<HTMLTrackElement>();
 
   // Playback state
   let videoSrc = $state<string | null>(null);
@@ -90,9 +91,11 @@
 
   // Subtitle state
   let subtitleSrc = $state<string | null>(null);
+  let subtitleContent = $state<string | null>(null);
   let subtitlesEnabled = $state(true);
   let subtitleFileName = $state<string | null>(null);
   let showSubtitleMenu = $state(false);
+  let showSubtitleStylePanel = $state(false);
 
   // Embedded subtitle tracks (populated for MKV and other containers)
   interface EmbeddedSubtitleTrack {
@@ -295,6 +298,7 @@
       URL.revokeObjectURL(subtitleSrc);
     }
     subtitleSrc = null;
+    subtitleContent = null;
     subtitleFileName = null;
     embeddedSubtitleTracks = [];
     selectedEmbeddedLanguage = "en";
@@ -673,6 +677,7 @@
       }
 
       subtitleSrc = result.blobUrl;
+      subtitleContent = result.vttContent;
       subtitleFileName = result.fileName;
       selectedEmbeddedLanguage = '';
       subtitlesEnabled = true;
@@ -723,9 +728,10 @@
         URL.revokeObjectURL(subtitleSrc);
       }
 
-      const vttContent = convertSrtToVtt(srtContent);
-      const blob = new Blob([vttContent], { type: "text/vtt;charset=utf-8" });
+      const vttText = convertSrtToVtt(srtContent);
+      const blob = new Blob([vttText], { type: "text/vtt;charset=utf-8" });
       subtitleSrc = URL.createObjectURL(blob);
+      subtitleContent = vttText;
       subtitleFileName = formatEmbeddedTrackLabel(track);
       selectedEmbeddedLanguage = track.language ?? 'en';
       subtitlesEnabled = true;
@@ -743,15 +749,8 @@
   }
 
   function toggleSubtitles() {
-    if (!trackElement?.track || !subtitleSrc) return;
-
+    if (!subtitleSrc) return;
     subtitlesEnabled = !subtitlesEnabled;
-    trackElement.track.mode = subtitlesEnabled ? "showing" : "hidden";
-  }
-
-  function handleTrackLoad() {
-    if (!subtitlesEnabled || !trackElement || !trackElement.track) return;
-    trackElement.track.mode = subtitlesEnabled ? "showing" : "hidden";
   }
 
   async function goHome() {
@@ -1763,19 +1762,13 @@
       onclick={togglePlay}
       oncontextmenu={handleContextMenu}
       crossorigin="anonymous"
-    >
-      {#if subtitleSrc}
-        <track
-          bind:this={trackElement}
-          kind="subtitles"
-          src={subtitleSrc}
-          srclang={selectedEmbeddedLanguage || undefined}
-          label="Subtitles"
-          default
-          onload={handleTrackLoad}
-        />
-      {/if}
-    </video>
+    ></video>
+
+    <SubtitleOverlay
+      vttContent={subtitleContent}
+      {currentTime}
+      enabled={subtitlesEnabled}
+    />
   </div>
 
   <!-- HEVC codec warning banner -->
@@ -2048,9 +2041,24 @@
                     >
                   </button>
                 {/if}
+                <div class="subtitle-menu-divider"></div>
+                <button
+                  class="model-option"
+                  onclick={() => {
+                    showSubtitleMenu = false;
+                    showSubtitleStylePanel = !showSubtitleStylePanel;
+                  }}
+                >
+                  <span class="model-name">Customize style</span>
+                  <span class="model-desc">Font, size, color, and more</span>
+                </button>
               </div>
             {/if}
           </div>
+
+          {#if showSubtitleStylePanel}
+            <SubtitleStylePanel onClose={() => (showSubtitleStylePanel = false)} />
+          {/if}
 
           <!-- Model selector anchored to unified subtitle control -->
           {#if showModelSelector && !isGeneratingSubtitles}
@@ -2909,43 +2917,6 @@
   .audio-track-desc {
     font-size: 0.65rem;
     color: rgba(255, 255, 255, 0.5);
-  }
-
-  /* Subtitle styling */
-  :global(video::cue) {
-    background-color: rgba(0, 0, 0, 0.8) !important;
-    color: #ffffff !important;
-    font-size: 1.5em !important;
-    font-family: 'Inter Variable', 'Inter', system-ui, sans-serif !important;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9) !important;
-    line-height: 1.4 !important;
-    padding: 0.2em 0.5em !important;
-  }
-
-  :global(video::-webkit-media-text-track-container) {
-    position: absolute !important;
-    bottom: 0 !important;
-    left: 0 !important;
-    right: 0 !important;
-    display: flex !important;
-    flex-direction: column !important;
-    justify-content: flex-end !important;
-    padding-bottom: 8vh !important;
-    pointer-events: none !important;
-  }
-
-  :global(video::-webkit-media-text-track-display) {
-    font-size: 24px;
-    padding-top: 2vh !important;
-    text-align: center !important;
-    width: 100% !important;
-  }
-
-  :global(video::cue-region) {
-    position: absolute !important;
-    bottom: 86vh !important;
-    left: 0 !important;
-    right: 0 !important;
   }
 
   .subtitle-control {
