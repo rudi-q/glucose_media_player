@@ -67,7 +67,7 @@ function createSubtitleStyleStore() {
     },
     customize(overrides: Partial<Omit<SubtitleStyle, 'id' | 'name'>>) {
       update((current) => {
-        const next = { ...current, customizations: { ...current.customizations, ...overrides } };
+        const next = { ...current, customizations: { ...current.customizations, ...sanitizeCustomizations(overrides) } };
         saveToStorage(next);
         return next;
       });

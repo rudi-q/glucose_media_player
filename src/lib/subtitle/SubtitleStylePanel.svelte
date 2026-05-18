@@ -51,7 +51,7 @@
   }
 </script>
 
-<div class="style-panel" role="dialog" aria-modal="true" aria-label="Subtitle style settings">
+<div class="style-panel" role="dialog" aria-label="Subtitle style settings">
   <div class="panel-header">
     <span class="panel-title">Subtitle Style</span>
     <button class="close-btn" onclick={onClose} aria-label="Close"><X size={14} /></button>
@@ -122,6 +122,7 @@
             class:active={$activeSubtitleStyle.color === tc.value}
             style="background-color: {tc.value};"
             title={tc.label}
+            aria-label="Color: {tc.label}"
             onclick={() => subtitleStyleStore.customize({ color: tc.value })}
           ></button>
         {/each}
@@ -129,6 +130,7 @@
           <input
             type="color"
             class="color-picker-input"
+            aria-label="Choose custom color"
             value={$activeSubtitleStyle.color}
             oninput={(e) => subtitleStyleStore.customize({ color: e.currentTarget.value })}
           />

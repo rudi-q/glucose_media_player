@@ -117,6 +117,9 @@
   }
 
   function sanitize(text: string): string {
+    if (typeof document === 'undefined') {
+      return escapeHtml(text).replace(/\n/g, '<br>');
+    }
     const template = document.createElement('template');
     template.innerHTML = text.replace(/\n/g, '<br>');
     return Array.from(template.content.childNodes).map(serializeCueNode).join('');
@@ -146,7 +149,7 @@
     aria-atomic="true"
   >
     <div class="subtitle-cues" style="bottom: {style.position}%">
-      {#each activeCues as cue (`${cue.start}-${cue.end}`)}
+      {#each activeCues as cue (`${cue.start}-${cue.end}-${cue.text}`)}
         <div
           class="cue-wrapper"
           class:pill={style.backgroundType === 'pill'}

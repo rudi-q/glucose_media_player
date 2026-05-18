@@ -39,7 +39,7 @@ export function parseVtt(content: string): VttCue[] {
 
     const start = parseTimestamp(startRaw);
     const end = parseTimestamp(endRaw);
-    if (isNaN(start) || isNaN(end)) continue;
+    if (isNaN(start) || isNaN(end) || end <= start) continue;
 
     const textLines = lines.slice(arrowIndex + 1);
     const text = textLines.join('\n').trim();
