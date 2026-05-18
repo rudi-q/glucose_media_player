@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -10,7 +10,7 @@ use base64::Engine;
 #[cfg(target_os = "macos")]
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 #[cfg(target_os = "macos")]
-use objc2::rc::autoreleasepool;
+use objc2::rc::{Retained, autoreleasepool};
 #[cfg(target_os = "macos")]
 use objc2::runtime::Bool;
 #[cfg(target_os = "macos")]
@@ -21,8 +21,14 @@ use objc2_foundation::{
 
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 
+// Holds resolved NSURLs for the lifetime of the app so security-scoped access
+// (started via startAccessingSecurityScopedResource) remains valid for as long
+// as the app is running. Dropping the Retained<NSURL> revokes the kernel
+// grant, which causes the asset:// protocol used by <video> to get EACCES on
+// every file under a user-picked gallery folder.
 #[cfg(target_os = "macos")]
-static ACTIVE_GALLERY_BOOKMARKS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static ACTIVE_GALLERY_BOOKMARKS: OnceLock<Mutex<HashMap<String, Retained<NSURL>>>> =
+    OnceLock::new();
 
 #[cfg(target_os = "macos")]
 const GALLERY_BOOKMARKS_KEY: &str = "gallery_path_bookmarks";
@@ -408,8 +414,8 @@ fn migrate_legacy_directory(from: &Path, to: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn active_gallery_bookmarks() -> &'static Mutex<HashSet<String>> {
-    ACTIVE_GALLERY_BOOKMARKS.get_or_init(|| Mutex::new(HashSet::new()))
+fn active_gallery_bookmarks() -> &'static Mutex<HashMap<String, Retained<NSURL>>> {
+    ACTIVE_GALLERY_BOOKMARKS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 #[cfg(target_os = "macos")]
@@ -436,6 +442,22 @@ fn resolve_security_scoped_bookmark(bookmark: &str) -> Result<PathBuf, String> {
         .decode(bookmark)
         .map_err(|e| format!("Failed to decode bookmark: {}", e))?;
 
+    // Fast path: if this bookmark has already been resolved this session, the
+    // retained NSURL is still keeping the security scope alive — reuse it.
+    {
+        let active = active_gallery_bookmarks()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(url) = active.get(bookmark) {
+            return autoreleasepool(|_| {
+                let resolved = url.path().ok_or_else(|| {
+                    "Resolved bookmark did not contain a filesystem path".to_string()
+                })?;
+                Ok(PathBuf::from(resolved.to_string()))
+            });
+        }
+    }
+
     autoreleasepool(|_| {
         let data = unsafe { NSData::dataWithBytes_length(bytes.as_ptr().cast(), bytes.len()) };
         let mut is_stale = Bool::NO;
@@ -450,17 +472,9 @@ fn resolve_security_scoped_bookmark(bookmark: &str) -> Result<PathBuf, String> {
         }
         .map_err(ns_error_message)?;
 
-        {
-            let mut active = active_gallery_bookmarks()
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if !active.contains(bookmark) {
-                let started = unsafe { url.startAccessingSecurityScopedResource() };
-                if !started {
-                    return Err("macOS refused security-scoped access for this folder".to_string());
-                }
-                active.insert(bookmark.to_string());
-            }
+        let started = unsafe { url.startAccessingSecurityScopedResource() };
+        if !started {
+            return Err("macOS refused security-scoped access for this folder".to_string());
         }
 
         if is_stale.as_bool() {
@@ -471,7 +485,17 @@ fn resolve_security_scoped_bookmark(bookmark: &str) -> Result<PathBuf, String> {
         let resolved = url
             .path()
             .ok_or_else(|| "Resolved bookmark did not contain a filesystem path".to_string())?;
-        Ok(PathBuf::from(resolved.to_string()))
+        let path = PathBuf::from(resolved.to_string());
+
+        // Retain the NSURL for the app's lifetime so the security scope stays
+        // open. Without this, the asset:// protocol used by <video> via
+        // convertFileSrc gets EACCES on every file under this folder.
+        let mut active = active_gallery_bookmarks()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        active.insert(bookmark.to_string(), url);
+
+        Ok(path)
     })
 }
 
