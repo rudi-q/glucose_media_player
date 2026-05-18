@@ -9,12 +9,24 @@ interface StyleState {
 }
 
 function loadFromStorage(): StyleState {
+  const fallback: StyleState = { presetId: DEFAULT_PRESET_ID, customizations: {} };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { presetId: DEFAULT_PRESET_ID, customizations: {} };
-    return JSON.parse(raw) as StyleState;
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof parsed.presetId === 'string' &&
+      parsed.customizations !== null &&
+      typeof parsed.customizations === 'object' &&
+      SUBTITLE_PRESETS.some((p) => p.id === parsed.presetId)
+    ) {
+      return parsed as StyleState;
+    }
+    return fallback;
   } catch {
-    return { presetId: DEFAULT_PRESET_ID, customizations: {} };
+    return fallback;
   }
 }
 
@@ -32,7 +44,8 @@ function createSubtitleStyleStore() {
   return {
     subscribe,
     setPreset(id: string) {
-      const next = { presetId: id, customizations: {} };
+      const valid = SUBTITLE_PRESETS.some((p) => p.id === id);
+      const next = { presetId: valid ? id : DEFAULT_PRESET_ID, customizations: {} };
       saveToStorage(next);
       set(next);
     },

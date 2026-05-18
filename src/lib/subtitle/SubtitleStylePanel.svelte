@@ -152,7 +152,7 @@
 <style>
   .style-panel {
     position: fixed;
-    bottom: 5rem;
+    bottom: 6.5rem;
     right: 1rem;
     width: 320px;
     z-index: 500;
@@ -226,6 +226,11 @@
   .preset-card.active {
     border-color: rgba(255, 255, 255, 0.5);
     background: rgba(255, 255, 255, 0.08);
+  }
+
+  .preset-card:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.8);
+    outline-offset: 2px;
   }
 
   .preset-preview {
@@ -313,6 +318,16 @@
     background: #fff;
     border-radius: 50%;
     cursor: pointer;
+  }
+
+  .slider-row input[type='range']::-moz-range-thumb {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    background: #fff;
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
   }
 
   .slider-value {
@@ -414,5 +429,12 @@
   .reset-btn:hover {
     color: rgba(255, 255, 255, 0.7);
     background: rgba(255, 255, 255, 0.05);
+  }
+
+  @media (max-width: 360px) {
+    .style-panel {
+      width: calc(100% - 1rem);
+      right: 0.5rem;
+    }
   }
 </style>

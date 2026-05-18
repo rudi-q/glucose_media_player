@@ -1020,6 +1020,9 @@
     if (showContextMenu && !target.closest(".context-menu")) {
       showContextMenu = false;
     }
+    if (showSubtitleStylePanel && !target.closest(".style-panel") && !target.closest(".subtitle-control")) {
+      showSubtitleStylePanel = false;
+    }
   }
 
   async function handleContextMenu(e: MouseEvent) {

@@ -10,6 +10,7 @@ export interface SubtitleStyle {
   textShadow: string;
   textStroke: string;
   letterSpacing: string;
+  /** Vertical position as a percentage from the bottom of the viewport */
   position: number;
   lineHeight: number;
 }
@@ -124,3 +125,7 @@ export const SUBTITLE_PRESETS: SubtitleStyle[] = [
 ];
 
 export const DEFAULT_PRESET_ID = 'classic';
+
+if (!SUBTITLE_PRESETS.some((p) => p.id === DEFAULT_PRESET_ID)) {
+  throw new Error(`DEFAULT_PRESET_ID '${DEFAULT_PRESET_ID}' not found in SUBTITLE_PRESETS`);
+}
