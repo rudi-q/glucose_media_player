@@ -96,7 +96,7 @@
         <input
           type="range"
           min="4"
-          max="40"
+          max="90"
           step="1"
           value={$activeSubtitleStyle.position}
           oninput={(e) => subtitleStyleStore.customize({ position: +e.currentTarget.value })}

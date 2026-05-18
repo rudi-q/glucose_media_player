@@ -1768,6 +1768,7 @@
       vttContent={subtitleContent}
       {currentTime}
       enabled={subtitlesEnabled}
+      {videoElement}
     />
   </div>
 
