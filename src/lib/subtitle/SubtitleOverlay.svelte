@@ -149,7 +149,7 @@
     aria-atomic="true"
   >
     <div class="subtitle-cues" style="bottom: {style.position}%">
-      {#each activeCues as cue (`${cue.start}-${cue.end}-${cue.text}`)}
+      {#each activeCues as cue, i (`${i}-${cue.start}-${cue.end}-${cue.text}`)}
         <div
           class="cue-wrapper"
           class:pill={style.backgroundType === 'pill'}
