@@ -166,6 +166,7 @@
     right: 1rem;
     width: 320px;
     z-index: 500;
+    pointer-events: auto;
     background: rgba(14, 14, 16, 0.94);
     backdrop-filter: blur(24px);
     -webkit-backdrop-filter: blur(24px);

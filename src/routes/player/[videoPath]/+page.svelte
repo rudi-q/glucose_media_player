@@ -982,10 +982,19 @@
 
     // Show controls whenever the mouse moves anywhere over the player
     showControls = true;
+    scheduleHideControls(2000);
+  }
+
+  function scheduleHideControls(delay: number) {
     clearTimeout(hideControlsTimeout);
     hideControlsTimeout = setTimeout(() => {
-      showControls = false;
-    }, 2000);
+      if (!showSubtitleStylePanel) showControls = false;
+    }, delay);
+  }
+
+  function closeSubtitleStylePanel() {
+    showSubtitleStylePanel = false;
+    scheduleHideControls(1000);
   }
 
   function handleControlsEnter() {
@@ -994,9 +1003,7 @@
   }
 
   function handleControlsLeave() {
-    hideControlsTimeout = setTimeout(() => {
-      showControls = false;
-    }, 500);
+    scheduleHideControls(500);
   }
 
   function handleClickOutside(e: MouseEvent) {
@@ -1021,7 +1028,7 @@
       showContextMenu = false;
     }
     if (showSubtitleStylePanel && !target.closest(".style-panel") && !target.closest(".subtitle-control")) {
-      showSubtitleStylePanel = false;
+      closeSubtitleStylePanel();
     }
   }
 
@@ -1338,9 +1345,7 @@
 
     // Show controls briefly when video loads
     showControls = true;
-    hideControlsTimeout = setTimeout(() => {
-      showControls = false;
-    }, 3000);
+    scheduleHideControls(3000);
   }
 
   function handleProgressHover(e: MouseEvent) {
@@ -2048,9 +2053,11 @@
                 <div class="subtitle-menu-divider"></div>
                 <button
                   class="model-option"
-                  onclick={() => {
+                  onclick={(e) => {
+                    e.stopPropagation();
                     showSubtitleMenu = false;
-                    showSubtitleStylePanel = !showSubtitleStylePanel;
+                    if (showSubtitleStylePanel) closeSubtitleStylePanel();
+                    else showSubtitleStylePanel = true;
                   }}
                 >
                   <span class="model-name">Customize style</span>
@@ -2061,7 +2068,7 @@
           </div>
 
           {#if showSubtitleStylePanel}
-            <SubtitleStylePanel onClose={() => (showSubtitleStylePanel = false)} />
+            <SubtitleStylePanel onClose={closeSubtitleStylePanel} />
           {/if}
 
           <!-- Model selector anchored to unified subtitle control -->
