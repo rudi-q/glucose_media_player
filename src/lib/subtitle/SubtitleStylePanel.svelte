@@ -35,8 +35,10 @@
       style += ` text-shadow: ${preset.textShadow};`;
     }
     if (preset.textStroke !== 'none') {
-      const strokeColor = preset.color === '#000000' ? '#fff' : '#000';
-      style += ` -webkit-text-stroke: 1px ${strokeColor};`;
+      const parts = preset.textStroke.split(' ');
+      const width = parts[0] ?? '1px';
+      const color = parts[1] ?? (preset.color === '#000000' ? '#fff' : '#000');
+      style += ` -webkit-text-stroke: ${width} ${color};`;
     }
     return style;
   }

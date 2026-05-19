@@ -129,3 +129,11 @@ export const DEFAULT_PRESET_ID = 'classic';
 if (!SUBTITLE_PRESETS.some((p) => p.id === DEFAULT_PRESET_ID)) {
   throw new Error(`DEFAULT_PRESET_ID '${DEFAULT_PRESET_ID}' not found in SUBTITLE_PRESETS`);
 }
+
+const _ids = SUBTITLE_PRESETS.map((p) => p.id);
+const _dupes = _ids.filter((id, i) => _ids.indexOf(id) !== i);
+if (_dupes.length > 0) {
+  throw new Error(
+    `SUBTITLE_PRESETS has duplicate ids: ${_dupes.join(', ')}. This breaks setPreset() and UI highlighting.`,
+  );
+}
