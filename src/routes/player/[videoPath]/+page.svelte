@@ -564,6 +564,20 @@
   });
 
   async function handleKeyPress(e: KeyboardEvent) {
+    const target = e.target as Element | null;
+    if (target) {
+      const tag = (target as HTMLElement).tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        (target as HTMLElement).isContentEditable ||
+        target.closest(".style-panel")
+      ) {
+        return;
+      }
+    }
+
     if (e.key === "Escape") {
       e.preventDefault();
       if (viewMode === "pip") {
