@@ -2126,7 +2126,8 @@ pub fn run() {
             exit_pip_mode,
             save_pip_window_layout,
             settle_pip_window,
-            updater_supported
+            updater_supported,
+            is_macos
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -2187,4 +2188,12 @@ pub fn run() {
 #[tauri::command]
 fn updater_supported() -> bool {
     cfg!(target_os = "windows")
+}
+
+/// Whether the app is running on macOS. The frontend uses this to hide
+/// features disabled for the Mac App Store build (AI subtitle generation,
+/// AI settings, external sponsor links) while keeping them on other platforms.
+#[tauri::command]
+fn is_macos() -> bool {
+    cfg!(target_os = "macos")
 }

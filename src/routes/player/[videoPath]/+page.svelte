@@ -116,6 +116,8 @@
   let generationProgress = $state(0);
   let generationMessage = $state("");
   let showModelSelector = $state(false);
+  // macOS (Mac App Store) build hides AI subtitle generation.
+  let isMacOS = $state(false);
   let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
 
   // Context menu state
@@ -183,6 +185,13 @@
   onMount(() => {
     let disposed = false;
     const unsubs: UnlistenFn[] = [];
+
+    // Resolve platform so AI-only UI (e.g. "Generate with AI") can be hidden on macOS.
+    invoke<boolean>("is_macos")
+      .then((mac) => {
+        if (!disposed) isMacOS = mac;
+      })
+      .catch(console.error);
 
     // Load the video
     (async () => {
@@ -1585,12 +1594,13 @@
                     >Open .srt, .vtt or compatible file</span
                   >
                 </button>
-                <!-- "Generate with AI" option commented out for Mac App Store first submission.
-                <button class="model-option" onclick={openAIFromUnifiedMenu}>
-                  <span class="model-name">Generate with AI</span>
-                  <span class="model-desc">Auto-generate using Whisper AI</span>
-                </button>
-                -->
+                <!-- "Generate with AI" hidden on macOS -->
+                {#if !isMacOS}
+                  <button class="model-option" onclick={openAIFromUnifiedMenu}>
+                    <span class="model-name">Generate with AI</span>
+                    <span class="model-desc">Auto-generate using Whisper AI</span>
+                  </button>
+                {/if}
                 {#if embeddedSubtitleTracks.length > 0}
                   <div class="subtitle-menu-divider"></div>
                   {#each embeddedSubtitleTracks as track}

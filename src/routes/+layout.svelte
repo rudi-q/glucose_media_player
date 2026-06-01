@@ -83,10 +83,11 @@
   let downloadProgress = $state(0);
   let downloadMessage = $state("");
   let isCheckingForUpdates = $state(false);
-  // Default tab was "ai"; switched to "library" while the AI Settings tab is commented out for MAS submission.
-  let selectedTab = $state("library"); // 'ai' | 'library' | 'shortcuts' | 'updates' | 'community' | 'about'
+  let selectedTab = $state("ai"); // 'ai' | 'library' | 'shortcuts' | 'updates' | 'community' | 'about'
   let modelsExpanded = $state(false);
   let updaterSupported = $state(false);
+  // macOS (Mac App Store) build hides AI features; default tab falls back to "library" there.
+  let isMacOS = $state(false);
 
   // Update manager
   let updateManager = $state<UpdateManagerAPI | undefined>(undefined);
@@ -174,14 +175,22 @@
       }
     })();
 
+    // Resolve platform capability flags first so checkSetupStatus and the UI
+    // can rely on `isMacOS` before deciding what to show.
     Promise.allSettled([
-      checkSetupStatus(),
       invoke<boolean>("updater_supported").then((supported) => {
         updaterSupported = supported;
       }),
-    ]).finally(() => {
-      appReady = true;
-    });
+      invoke<boolean>("is_macos").then((mac) => {
+        isMacOS = mac;
+        // AI Settings tab is hidden on macOS; fall back to the Library tab.
+        if (mac && selectedTab === "ai") selectedTab = "library";
+      }),
+    ])
+      .then(() => checkSetupStatus())
+      .finally(() => {
+        appReady = true;
+      });
 
     // Notify backend that frontend is ready
     invoke("frontend_ready").catch(console.error);
@@ -203,13 +212,17 @@
       const status = await invoke<SetupStatus>("get_setup_status");
       setupStore.setStatus(status);
 
-      // AI setup dialog auto-popup commented out for Mac App Store submission.
-      // // Show setup dialog on first launch if not completed
-      // if (!status.setup_completed && status.models_installed.length === 0) {
-      //   setTimeout(() => {
-      //     showSetupDialog = true;
-      //   }, 1500);
-      // }
+      // Show setup dialog on first launch if not completed.
+      // Skipped on macOS, where AI features are disabled for the Mac App Store build.
+      if (
+        !isMacOS &&
+        !status.setup_completed &&
+        status.models_installed.length === 0
+      ) {
+        setTimeout(() => {
+          showSetupDialog = true;
+        }, 1500);
+      }
     } catch (err) {
       console.error("Failed to check setup status:", err);
     }
@@ -331,16 +344,17 @@
 
       <div class="settings-layout">
         <div class="settings-sidebar">
-          <!-- AI Settings tab commented out for Mac App Store first submission.
-          <button
-            class="sidebar-tab"
-            class:active={selectedTab === "ai"}
-            onclick={() => (selectedTab = "ai")}
-          >
-            <Cpu size={18} />
-            <span>AI Settings</span>
-          </button>
-          -->
+          <!-- AI Settings tab hidden on macOS (AI features disabled for the Mac App Store build). -->
+          {#if !isMacOS}
+            <button
+              class="sidebar-tab"
+              class:active={selectedTab === "ai"}
+              onclick={() => (selectedTab = "ai")}
+            >
+              <Cpu size={18} />
+              <span>AI Settings</span>
+            </button>
+          {/if}
           <button
             class="sidebar-tab"
             class:active={selectedTab === "library"}
@@ -719,25 +733,26 @@
                   </div>
                 </div>
 
-                <!-- "Report inappropriate AI subtitles" item commented out for MAS submission.
-                <div class="settings-item">
-                  <div class="settings-item-label">
-                    <div class="settings-item-title">Report Subtitles</div>
-                    <div class="settings-item-desc">
-                      Report inappropriate AI-generated subtitles
+                <!-- "Report inappropriate AI subtitles" item hidden on macOS (AI features disabled for the Mac App Store build). -->
+                {#if !isMacOS}
+                  <div class="settings-item">
+                    <div class="settings-item-label">
+                      <div class="settings-item-title">Report Subtitles</div>
+                      <div class="settings-item-desc">
+                        Report inappropriate AI-generated subtitles
+                      </div>
+                    </div>
+                    <div class="settings-item-action">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onclick={() => openUrl("mailto:support@glucose.media?subject=Report%20Inappropriate%20AI%20Subtitles")}
+                      >
+                        <ShieldAlert size={14} /> Report
+                      </Button>
                     </div>
                   </div>
-                  <div class="settings-item-action">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onclick={() => openUrl("mailto:support@glucose.media?subject=Report%20Inappropriate%20AI%20Subtitles")}
-                    >
-                      <ShieldAlert size={14} /> Report
-                    </Button>
-                  </div>
-                </div>
-                -->
+                {/if}
 
 
                 <div class="settings-item">
@@ -751,16 +766,17 @@
                     class="settings-item-action"
                     style="gap: 0.5rem; display: flex; flex-wrap: wrap; justify-content: flex-end;"
                   >
-                    <!-- Sponsor button removed for Mac App Store (guideline 3.1.1 — external payments must use IAP).
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      onclick={() =>
-                        openUrl("https://github.com/sponsors/rudi-q")}
-                    >
-                      <Heart size={14} fill="white" /> Sponsor
-                    </Button>
-                    -->
+                    <!-- Sponsor button hidden on macOS (Mac App Store guideline 3.1.1 — external payments must use IAP). -->
+                    {#if !isMacOS}
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onclick={() =>
+                          openUrl("https://github.com/sponsors/rudi-q")}
+                      >
+                        <Heart size={14} fill="white" /> Sponsor
+                      </Button>
+                    {/if}
                     <Button
                       variant="secondary"
                       size="sm"
@@ -874,12 +890,14 @@
                     class="about-logo"
                   />
                   <p class="about-description">
-                    <!-- "AI-powered" wording removed for Mac App Store submission. Original:
-                    A lightweight, AI-powered minimalist video player designed
-                    for seamless playback and accessibility.
-                    -->
-                    A lightweight, minimalist video player designed for seamless
-                    playback and accessibility.
+                    <!-- "AI-powered" wording dropped on macOS for the Mac App Store build. -->
+                    {#if isMacOS}
+                      A lightweight, minimalist video player designed for seamless
+                      playback and accessibility.
+                    {:else}
+                      A lightweight, AI-powered minimalist video player designed
+                      for seamless playback and accessibility.
+                    {/if}
                   </p>
                 </div>
                 <span class="about-version-pill">{getFormattedVersion()}</span>
