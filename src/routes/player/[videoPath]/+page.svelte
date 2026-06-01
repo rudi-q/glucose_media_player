@@ -75,6 +75,11 @@
   // UI state
   let showControls = $state(false);
   let hideControlsTimeout: ReturnType<typeof setTimeout>;
+  // True while the pointer is resting within the controls zone. Tracked via
+  // mouseenter/mouseleave (which fire reliably on boundary crossing, unlike
+  // mousemove which the WebView coalesces/drops under decode jank) so the
+  // controls stay visible while hovered instead of auto-hiding after the timer.
+  let pointerInControls = false;
   let showCloseButton = $state(false);
   let hideCloseButtonTimeout: ReturnType<typeof setTimeout>;
   type ViewMode = "cinematic" | "fullscreen" | "pip";
@@ -178,6 +183,22 @@
   let currentVideoInfo = $state<VideoInfo | null>(null);
   let normalizedFormat = $derived(
     currentVideoInfo?.format?.toUpperCase() ?? "",
+  );
+
+  // Hide the OS cursor once the controls have faded during playback, mirroring
+  // the controls-visibility signal. Any mousemove sets showControls = true,
+  // which re-reveals the cursor. Kept visible whenever an interactive overlay
+  // is open (context menu, next-video card, generation/conversion, model
+  // picker) and in PiP (separate window) so the user can always click.
+  let cursorHidden = $derived(
+    !showControls &&
+      isPlaying &&
+      viewMode !== "pip" &&
+      !showContextMenu &&
+      !showNextVideoOverlay &&
+      !isGeneratingSubtitles &&
+      !isConverting &&
+      !showModelSelector,
   );
 
   // Progress tracking
@@ -1002,6 +1023,10 @@
   function scheduleHideControls(delay: number) {
     clearTimeout(hideControlsTimeout);
     hideControlsTimeout = setTimeout(() => {
+      // Don't hide while the pointer is resting over the controls — a bubbling
+      // mousemove would otherwise re-arm this timer right after mouseenter
+      // cleared it, hiding the controls out from under the user.
+      if (pointerInControls) return;
       if (!showSubtitleStylePanel) showControls = false;
     }, delay);
   }
@@ -1012,11 +1037,13 @@
   }
 
   function handleControlsEnter() {
+    pointerInControls = true;
     showControls = true;
     clearTimeout(hideControlsTimeout);
   }
 
   function handleControlsLeave() {
+    pointerInControls = false;
     scheduleHideControls(500);
   }
 
@@ -1729,6 +1756,7 @@
 
 <main
   class="player-container video-player"
+  class:hide-cursor={cursorHidden}
   onmousemove={handleMainContainerMouseMove}
   oncontextmenu={handleContextMenu}
   ondragover={(e) => e.preventDefault()}
@@ -2450,6 +2478,14 @@
   .main-video {
     cursor: pointer;
     z-index: 1;
+  }
+
+  /* Hide the cursor (including over the video) once controls have faded during
+     playback. The descendant rule is global so it also overrides .main-video's
+     cursor: pointer. */
+  .video-player.hide-cursor,
+  .video-player.hide-cursor :global(*) {
+    cursor: none;
   }
 
   .cinematic-video {
