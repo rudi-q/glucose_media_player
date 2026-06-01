@@ -27,7 +27,7 @@ export function convertSrtToVtt(srt: string): string {
  */
 export async function loadSubtitleFile(
 	path: string
-): Promise<{ blobUrl: string; fileName: string } | null> {
+): Promise<{ blobUrl: string; fileName: string; vttContent: string } | null> {
 	try {
 		if (import.meta.env.DEV) {
 			console.log('=== LOADING SUBTITLE ===');
@@ -114,7 +114,7 @@ export async function loadSubtitleFile(
 			console.log('=== SUBTITLE LOADING COMPLETE ===');
 		}
 
-		return { blobUrl, fileName };
+		return { blobUrl, fileName, vttContent };
 	} catch (err) {
 		console.error('Failed to load subtitle:', err);
 		alert('Failed to load subtitle file: ' + err);

@@ -1,11 +1,13 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import {
     X,
+    Minus,
     Settings,
     Play,
     Pause,
@@ -18,6 +20,7 @@
     Maximize,
     Minimize2,
     Loader2,
+    AlertTriangle,
   } from "lucide-svelte";
   import {
     appSettings,
@@ -29,8 +32,9 @@
     watchProgressStore,
     type WatchProgress,
   } from "$lib/stores/watchProgressStore";
-  import type { VideoInfo } from "$lib/types/video";
+  import type { VideoInfo, VideoFile } from "$lib/types/video";
   import { createFadedMediaPlayback } from "$lib/utils/fadedMediaPlayback";
+  import { isAudio } from "$lib/utils/mediaType";
   import {
     applyPipVideoMode,
     createPipWindowSettler,
@@ -40,11 +44,17 @@
     savePipWindowLayout,
   } from "$lib/utils/pipWindow";
   import { loadSubtitleFile, convertSrtToVtt } from "$lib/utils/subtitles";
+  import SubtitleOverlay from "$lib/subtitle/SubtitleOverlay.svelte";
+  import SubtitleStylePanel from "$lib/subtitle/SubtitleStylePanel.svelte";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     formatTime,
     formatEstimatedTime,
     formatTimeForScreenReader,
   } from "$lib/utils/time";
+  import { getEndBehavior, getFadeDurationMs } from "$lib/utils/playerPreferences";
+  import { generateThumbnail } from "$lib/utils/thumbnail";
+  import { setWindowTitle } from "$lib/utils/windowTitle";
 
   let { data } = $props();
 
@@ -53,7 +63,6 @@
   let backgroundVideo = $state<HTMLVideoElement>();
   let previewVideo = $state<HTMLVideoElement>();
   let previewCanvas = $state<HTMLCanvasElement>();
-  let trackElement = $state<HTMLTrackElement>();
 
   // Playback state
   let videoSrc = $state<string | null>(null);
@@ -82,9 +91,11 @@
 
   // Subtitle state
   let subtitleSrc = $state<string | null>(null);
+  let subtitleContent = $state<string | null>(null);
   let subtitlesEnabled = $state(true);
   let subtitleFileName = $state<string | null>(null);
   let showSubtitleMenu = $state(false);
+  let showSubtitleStylePanel = $state(false);
 
   // Embedded subtitle tracks (populated for MKV and other containers)
   interface EmbeddedSubtitleTrack {
@@ -115,15 +126,40 @@
   let isGeneratingSubtitles = $state(false);
   let generationProgress = $state(0);
   let generationMessage = $state("");
+  let generationStartTime = 0;        // wall-clock ms when generation began
+  let transcriptionStartTime = 0;     // wall-clock ms when whisper progress first moved
+  let generationVideoDuration = 0;    // video duration captured at generation start
+  let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  let isCancelling = $state(false);   // true after cancel button clicked, suppresses error alert
   let showModelSelector = $state(false);
   // macOS (Mac App Store) build hides AI subtitle generation.
   let isMacOS = $state(false);
   let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
 
+  // HEVC codec warning
+  let showHevcWarning = $state(false);
+  let isWindows = $state(false);
+
   // Context menu state
   let showContextMenu = $state(false);
   let contextMenuPosition = $state({ x: 0, y: 0 });
   let showConvertSubmenu = $state(false);
+
+  // "Play next" countdown overlay state
+  let showNextVideoOverlay = $state(false);
+  let nextVideoPath = $state<string | null>(null);
+  let nextVideoName = $state<string>('');
+  let nextVideoThumbnail = $state<string>('');
+  let nextVideoCountdown = $state(10);
+  let nextVideoCountdownTotal = $state(10);
+  let countdownInterval: ReturnType<typeof setInterval> | null = null;
+  // Prevents re-triggering the overlay if the user explicitly cancelled it
+  let nextVideoSkipped = false;
+  // Set when lookup determined there is no next video; prevents repeated scans
+  let nextVideoNotFound = false;
+  // Guards against duplicate in-flight startNextVideoCountdown calls
+  let nextVideoSearchInFlight = false;
+  let nextVideoSearchPromise: Promise<void> | null = null;
 
   // Audio/Volume state
   let showVolumeMenu = $state(false);
@@ -155,7 +191,10 @@
   const showSetupDialog = getContext<() => void>("showSetupDialog");
   const getSetupStatus = getContext<() => SetupStatus | null>("setupStatus");
 
-  let setupStatus = $state(getSetupStatus());
+  const setupStatus = $derived(getSetupStatus());
+  let disposed = false;
+  let videoSetupId = 0;
+  let lastSetupRoute = "";
 
   function getVideoOutputVolume() {
     if (gainNode) return gainNode.gain.value;
@@ -180,88 +219,195 @@
     onPlayingChange: (playing) => {
       isPlaying = playing;
     },
+    fadeInMs: () => getFadeDurationMs(localStorage.getItem('glucose_fade')),
+    fadeOutMs: () => getFadeDurationMs(localStorage.getItem('glucose_fade')),
   });
 
-  onMount(() => {
-    let disposed = false;
-    const unsubs: UnlistenFn[] = [];
+  $effect(() => {
+    setWindowTitle(currentVideoPath ? videoBaseName(currentVideoPath) : null);
+  });
 
-    // Resolve platform so AI-only UI (e.g. "Generate with AI") can be hidden on macOS.
-    invoke<boolean>("is_macos")
-      .then((mac) => {
-        if (!disposed) isMacOS = mac;
-      })
-      .catch(console.error);
+  // Resolve platform so AI-only UI (e.g. "Generate with AI") can be hidden on macOS.
+  invoke<boolean>("is_macos")
+    .then((mac) => {
+      if (!disposed) isMacOS = mac;
+    })
+    .catch(console.error);
 
-    // Load the video
-    (async () => {
-      if (data.videoPath) {
-        const src = convertFileSrc(data.videoPath);
-        videoSrc = src;
-        currentVideoPath = data.videoPath;
+  $effect(() => {
+    const videoPath = data.videoPath;
+    const initialMode = data.initialMode;
+    const routeKey = `${videoPath}\0${initialMode}\0${data.restart}`;
+    if (!videoPath || routeKey === lastSetupRoute) return;
 
-        // Apply initial view mode from URL query param
-        if (data.initialMode === 'fullscreen') {
-          viewMode = 'fullscreen';
-        } else if (data.initialMode === 'pip') {
-          await enterPipMode();
-        }
+    lastSetupRoute = routeKey;
+    const setupId = ++videoSetupId;
+    void Promise.resolve().then(() => setupVideo(videoPath, initialMode, setupId));
+  });
 
-        // Auto-detect subtitles: external file first, then embedded tracks.
-        // These are split into separate try/catch blocks so a failure in the
-        // external lookup doesn't prevent embedded tracks from being discovered.
-        let externalSubtitleLoaded = false;
-        try {
-          const subtitlePath = await invoke<string | null>(
-            "find_subtitle_for_video",
-            { videoPath: data.videoPath },
-          );
-          if (disposed) return;
-          if (subtitlePath) {
-            console.log("Auto-loading subtitle:", subtitlePath);
-            await loadSubtitle(subtitlePath);
-            if (disposed) return;
-            externalSubtitleLoaded = true;
-          }
-        } catch (err) {
-          console.log("External subtitle lookup failed:", err);
-        }
+  function isVideoSetupStale(setupId: number) {
+    return disposed || setupId !== videoSetupId;
+  }
 
-        if (disposed) return;
+  async function applyInitialViewMode(mode: string) {
+    const nextMode: NonPipViewMode =
+      mode === "fullscreen" ? "fullscreen" : "cinematic";
 
-        try {
-          // Always detect embedded tracks so the subtitle menu can list them
-          const tracks = await invoke<EmbeddedSubtitleTrack[]>(
-            "get_embedded_subtitle_tracks",
-            { videoPath: data.videoPath },
-          );
-          if (disposed) return;
-          embeddedSubtitleTracks = tracks;
-
-          // Auto-load the first embedded track when no external file was found
-          if (!externalSubtitleLoaded && tracks.length > 0) {
-            await loadEmbeddedSubtitle(tracks[0]);
-          }
-        } catch (err) {
-          console.log("Embedded subtitle detection failed:", err);
-        }
-
-        try {
-          const audioTracks = await invoke<EmbeddedAudioTrack[]>(
-            "get_embedded_audio_tracks",
-            { videoPath: data.videoPath },
-          );
-          if (disposed) return;
-          embeddedAudioTracks = audioTracks;
-          if (audioTracks.length > 0) {
-            const defaultTrack = audioTracks.find((t) => t.is_default);
-            selectedAudioTrackIndex = defaultTrack ? defaultTrack.index : audioTracks[0].index;
-          }
-        } catch (err) {
-          console.log("Embedded audio track detection failed:", err);
-        }
+    if (mode === "pip") {
+      if (viewMode !== "pip") {
+        await enterPipMode();
       }
-    })();
+      return;
+    }
+
+    if (viewMode === "pip") {
+      await exitPipMode(nextMode);
+    } else {
+      viewMode = nextMode;
+    }
+  }
+
+  async function cleanupAudioRemuxFiles() {
+    if (audioRemuxPath) {
+      invoke("delete_temp_file", { path: audioRemuxPath }).catch(() => {});
+      audioRemuxPath = null;
+    }
+    for (const path of pendingRemuxCleanupPaths) {
+      invoke("delete_temp_file", { path }).catch(() => {});
+    }
+    pendingRemuxCleanupPaths = [];
+  }
+
+  async function setupVideo(
+    videoPath: string,
+    initialMode: string,
+    setupId: number,
+  ) {
+    if (isVideoSetupStale(setupId)) return;
+
+    if (currentVideoPath && currentVideoPath !== videoPath && videoElement && duration > 0) {
+      await saveWatchProgress();
+      if (isVideoSetupStale(setupId)) return;
+    }
+
+    if (progressSaveInterval) {
+      clearInterval(progressSaveInterval);
+    }
+
+    clearCountdown();
+    showNextVideoOverlay = false;
+    nextVideoPath = null;
+    nextVideoName = "";
+    nextVideoSkipped = false;
+    nextVideoNotFound = false;
+    revokeNextVideoThumbnail();
+
+    ++subtitleLoadId;
+    if (subtitleSrc && subtitleSrc.startsWith("blob:")) {
+      URL.revokeObjectURL(subtitleSrc);
+    }
+    subtitleSrc = null;
+    subtitleContent = null;
+    subtitleFileName = null;
+    embeddedSubtitleTracks = [];
+    selectedEmbeddedLanguage = "en";
+    subtitlesEnabled = true;
+
+    await cleanupAudioRemuxFiles();
+    if (isVideoSetupStale(setupId)) return;
+
+    embeddedAudioTracks = [];
+    selectedAudioTrackIndex = null;
+    isRemuxingAudio = false;
+    pendingSeekTime = null;
+    pendingPaused = null;
+    currentVideoInfo = null;
+    showHevcWarning = false;
+    currentTime = 0;
+    duration = 0;
+    videoSrc = convertFileSrc(videoPath);
+    currentVideoPath = videoPath;
+
+    await applyInitialViewMode(initialMode);
+    if (isVideoSetupStale(setupId)) return;
+
+    // Auto-detect subtitles: external file first, then embedded tracks.
+    // These are split into separate try/catch blocks so a failure in the
+    // external lookup doesn't prevent embedded tracks from being discovered.
+    let externalSubtitleLoaded = false;
+    try {
+      const subtitlePath = await invoke<string | null>(
+        "find_subtitle_for_video",
+        { videoPath },
+      );
+      if (isVideoSetupStale(setupId)) return;
+      if (subtitlePath) {
+        console.log("Auto-loading subtitle:", subtitlePath);
+        await loadSubtitle(subtitlePath);
+        if (isVideoSetupStale(setupId)) return;
+        externalSubtitleLoaded = true;
+      }
+    } catch (err) {
+      console.log("External subtitle lookup failed:", err);
+    }
+
+    if (isVideoSetupStale(setupId)) return;
+
+    try {
+      // Always detect embedded tracks so the subtitle menu can list them
+      const tracks = await invoke<EmbeddedSubtitleTrack[]>(
+        "get_embedded_subtitle_tracks",
+        { videoPath },
+      );
+      if (isVideoSetupStale(setupId)) return;
+      embeddedSubtitleTracks = tracks;
+
+      // Auto-load the first embedded track when no external file was found
+      if (!externalSubtitleLoaded && tracks.length > 0) {
+        await loadEmbeddedSubtitle(tracks[0], videoPath);
+        if (isVideoSetupStale(setupId)) return;
+      }
+    } catch (err) {
+      console.log("Embedded subtitle detection failed:", err);
+    }
+
+    try {
+      const audioTracks = await invoke<EmbeddedAudioTrack[]>(
+        "get_embedded_audio_tracks",
+        { videoPath },
+      );
+      if (isVideoSetupStale(setupId)) return;
+      embeddedAudioTracks = audioTracks;
+      if (audioTracks.length > 0) {
+        const defaultTrack = audioTracks.find((t) => t.is_default);
+        selectedAudioTrackIndex = defaultTrack ? defaultTrack.index : audioTracks[0].index;
+      }
+    } catch (err) {
+      console.log("Embedded audio track detection failed:", err);
+    }
+
+    try {
+      const info = await invoke<VideoInfo>("get_video_info", { videoPath });
+      if (isVideoSetupStale(setupId)) return;
+      currentVideoInfo = info;
+      if (info.videoCodec === "hevc") {
+        // readyState >= 2 (HAVE_CURRENT_DATA) means the browser has already
+        // decoded at least one frame — codec is working, no warning needed.
+        showHevcWarning = !videoElement || videoElement.readyState < 2;
+      } else {
+        showHevcWarning = false;
+      }
+    } catch (err) {
+      console.log("Video codec detection failed:", err);
+    }
+  }
+
+  onMount(() => {
+    disposed = false;
+    const unsubs: UnlistenFn[] = [];
+    const platform = navigator.platform.toLowerCase();
+    const userAgent = navigator.userAgent.toLowerCase();
+    isWindows = platform.includes("win") || userAgent.includes("windows");
 
     // Register Tauri event listeners
     (async () => {
@@ -270,17 +416,54 @@
         listen<{ stage: string; progress: number; message: string }>(
           "subtitle-generation-progress",
           (event) => {
-            generationProgress = event.payload.progress;
-            generationMessage = event.payload.message;
+            const { stage, progress, message } = event.payload;
+            generationProgress = progress;
+            generationMessage = message;
 
-            if (event.payload.stage === "complete") {
+            if (stage === "transcribing") {
+              // Start timing from the initial 50% event so elapsed and whisperFraction
+              // share the same baseline — both measured from progress=50, not the first callback.
+              if (transcriptionStartTime === 0) {
+                transcriptionStartTime = Date.now();
+              }
+              // Overlay a live "~X remaining" estimate once we have enough data
+              if (transcriptionStartTime > 0) {
+                const whisperFraction = (progress - 50) / 40; // 0–1 within transcription
+                const elapsed = (Date.now() - transcriptionStartTime) / 1000;
+                if (whisperFraction > 0.05 && elapsed > 1) {
+                  const remaining = (elapsed / whisperFraction) * (1 - whisperFraction);
+                  generationMessage = `Transcribing... ${formatEstimatedTime(remaining)} remaining`;
+                }
+              }
+              // Reset the watchdog — if 60 s pass with no transcription event,
+              // whisper has likely hung and we surface a warning.
+              if (watchdogTimer !== null) clearTimeout(watchdogTimer);
+              watchdogTimer = setTimeout(() => {
+                if (isGeneratingSubtitles) {
+                  generationMessage =
+                    "Still running — Whisper may be processing slowly on this machine. Please wait.";
+                }
+              }, 60_000);
+            } else if (stage === "complete") {
+              if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
+              isCancelling = false;
               setTimeout(() => {
                 isGeneratingSubtitles = false;
                 generationProgress = 0;
                 generationMessage = "";
-              }, 2000);
-            } else if (event.payload.stage === "error") {
+              }, 500);
+            } else if (stage === "cancelled") {
+              if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
+              isCancelling = false;
               isGeneratingSubtitles = false;
+              generationProgress = 0;
+              generationMessage = "";
+            } else if (stage === "error") {
+              if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
+              isCancelling = false;
+              isGeneratingSubtitles = false;
+              generationProgress = 0;
+              generationMessage = "";
             }
           },
         ),
@@ -332,6 +515,7 @@
 
     return () => {
       disposed = true;
+      videoSetupId++;
       // Clear progress save interval
       if (progressSaveInterval) {
         clearInterval(progressSaveInterval);
@@ -370,9 +554,13 @@
       if (viewMode === "pip") {
         exitNativePipWindow().catch(() => resetPipBodyBackground());
       }
+      // Clear subtitle generation watchdog
+      if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
       // Clear volume menu auto-hide timer
       clearTimeout(volumeMenuAutoTimer);
       clearTimeout(hideControlsTimeout);
+      clearCountdown();
+      revokeNextVideoThumbnail();
       fadedPlayback.destroy();
       // Close Web Audio context to free resources
       if (audioCtx) {
@@ -385,6 +573,20 @@
   });
 
   async function handleKeyPress(e: KeyboardEvent) {
+    const target = e.target as Element | null;
+    if (target) {
+      const tag = (target as HTMLElement).tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        (target as HTMLElement).isContentEditable ||
+        target.closest(".style-panel")
+      ) {
+        return;
+      }
+    }
+
     if (e.key === "Escape") {
       e.preventDefault();
       if (viewMode === "pip") {
@@ -498,6 +700,7 @@
       }
 
       subtitleSrc = result.blobUrl;
+      subtitleContent = result.vttContent;
       subtitleFileName = result.fileName;
       selectedEmbeddedLanguage = '';
       subtitlesEnabled = true;
@@ -526,11 +729,15 @@
     }
   }
 
-  async function loadEmbeddedSubtitle(track: EmbeddedSubtitleTrack) {
+  async function loadEmbeddedSubtitle(
+    track: EmbeddedSubtitleTrack,
+    videoPath = currentVideoPath ?? data.videoPath,
+  ) {
+    if (!videoPath) return;
     const loadId = ++subtitleLoadId;
     try {
       const srtContent = await invoke<string>("extract_embedded_subtitle", {
-        videoPath: data.videoPath,
+        videoPath,
         streamIndex: track.index,
       });
 
@@ -544,9 +751,10 @@
         URL.revokeObjectURL(subtitleSrc);
       }
 
-      const vttContent = convertSrtToVtt(srtContent);
-      const blob = new Blob([vttContent], { type: "text/vtt;charset=utf-8" });
+      const vttText = convertSrtToVtt(srtContent);
+      const blob = new Blob([vttText], { type: "text/vtt;charset=utf-8" });
       subtitleSrc = URL.createObjectURL(blob);
+      subtitleContent = vttText;
       subtitleFileName = formatEmbeddedTrackLabel(track);
       selectedEmbeddedLanguage = track.language ?? 'en';
       subtitlesEnabled = true;
@@ -564,15 +772,8 @@
   }
 
   function toggleSubtitles() {
-    if (!trackElement?.track || !subtitleSrc) return;
-
+    if (!subtitleSrc) return;
     subtitlesEnabled = !subtitlesEnabled;
-    trackElement.track.mode = subtitlesEnabled ? "showing" : "hidden";
-  }
-
-  function handleTrackLoad() {
-    if (!subtitlesEnabled || !trackElement || !trackElement.track) return;
-    trackElement.track.mode = subtitlesEnabled ? "showing" : "hidden";
   }
 
   async function goHome() {
@@ -597,6 +798,10 @@
     await goto("/");
   }
 
+  async function minimizeApp() {
+    await getCurrentWindow().minimize();
+  }
+
   async function closeApp() {
     if (videoElement && isPlaying) {
       await fadedPlayback.pause();
@@ -612,7 +817,6 @@
     } catch (err) {
       console.error("Failed to exit app:", err);
       try {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
         const window = getCurrentWindow();
         await window.close();
       } catch (fallbackErr) {
@@ -801,10 +1005,19 @@
 
     // Show controls whenever the mouse moves anywhere over the player
     showControls = true;
+    scheduleHideControls(2000);
+  }
+
+  function scheduleHideControls(delay: number) {
     clearTimeout(hideControlsTimeout);
     hideControlsTimeout = setTimeout(() => {
-      showControls = false;
-    }, 2000);
+      if (!showSubtitleStylePanel) showControls = false;
+    }, delay);
+  }
+
+  function closeSubtitleStylePanel() {
+    showSubtitleStylePanel = false;
+    scheduleHideControls(1000);
   }
 
   function handleControlsEnter() {
@@ -813,9 +1026,7 @@
   }
 
   function handleControlsLeave() {
-    hideControlsTimeout = setTimeout(() => {
-      showControls = false;
-    }, 500);
+    scheduleHideControls(500);
   }
 
   function handleClickOutside(e: MouseEvent) {
@@ -838,6 +1049,9 @@
     }
     if (showContextMenu && !target.closest(".context-menu")) {
       showContextMenu = false;
+    }
+    if (showSubtitleStylePanel && !target.closest(".style-panel") && !target.closest(".subtitle-control")) {
+      closeSubtitleStylePanel();
     }
   }
 
@@ -913,11 +1127,191 @@
     ) {
       backgroundVideo.currentTime = videoElement.currentTime;
     }
+
+    // Trigger "play next" overlay 10 seconds before the end
+    if (
+      duration > 12 &&
+      currentTime >= duration - 10 &&
+      !showNextVideoOverlay &&
+      countdownInterval === null &&
+      !nextVideoSearchInFlight &&
+      !nextVideoSkipped &&
+      !nextVideoNotFound
+    ) {
+      const behavior = getEndBehavior(localStorage.getItem('glucose_end_behavior'));
+      if (behavior === 'next') {
+        startNextVideoCountdown();
+      }
+    }
+
+    // Reset skip flag if user scrubs back far enough from the end
+    if ((nextVideoSkipped || nextVideoNotFound) && currentTime < duration - 15) {
+      nextVideoSkipped = false;
+      nextVideoNotFound = false;
+    }
+  }
+
+  function videoBaseName(path: string): string {
+    const fileName = path.split(/[\\/]/).pop() ?? path;
+    const lastDot = fileName.lastIndexOf('.');
+    return lastDot > 0 ? fileName.substring(0, lastDot) : fileName;
+  }
+
+  function clearCountdown() {
+    if (countdownInterval !== null) {
+      clearInterval(countdownInterval);
+      countdownInterval = null;
+    }
+  }
+
+  async function startNextVideoCountdown() {
+    if (nextVideoSearchInFlight) return;
+    nextVideoSearchInFlight = true;
+    nextVideoSearchPromise = (async () => {
+    const requestedForPath = currentVideoPath;
+    try {
+      const [videos, progressData] = await Promise.all([
+        invoke<VideoFile[]>('get_recent_videos'),
+        invoke<Record<string, WatchProgress>>('get_all_watch_progress'),
+      ]);
+
+      if (disposed || currentVideoPath !== requestedForPath) return;
+      if (getEndBehavior(localStorage.getItem('glucose_end_behavior')) !== 'next') return;
+
+      const filterPref = localStorage.getItem('glucose_filter') ?? 'all';
+      if (filterPref === 'audio') { nextVideoNotFound = true; return; }
+
+      // Filter out unavailable/cloud-only and audio-only files
+      const available = videos.filter(v => !v.is_cloud_only && !isAudio(v.path));
+      if (available.length === 0) { nextVideoNotFound = true; return; }
+
+      // Normalize path separators for robust comparison on Windows
+      const normalize = (p: string) => p.replace(/\\/g, '/');
+      const normalizedCurrent = normalize(requestedForPath ?? '');
+
+      // Match gallery sort order
+      const sortPref = localStorage.getItem('glucose_sort') ?? 'watched';
+      let sorted: VideoFile[];
+      if (sortPref === 'watched') {
+        sorted = [...available].sort((a, b) => {
+          const aTime = progressData[a.path]?.last_watched ?? 0;
+          const bTime = progressData[b.path]?.last_watched ?? 0;
+          return (bTime - aTime) || (b.modified - a.modified);
+        });
+      } else {
+        sorted = available;
+      }
+
+      const currentIdx = sorted.findIndex(v => normalize(v.path) === normalizedCurrent);
+      if (currentIdx === -1 || currentIdx >= sorted.length - 1) { nextVideoNotFound = true; return; }
+      if (disposed || !videoElement || duration - videoElement.currentTime > 10) return;
+
+      const next = sorted[currentIdx + 1];
+      nextVideoPath = next.path;
+      nextVideoName = videoBaseName(next.path);
+      nextVideoThumbnail = '';
+      const remaining = videoElement
+        ? Math.max(1, Math.ceil(duration - videoElement.currentTime))
+        : 10;
+      nextVideoCountdown = remaining;
+      nextVideoCountdownTotal = remaining;
+      showNextVideoOverlay = true;
+
+      // Generate thumbnail async — overlay shows immediately, thumbnail fills in
+      generateThumbnail(next.path, undefined, () => disposed).then(url => {
+        if (disposed || nextVideoPath !== next.path) {
+          return;
+        }
+        nextVideoThumbnail = url;
+      });
+
+      countdownInterval = setInterval(() => {
+        if (disposed) {
+          clearCountdown();
+          return;
+        }
+        if (getEndBehavior(localStorage.getItem('glucose_end_behavior')) !== 'next') {
+          clearCountdown();
+          showNextVideoOverlay = false;
+          nextVideoPath = null;
+          return;
+        }
+        if (videoElement?.paused || videoElement?.seeking) return;
+        const remaining = videoElement
+          ? Math.max(0, Math.ceil(videoElement.duration - videoElement.currentTime))
+          : 0;
+        nextVideoCountdown = remaining;
+        if (remaining <= 0) {
+          clearCountdown();
+          playNextVideo();
+        }
+      }, 1000);
+    } catch (err) {
+      console.error('Failed to find next video:', err);
+    } finally {
+      if (!disposed) {
+        nextVideoSearchInFlight = false;
+        nextVideoSearchPromise = null;
+      }
+    }
+    })();
+    await nextVideoSearchPromise;
+  }
+
+  function revokeNextVideoThumbnail() {
+    if (nextVideoThumbnail) {
+      nextVideoThumbnail = '';
+    }
+  }
+
+  async function playNextVideo() {
+    if (!nextVideoPath) return;
+    const path = nextVideoPath;
+    nextVideoPath = null;
+    clearCountdown();
+    revokeNextVideoThumbnail();
+    showNextVideoOverlay = false;
+    await saveWatchProgress();
+    const encodedPath = encodeURIComponent(path);
+    try {
+      await goto(`/player/${encodedPath}?mode=${viewMode}`);
+    } catch (err) {
+      console.error('Failed to navigate to next video:', err);
+    }
+  }
+
+  function cancelNextVideo() {
+    clearCountdown();
+    showNextVideoOverlay = false;
+    nextVideoPath = null;
+    revokeNextVideoThumbnail();
+    nextVideoSkipped = true;
   }
 
   async function handleEnded() {
     fadedPlayback.pauseNow();
     await saveWatchProgress();
+
+    const behavior = getEndBehavior(localStorage.getItem('glucose_end_behavior'));
+    if (behavior === 'loop') {
+      if (videoElement) {
+        videoElement.currentTime = 0;
+        await fadedPlayback.play();
+      }
+    } else if (behavior === 'next') {
+      if (showNextVideoOverlay) {
+        // Card was already showing — video reached the end naturally, play next immediately
+        playNextVideo();
+      } else if (!nextVideoSkipped) {
+        // Overlay never started — either a short video or the scan was still in flight.
+        // Await the in-flight search if one exists, otherwise start a fresh one.
+        await (nextVideoSearchPromise ?? startNextVideoCountdown());
+        if (nextVideoPath) {
+          clearCountdown();
+          playNextVideo();
+        }
+      }
+    }
   }
 
   async function handleLoadedMetadata() {
@@ -932,7 +1326,7 @@
     if (pendingSeekTime !== null) {
       videoElement.currentTime = pendingSeekTime;
       pendingSeekTime = null;
-    } else if (currentVideoPath) {
+    } else if (currentVideoPath && !data.restart) {
       await invoke<WatchProgress | null>("get_watch_progress", {
         videoPath: currentVideoPath,
       })
@@ -974,13 +1368,11 @@
 
     // Show controls briefly when video loads
     showControls = true;
-    hideControlsTimeout = setTimeout(() => {
-      showControls = false;
-    }, 3000);
+    scheduleHideControls(3000);
   }
 
   function handleProgressHover(e: MouseEvent) {
-    if (!videoElement || !previewVideo || !previewCanvas || isScrubbing) return;
+    if (!videoElement || !previewVideo || isScrubbing) return;
 
     const progressBar = e.currentTarget as HTMLElement;
     const rect = progressBar.getBoundingClientRect();
@@ -1275,6 +1667,10 @@
     isGeneratingSubtitles = true;
     generationProgress = 0;
     generationMessage = "Starting subtitle generation...";
+    generationStartTime = Date.now();
+    transcriptionStartTime = 0;
+    generationVideoDuration = duration ?? 0;
+    if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
 
     try {
       // Get current subtitle language from store at call time
@@ -1285,33 +1681,58 @@
         language: currentSettings.subtitleLanguage,
       });
 
+      // Store the actual elapsed/duration ratio so future estimates are calibrated
+      // to this machine's performance for this model.
+      if (generationVideoDuration > 0) {
+        const elapsed = (Date.now() - generationStartTime) / 1000;
+        const coefficient = elapsed / generationVideoDuration;
+        localStorage.setItem(`glucose_whisper_coef_${modelSize}`, String(coefficient));
+      }
+
       // Auto-load the generated subtitle
       await loadSubtitle(subtitlePath);
     } catch (err) {
-      console.error("Failed to generate subtitles:", err);
-      alert(`Subtitle generation failed: ${err}`);
+      if (!isCancelling && String(err) !== "cancelled") {
+        console.error("Failed to generate subtitles:", err);
+        alert(`Subtitle generation failed: ${err}`);
+      }
+      isCancelling = false;
       isGeneratingSubtitles = false;
       generationProgress = 0;
       generationMessage = "";
     }
   }
 
+  async function cancelSubtitleGeneration() {
+    isCancelling = true;
+    try {
+      await invoke("cancel_subtitle_generation");
+    } catch (e) {
+      console.error("cancel_subtitle_generation invoke failed:", e);
+      isCancelling = false;
+    }
+  }
+
   function getEstimatedTranscriptionTime(modelKey: string): string {
     if (!duration) return "Unknown";
 
-    const coefficients: Record<string, { min: number; max: number }> = {
+    // Prefer a coefficient measured on this machine from a previous run.
+    const stored = localStorage.getItem(`glucose_whisper_coef_${modelKey}`);
+    const calibrated = stored ? parseFloat(stored) : NaN;
+    if (!isNaN(calibrated) && calibrated > 0) {
+      return formatEstimatedTime(duration * calibrated);
+    }
+
+    // Fall back to conservative hardware-agnostic defaults.
+    const fallback: Record<string, { min: number; max: number }> = {
       tiny: { min: 0.15, max: 0.25 },
       small: { min: 0.6, max: 0.8 },
       "large-v3-turbo": { min: 0.9, max: 1.2 },
     };
-
-    const coef = coefficients[modelKey];
+    const coef = fallback[modelKey];
     if (!coef) return "Unknown";
 
-    const avgCoef = (coef.min + coef.max) / 2;
-    const estimatedSeconds = duration * avgCoef;
-
-    return formatEstimatedTime(estimatedSeconds);
+    return formatEstimatedTime(duration * ((coef.min + coef.max) / 2));
   }
 </script>
 
@@ -1323,14 +1744,14 @@
   ondrop={(e) => e.preventDefault()}
 >
   {#if viewMode !== "pip"}
-    <button
-      class="close-button"
-      class:visible={showCloseButton}
-      onclick={closeApp}
-      title="Close"
-    >
-      <X size={16} />
-    </button>
+    <div class="window-controls" class:visible={showCloseButton}>
+      <button class="window-btn" onclick={minimizeApp} data-tooltip="Minimize" aria-label="Minimize">
+        <Minus size={16} />
+      </button>
+      <button class="window-btn window-btn-close" onclick={closeApp} data-tooltip="Close" aria-label="Close">
+        <X size={16} />
+      </button>
+    </div>
   {/if}
 
   {#if viewMode === "pip"}
@@ -1372,20 +1793,41 @@
       onclick={togglePlay}
       oncontextmenu={handleContextMenu}
       crossorigin="anonymous"
-    >
-      {#if subtitleSrc}
-        <track
-          bind:this={trackElement}
-          kind="subtitles"
-          src={subtitleSrc}
-          srclang={selectedEmbeddedLanguage || undefined}
-          label="Subtitles"
-          default
-          onload={handleTrackLoad}
-        />
-      {/if}
-    </video>
+    ></video>
+
+    <SubtitleOverlay
+      vttContent={subtitleContent}
+      {currentTime}
+      enabled={subtitlesEnabled}
+      {videoElement}
+    />
   </div>
+
+  <!-- HEVC codec warning banner -->
+  {#if showHevcWarning}
+    <div class="hevc-warning-banner">
+      <AlertTriangle size={15} class="hevc-warning-icon" />
+      <span class="hevc-warning-text">
+        H.265 video may not play without the HEVC codec.
+        {#if isWindows}
+          <button
+            class="hevc-warning-link"
+            onclick={() => openUrl("ms-windows-store://pdp/?ProductId=9n4wgh0z6vhq")}
+          >
+            Get HEVC Video Extensions (free)
+          </button>
+        {/if}
+      </span>
+      <button
+        class="hevc-warning-dismiss"
+        onclick={() => (showHevcWarning = false)}
+        title="Dismiss"
+        aria-label="Dismiss HEVC warning"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  {/if}
 
   <!-- AI Subtitle Generation Progress Overlay -->
   {#if isGeneratingSubtitles}
@@ -1407,6 +1849,14 @@
           </div>
         </div>
         <p class="generation-message">{generationMessage}</p>
+        <button
+          class="cancel-generation-btn"
+          onclick={cancelSubtitleGeneration}
+          disabled={isCancelling}
+        >
+          {isCancelling ? "Cancelling..." : "Cancel"}
+        </button>
+        <p class="generation-hint">Do not close Glucose while generation is in progress.</p>
       </div>
     </div>
   {/if}
@@ -1450,17 +1900,15 @@
         aria-valuetext={formatTimeForScreenReader(currentTime)}
         tabindex="0"
       >
-        {#if showPreview}
-          <div class="preview-tooltip" style="left: {previewPosition}px">
-            <canvas
-              bind:this={previewCanvas}
-              width="160"
-              height="90"
-              class="preview-canvas"
-            ></canvas>
-            <div class="preview-time">{formatTime(previewTime)}</div>
-          </div>
-        {/if}
+        <div class="preview-tooltip" class:preview-visible={showPreview} style="left: {previewPosition}px">
+          <canvas
+            bind:this={previewCanvas}
+            width="160"
+            height="90"
+            class="preview-canvas"
+          ></canvas>
+          <div class="preview-time">{formatTime(previewTime)}</div>
+        </div>
         <div
           class="progress-filled"
           style="width: {duration
@@ -1473,7 +1921,7 @@
 
       <div class="controls-row">
         <div class="controls-left">
-          <button class="control-button" onclick={goHome} title="Home">
+          <button class="control-button" onclick={goHome} data-tooltip="Back to Gallery" aria-label="Back to Gallery">
             <Home size={20} />
           </button>
           <div class="time">
@@ -1482,7 +1930,7 @@
         </div>
 
         <div class="controls-center">
-          <button class="control-button" onclick={togglePlay}>
+          <button class="control-button" onclick={togglePlay} data-tooltip={isPlaying ? "Pause (Space)" : "Play (Space)"} aria-label={isPlaying ? "Pause (Space)" : "Play (Space)"}>
             {#if isPlaying}
               <Pause size={24} fill="currentColor" />
             {:else}
@@ -1496,9 +1944,10 @@
             <button
               class="control-button"
               onclick={toggleVolumeMenu}
-              title="Volume"
+              data-tooltip="Volume (M)"
+              aria-label="Volume (M)"
             >
-              {#if isMuted}
+              {#if isMuted || volume === 0}
                 <VolumeX size={20} />
               {:else if volume < 1}
                 <Volume1 size={20} />
@@ -1530,6 +1979,7 @@
                   class="mute-toggle"
                   onclick={toggleMute}
                   class:muted={isMuted}
+                  aria-label={isMuted ? "Unmute" : "Mute"}
                 >
                   {#if isMuted}
                     <VolumeX size={16} />
@@ -1568,7 +2018,8 @@
               class="control-button"
               class:subtitle-active={subtitleSrc && subtitlesEnabled}
               class:generating={isGeneratingSubtitles}
-              title="Subtitles"
+              data-tooltip="Subtitles (C)"
+              aria-label="Subtitles (C)"
               onclick={() => (showSubtitleMenu = !showSubtitleMenu)}
               disabled={isGeneratingSubtitles}
             >
@@ -1625,9 +2076,26 @@
                     >
                   </button>
                 {/if}
+                <div class="subtitle-menu-divider"></div>
+                <button
+                  class="model-option"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    showSubtitleMenu = false;
+                    if (showSubtitleStylePanel) closeSubtitleStylePanel();
+                    else showSubtitleStylePanel = true;
+                  }}
+                >
+                  <span class="model-name">Customize style</span>
+                  <span class="model-desc">Font, size, color, and more</span>
+                </button>
               </div>
             {/if}
           </div>
+
+          {#if showSubtitleStylePanel}
+            <SubtitleStylePanel onClose={closeSubtitleStylePanel} />
+          {/if}
 
           <!-- Model selector anchored to unified subtitle control -->
           {#if showModelSelector && !isGeneratingSubtitles}
@@ -1679,7 +2147,8 @@
           <button
             class="control-button"
             onclick={toggleViewMode}
-            title="Toggle view mode (F)"
+            data-tooltip="View Mode (F)"
+            aria-label="View Mode (F)"
           >
             <Maximize size={20} />
           </button>
@@ -1860,9 +2329,74 @@
       </div>
     </div>
   {/if}
+
+  <div aria-live="polite" class="sr-only">{showNextVideoOverlay && nextVideoPath ? 'Up Next: ' + nextVideoName : ''}</div>
+
+  {#if showNextVideoOverlay && nextVideoPath}
+    <div
+      class="next-video-overlay"
+      role="button"
+      tabindex="0"
+      onclick={playNextVideo}
+      onkeydown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          playNextVideo();
+        }
+      }}
+    >
+      <div class="next-video-thumbnail-container">
+        {#if nextVideoThumbnail}
+          <img src={nextVideoThumbnail} alt="" class="next-video-thumbnail" />
+        {:else}
+          <div class="next-video-thumbnail-placeholder">
+            <Play size={32} opacity={0.2} />
+          </div>
+        {/if}
+        <div class="next-video-thumbnail-overlay">
+          <div class="next-video-play-icon">
+            <Play size={32} fill="currentColor" />
+          </div>
+        </div>
+      </div>
+      <div class="next-video-info">
+        <div class="next-video-header">
+          <div class="next-video-label">Up Next</div>
+          <div class="next-video-countdown-text" aria-hidden="true">in {nextVideoCountdown}s</div>
+        </div>
+        <div class="next-video-name" title={nextVideoName}>{nextVideoName}</div>
+        <div class="next-video-progress-track" aria-hidden="true">
+          <div
+            class="next-video-progress-fill"
+            style="width: {(nextVideoCountdown / nextVideoCountdownTotal) * 100}%; transition: width 1s linear;"
+          ></div>
+        </div>
+        <div class="next-video-actions">
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <button class="next-video-btn next-video-cancel" onclick={(e) => { e.stopPropagation(); cancelNextVideo(); }}>Cancel</button>
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <button class="next-video-btn next-video-play" onclick={(e) => { e.stopPropagation(); playNextVideo(); }}>Play Now</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </main>
 
 <style>
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
   .player-container.video-player {
     user-select: none;
     background: var(--surface-overlay);
@@ -2144,6 +2678,13 @@
     margin-bottom: 12px;
     pointer-events: none;
     z-index: 10;
+    opacity: 0;
+    visibility: hidden;
+  }
+
+  .preview-tooltip.preview-visible {
+    opacity: 1;
+    visibility: visible;
   }
 
   .preview-canvas {
@@ -2204,6 +2745,33 @@
     justify-content: center;
     transition: opacity 0.15s ease;
     opacity: 0.9;
+    position: relative;
+  }
+
+  .control-button[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%) translateY(4px);
+    background: rgba(14, 14, 18, 0.96);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 200;
+    letter-spacing: 0.01em;
+  }
+
+  .control-button[data-tooltip]:hover::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
   }
 
   .control-button:hover {
@@ -2215,7 +2783,7 @@
   }
 
   .control-button.generating {
-    color: #c065b6;
+    color: var(--color-accent);
     opacity: 1;
     animation: pulse 1.5s ease-in-out infinite;
   }
@@ -2386,44 +2954,6 @@
   .audio-track-desc {
     font-size: 0.65rem;
     color: rgba(255, 255, 255, 0.5);
-  }
-
-  /* Subtitle styling */
-  :global(video::cue) {
-    background-color: rgba(0, 0, 0, 0.8) !important;
-    color: #ffffff !important;
-    font-size: 1.5em !important;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
-      sans-serif !important;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9) !important;
-    line-height: 1.4 !important;
-    padding: 0.2em 0.5em !important;
-  }
-
-  :global(video::-webkit-media-text-track-container) {
-    position: absolute !important;
-    bottom: 0 !important;
-    left: 0 !important;
-    right: 0 !important;
-    display: flex !important;
-    flex-direction: column !important;
-    justify-content: flex-end !important;
-    padding-bottom: 8vh !important;
-    pointer-events: none !important;
-  }
-
-  :global(video::-webkit-media-text-track-display) {
-    font-size: 24px;
-    padding-top: 2vh !important;
-    text-align: center !important;
-    width: 100% !important;
-  }
-
-  :global(video::cue-region) {
-    position: absolute !important;
-    bottom: 86vh !important;
-    left: 0 !important;
-    right: 0 !important;
   }
 
   .subtitle-control {
@@ -2605,16 +3135,16 @@
 
   .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, #c065b6, #8c77ff);
+    background: linear-gradient(90deg, var(--color-accent), #8c77ff);
     border-radius: 4px;
     transition: width 0.3s ease;
-    box-shadow: 0 0 10px rgba(192, 101, 182, 0.5);
+    box-shadow: 0 0 10px rgba(166, 107, 255, 0.5);
   }
 
   .progress-percentage {
     font-size: 1.25rem;
     font-weight: 600;
-    color: #c065b6;
+    color: var(--color-accent);
     font-variant-numeric: tabular-nums;
   }
 
@@ -2623,6 +3153,34 @@
     color: rgba(255, 255, 255, 0.7);
     line-height: 1.5;
     margin: 0;
+  }
+
+  .cancel-generation-btn {
+    margin-top: 1.25rem;
+    padding: 0.45rem 1.25rem;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease;
+  }
+
+  .cancel-generation-btn:hover:not(:disabled) {
+    border-color: rgba(255, 255, 255, 0.38);
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .cancel-generation-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .generation-hint {
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.3);
   }
 
   /* Context Menu */
@@ -2693,5 +3251,275 @@
     min-width: 180px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
     z-index: 1001;
+  }
+
+  .hevc-warning-banner {
+    position: fixed;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    background: rgba(18, 18, 22, 0.95);
+    border: 1px solid var(--color-border);
+    border-left: 2px solid var(--color-accent);
+    border-radius: 10px;
+    padding: 0.6rem 1rem;
+    z-index: 900;
+    max-width: 520px;
+    width: max-content;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.7);
+    animation: slideDown 0.25s ease;
+  }
+
+  @keyframes slideDown {
+    from { transform: translateX(-50%) translateY(-8px); opacity: 0; }
+    to   { transform: translateX(-50%) translateY(0);   opacity: 1; }
+  }
+
+  :global(.hevc-warning-icon) {
+    color: var(--color-accent);
+    opacity: 0.8;
+    flex-shrink: 0;
+  }
+
+  .hevc-warning-text {
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+
+  .hevc-warning-link {
+    background: none;
+    border: none;
+    color: var(--color-accent);
+    font-size: 0.8rem;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    opacity: 0.85;
+  }
+
+  .hevc-warning-link:hover {
+    opacity: 1;
+  }
+
+  .hevc-warning-dismiss {
+    background: none;
+    border: none;
+    color: var(--color-text-subtle);
+    cursor: pointer;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    margin-left: 0.2rem;
+    transition: color 0.15s ease;
+  }
+
+  .hevc-warning-dismiss:hover {
+    color: var(--color-text-muted);
+  }
+
+  /* Next video countdown overlay - Netflix Style Card */
+  .next-video-overlay {
+    position: fixed;
+    bottom: 5rem;
+    right: 2.5rem;
+    width: 340px;
+    background: rgba(18, 18, 22, 0.85);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    overflow: hidden;
+    z-index: 90;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    transform-origin: bottom right;
+    animation: scaleIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    cursor: pointer;
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .next-video-overlay:hover {
+    transform: scale(1.02);
+  }
+
+  @keyframes scaleIn {
+    from { opacity: 0; transform: scale(0.95) translateY(12px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  .next-video-thumbnail-container {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+  }
+
+  .next-video-thumbnail {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.4s ease;
+  }
+
+  .next-video-overlay:hover .next-video-thumbnail {
+    transform: scale(1.05);
+  }
+
+  .next-video-thumbnail-placeholder {
+    width: 100%;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.04);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .next-video-thumbnail-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to bottom, transparent 40%, rgba(18, 18, 22, 0.9) 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.3s ease;
+  }
+
+  .next-video-overlay:hover .next-video-thumbnail-overlay {
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.2) 0%, rgba(18, 18, 22, 0.9) 100%);
+  }
+
+  .next-video-play-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    opacity: 0;
+    transform: scale(0.8);
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .next-video-overlay:hover .next-video-play-icon {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  .next-video-info {
+    padding: 0 1.25rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    position: relative;
+    margin-top: -1.5rem; /* Pull up to overlap the gradient */
+    z-index: 2;
+  }
+
+  .next-video-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .next-video-label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-accent); /* Accented label */
+  }
+
+  .next-video-countdown-text {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .next-video-name {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #fff;
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+  }
+
+  .next-video-progress-track {
+    width: 100%;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+    margin: 0.5rem 0;
+  }
+
+  .next-video-progress-fill {
+    height: 100%;
+    background: var(--color-accent);
+    border-radius: 2px;
+    box-shadow: 0 0 8px rgba(166, 107, 255, 0.6);
+  }
+
+  .next-video-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.25rem;
+  }
+
+  .next-video-btn {
+    flex: 1;
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .next-video-cancel {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  .next-video-cancel:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #fff;
+  }
+
+  .next-video-play {
+    background: #fff;
+    border: 1px solid transparent;
+    color: #000;
+  }
+
+  .next-video-play:hover {
+    background: rgba(255, 255, 255, 0.9);
+    transform: scale(1.02);
   }
 </style>

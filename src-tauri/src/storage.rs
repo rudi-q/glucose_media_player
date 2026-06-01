@@ -82,6 +82,7 @@ pub(crate) fn watch_progress_file_path() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+#[allow(dead_code)] // Referenced only by the AI subtitle code, disabled for the Mac App Store build.
 pub(crate) fn whisper_models_dir() -> Result<PathBuf, String> {
     #[cfg(target_os = "macos")]
     {
@@ -346,6 +347,7 @@ fn legacy_watch_progress_file_path() -> Result<PathBuf, String> {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)] // Referenced only by the AI subtitle code, disabled for the Mac App Store build.
 fn legacy_models_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     Ok(home.join(".whisper").join("models"))
@@ -375,6 +377,7 @@ fn migrate_legacy_file(from: &Path, to: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)] // Referenced only by the AI subtitle code, disabled for the Mac App Store build.
 fn migrate_legacy_directory(from: &Path, to: &Path) -> Result<(), String> {
     if !from.exists() {
         return Ok(());

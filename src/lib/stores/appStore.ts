@@ -2,6 +2,8 @@ import { writable } from 'svelte/store';
 
 export interface SetupStatus {
 	ffmpeg_installed: boolean;
+	ffmpeg_path: string | null;
+	ffmpeg_is_custom: boolean;
 	models_installed: string[];
 	setup_completed: boolean;
 }

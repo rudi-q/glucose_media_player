@@ -5,8 +5,8 @@ export interface FadedMediaPlaybackOptions {
   getOutputVolume?: () => number;
   setOutputVolume: (volume: number) => void;
   onPlayingChange?: (isPlaying: boolean) => void;
-  fadeInMs?: number;
-  fadeOutMs?: number;
+  fadeInMs?: number | (() => number);
+  fadeOutMs?: number | (() => number);
 }
 
 export interface PlaybackTransitionOptions {
@@ -42,8 +42,8 @@ export function createFadedMediaPlayback(options: FadedMediaPlaybackOptions) {
   // Promise is always settled rather than left permanently pending.
   let pendingFadeResolve: ((value: boolean) => void) | null = null;
 
-  const fadeInMs = options.fadeInMs ?? DEFAULT_FADE_IN_MS;
-  const fadeOutMs = options.fadeOutMs ?? DEFAULT_FADE_OUT_MS;
+  const resolveFadeIn = typeof options.fadeInMs === 'function' ? options.fadeInMs : () => options.fadeInMs as number ?? DEFAULT_FADE_IN_MS;
+  const resolveFadeOut = typeof options.fadeOutMs === 'function' ? options.fadeOutMs : () => options.fadeOutMs as number ?? DEFAULT_FADE_OUT_MS;
 
   function getSyncedMediaElements() {
     return (options.getSyncedMediaElements?.() ?? []).filter(
@@ -163,7 +163,7 @@ export function createFadedMediaPlayback(options: FadedMediaPlaybackOptions) {
     }
 
     if (fade) {
-      await fadeTo(getTargetVolume(), fadeInMs);
+      await fadeTo(getTargetVolume(), resolveFadeIn());
     } else {
       setOutputVolume(getTargetVolume());
     }
@@ -177,7 +177,7 @@ export function createFadedMediaPlayback(options: FadedMediaPlaybackOptions) {
     options.onPlayingChange?.(false);
 
     if (!mediaElement.paused && fade) {
-      const completed = await fadeTo(0, fadeOutMs);
+      const completed = await fadeTo(0, resolveFadeOut());
       if (!completed) return;
     } else {
       cancelFade();
@@ -215,7 +215,7 @@ export function createFadedMediaPlayback(options: FadedMediaPlaybackOptions) {
     options.onPlayingChange?.(false);
 
     if (!mediaElement.paused && fade) {
-      const completed = await fadeTo(0, fadeOutMs);
+      const completed = await fadeTo(0, resolveFadeOut());
       if (!completed) return;
     } else {
       cancelFade();

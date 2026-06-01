@@ -1,3 +1,4 @@
+mod ffmpeg;
 mod pip_window;
 mod storage;
 
@@ -7,7 +8,14 @@ use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Mutex;
+use fs4::FileExt;
+#[allow(unused_imports)] // Ordering is only used by the AI subtitle code, disabled on macOS.
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+// Signals an in-progress subtitle generation to abort at the next whisper checkpoint.
+#[allow(dead_code)] // Used only by the AI subtitle code, disabled for the Mac App Store build.
+static SUBTITLE_CANCEL: AtomicBool = AtomicBool::new(false);
 use std::thread;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -26,7 +34,7 @@ use tauri::Emitter;
 use tauri::RunEvent;
 
 // Helper to create a Command with hidden console window on Windows
-fn create_hidden_command(program: &str) -> Command {
+pub(crate) fn create_hidden_command(program: &str) -> Command {
     #[allow(unused_mut)]
     let mut cmd = Command::new(program);
 
@@ -53,21 +61,11 @@ fn resolve_macos_sidecar(name: &str) -> Option<std::path::PathBuf> {
     }
 }
 
-// Resolves the ffmpeg binary path: bundled AppData location first, then system PATH
+// Resolves the ffmpeg binary path: custom config path first, then bundled AppData, then system PATH
 fn get_ffmpeg_command() -> Command {
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
-            let ffmpeg_exe = std::path::Path::new(&app_data)
-                .join("glucose")
-                .join("resources")
-                .join("ffmpeg")
-                .join("bin")
-                .join("ffmpeg.exe");
-            if ffmpeg_exe.exists() {
-                return create_hidden_command(ffmpeg_exe.to_str().unwrap_or("ffmpeg"));
-            }
-        }
+    let path_info = ffmpeg::resolve_ffmpeg_path_info();
+    if let Some(path) = path_info.path {
+        return create_hidden_command(&path);
     }
 
     #[cfg(target_os = "macos")]
@@ -81,6 +79,23 @@ fn get_ffmpeg_command() -> Command {
 }
 
 fn get_ffprobe_command() -> Command {
+    let ffmpeg_path_info = ffmpeg::resolve_ffmpeg_path_info();
+    if let Some(ffmpeg_path) = ffmpeg_path_info.path {
+        let ffmpeg_path = std::path::Path::new(&ffmpeg_path);
+        let ffprobe_name = if cfg!(target_os = "windows") {
+            "ffprobe.exe"
+        } else {
+            "ffprobe"
+        };
+
+        if let Some(bin_dir) = ffmpeg_path.parent() {
+            let ffprobe_path = bin_dir.join(ffprobe_name);
+            if ffprobe_path.exists() {
+                return create_hidden_command(ffprobe_path.to_str().unwrap_or("ffprobe"));
+            }
+        }
+    }
+
     #[cfg(target_os = "windows")]
     {
         if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
@@ -608,6 +623,8 @@ struct SubtitleGenerationProgress {
 #[derive(Serialize, Clone)]
 struct SetupStatus {
     ffmpeg_installed: bool,
+    ffmpeg_path: Option<String>,
+    ffmpeg_is_custom: bool,
     models_installed: Vec<String>,
     setup_completed: bool,
 }
@@ -639,9 +656,11 @@ struct ConversionProgress {
 }
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct VideoInfo {
     format: String,
     size_mb: f64,
+    video_codec: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -894,32 +913,18 @@ async fn get_video_duration(video_path: &str) -> Option<f64> {
 // Check if FFmpeg is installed
 #[tauri::command]
 fn check_ffmpeg_installed() -> Result<bool, String> {
-    // First check resources folder in AppData\Local
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
-            let ffmpeg_exe = std::path::Path::new(&app_data)
-                .join("glucose")
-                .join("resources")
-                .join("ffmpeg")
-                .join("bin")
-                .join("ffmpeg.exe");
-            let ffmpeg_path = ffmpeg_exe.to_string_lossy();
-            println!("[FFmpeg Check] Checking AppData\\Local: {}", ffmpeg_path);
-            if ffmpeg_exe.exists() {
-                println!(
-                    "[FFmpeg Check] ✓ Found FFmpeg in AppData\\Local: {}",
-                    ffmpeg_path
-                );
-                return Ok(true);
-            }
-            println!("[FFmpeg Check] ✗ FFmpeg not found in AppData\\Local");
+    let path_info = ffmpeg::resolve_ffmpeg_path_info();
+    if path_info.path.is_some() {
+        if path_info.is_custom {
+            println!("[FFmpeg Check] ✓ Found custom FFmpeg");
+        } else {
+            println!("[FFmpeg Check] ✓ Found FFmpeg");
         }
     }
 
-    // On macOS the bundled sidecar (Contents/MacOS/ffmpeg) is resolved via get_ffmpeg_command();
-    // on other platforms this falls through to a PATH lookup.
-    println!("[FFmpeg Check] Checking bundled sidecar / system PATH...");
+    // get_ffmpeg_command() resolves a custom/bundled path and, on macOS, the
+    // bundled sidecar (Contents/MacOS/ffmpeg); otherwise it falls back to PATH.
+    println!("[FFmpeg Check] Verifying FFmpeg availability...");
     let result = get_ffmpeg_command()
         .arg("-version")
         .output()
@@ -934,6 +939,29 @@ fn check_ffmpeg_installed() -> Result<bool, String> {
     Ok(result)
 }
 
+// Returns the candidate directories to search for Whisper model files, in priority order.
+// Windows checks AppData\Local\glucose\resources\models first, then home\.whisper\models.
+// Non-Windows checks only home\.whisper\models.
+fn model_candidate_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
+        dirs.push(
+            std::path::Path::new(&app_data)
+                .join("glucose")
+                .join("resources")
+                .join("models"),
+        );
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".whisper").join("models"));
+    }
+
+    dirs
+}
+
 // Check which Whisper models are installed
 #[tauri::command]
 fn check_installed_models() -> Result<Vec<String>, String> {
@@ -946,55 +974,21 @@ fn check_installed_models() -> Result<Vec<String>, String> {
 
     println!("[Models Check] Starting model check...");
 
-    // Check resources folder in AppData\Local first
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
-            let resources_models_dir = std::path::Path::new(&app_data)
-                .join("glucose")
-                .join("resources")
-                .join("models");
-            let resources_path = resources_models_dir.to_string_lossy();
-            println!("[Models Check] Checking AppData\\Local: {}", resources_path);
-            if resources_models_dir.exists() {
-                println!("[Models Check] AppData\\Local models folder exists");
-                for (filename, model_name) in &model_files {
-                    let model_path = resources_models_dir.join(filename);
-                    if model_path.exists() {
-                        println!(
-                            "[Models Check] ✓ Found {} in AppData\\Local: {}",
-                            model_name, filename
-                        );
-                        models.push(model_name.to_string());
-                    } else {
-                        println!("[Models Check] ✗ {} not found in AppData\\Local", filename);
-                    }
-                }
-            } else {
-                println!("[Models Check] AppData\\Local models folder does not exist");
-            }
+    for dir in model_candidate_dirs() {
+        println!("[Models Check] Checking: {}", dir.display());
+        if !dir.exists() {
+            println!("[Models Check] Directory does not exist");
+            continue;
         }
-    }
-
-    // Check home directory
-    if let Ok(models_dir) = storage::whisper_models_dir() {
-        let models_path = models_dir.to_string_lossy();
-        println!("[Models Check] Checking models directory: {}", models_path);
-        if models_dir.exists() {
-            println!("[Models Check] Models folder exists");
-            for (filename, model_name) in &model_files {
-                if models_dir.join(filename).exists() && !models.contains(&model_name.to_string()) {
-                    println!(
-                        "[Models Check] ✓ Found {} in models directory: {}",
-                        model_name, filename
-                    );
-                    models.push(model_name.to_string());
-                } else if !models.contains(&model_name.to_string()) {
-                    println!("[Models Check] ✗ {} not found in models directory", filename);
-                }
+        println!("[Models Check] Directory exists");
+        for (filename, model_name) in &model_files {
+            let model_path = dir.join(filename);
+            if model_path.exists() && !models.contains(&model_name.to_string()) {
+                println!("[Models Check] ✓ Found {}: {}", model_name, filename);
+                models.push(model_name.to_string());
+            } else if !models.contains(&model_name.to_string()) {
+                println!("[Models Check] ✗ {} not found", filename);
             }
-        } else {
-            println!("[Models Check] Models folder does not exist");
         }
     }
 
@@ -1005,7 +999,17 @@ fn check_installed_models() -> Result<Vec<String>, String> {
 // Get setup status
 #[tauri::command]
 fn get_setup_status() -> Result<SetupStatus, String> {
-    let ffmpeg_installed = check_ffmpeg_installed()?;
+    let ffmpeg_path_info = ffmpeg::resolve_ffmpeg_path_info();
+    let ffmpeg_installed = ffmpeg_path_info.path.is_some();
+    if let Some(path) = &ffmpeg_path_info.path {
+        if ffmpeg_path_info.is_custom {
+            println!("[FFmpeg Check] ✓ Found FFmpeg at custom path: {}", path);
+        } else {
+            println!("[FFmpeg Check] ✓ Found FFmpeg at: {}", path);
+        }
+    } else {
+        println!("[FFmpeg Check] ✗ FFmpeg not found");
+    }
     let models_installed = check_installed_models()?;
 
     // Check if setup was completed (stored in config)
@@ -1013,6 +1017,8 @@ fn get_setup_status() -> Result<SetupStatus, String> {
 
     Ok(SetupStatus {
         ffmpeg_installed,
+        ffmpeg_path: ffmpeg_path_info.path,
+        ffmpeg_is_custom: ffmpeg_path_info.is_custom,
         models_installed,
         setup_completed,
     })
@@ -1214,36 +1220,75 @@ async fn download_file_with_progress(
     Ok(())
 }
 
+// Find an installed Whisper model file across all candidate directories.
+// Returns None if the model is not present in any location.
+fn find_model_path(model_name: &str) -> Option<std::path::PathBuf> {
+    model_candidate_dirs()
+        .into_iter()
+        .map(|dir| dir.join(model_name))
+        .find(|p| p.exists())
+}
+
+// Verify the video file has at least one audio stream before attempting extraction.
+// Returns Some(error) only when ffprobe ran successfully and confirmed no audio track.
+// Returns None when ffprobe is unavailable or errored — callers should proceed and
+// let FFmpeg surface the real failure rather than blocking on a missing preflight tool.
+async fn check_video_has_audio(video_path: &str) -> Option<String> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+    let mut cmd = get_ffprobe_command();
+    cmd.args([
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=codec_type",
+        "-of",
+        "default=noprint_wrappers=1",
+        video_path,
+    ]);
+    let output = match run_with_timeout(cmd, TIMEOUT, "ffprobe").await {
+        Ok(o) => o,
+        Err(_) => return None, // ffprobe not available — skip the check
+    };
+    if !output.status.success() {
+        return None; // ffprobe errored (e.g. unreadable file) — let FFmpeg handle it
+    }
+    if String::from_utf8_lossy(&output.stdout).trim().is_empty() {
+        return Some(
+            "This video has no audio track. AI subtitle generation requires audio.".to_string(),
+        );
+    }
+    None
+}
+
 // Helper function to extract audio from video using FFmpeg
-fn extract_audio_from_video(video_path: &str, output_audio_path: &str) -> Result<(), String> {
+async fn extract_audio_from_video(video_path: &str, output_audio_path: &str) -> Result<(), String> {
     #[cfg(debug_assertions)]
     println!("Extracting audio from video: {}", video_path);
 
-    let output = get_ffmpeg_command()
-        .args([
-            "-i",
-            video_path,
-            "-vn", // No video
-            "-acodec",
-            "pcm_s16le", // PCM 16-bit little-endian
-            "-ar",
-            "16000", // Sample rate 16kHz (Whisper's expected rate)
-            "-ac",
-            "1",  // Mono channel
-            "-y", // Overwrite output file
-            output_audio_path,
-        ])
-        .output()
-        .map_err(|e| {
-            format!(
-                "Failed to execute ffmpeg: {}. Make sure FFmpeg is installed and in PATH.",
-                e
-            )
-        })?;
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600); // 10 minutes
+
+    let mut cmd = get_ffmpeg_command();
+    cmd.args([
+        "-i",
+        video_path,
+        "-vn", // No video
+        "-acodec",
+        "pcm_s16le", // PCM 16-bit little-endian
+        "-ar",
+        "16000", // Sample rate 16kHz (Whisper's expected rate)
+        "-ac",
+        "1",  // Mono channel
+        "-y", // Overwrite output file
+        output_audio_path,
+    ]);
+
+    let output = run_with_timeout(cmd, TIMEOUT, "ffmpeg").await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("FFmpeg failed: {}", stderr));
+        return Err(format!("FFmpeg failed to extract audio: {}", stderr));
     }
 
     #[cfg(debug_assertions)]
@@ -1299,6 +1344,9 @@ async fn generate_subtitles(
         println!("Model size: {}", model_size);
     }
 
+    // Clear any stale cancel signal from a previous run before starting.
+    SUBTITLE_CANCEL.store(false, Ordering::Relaxed);
+
     // Emit initial progress
     let _ = app_handle.emit(
         "subtitle-generation-progress",
@@ -1317,14 +1365,54 @@ async fn generate_subtitles(
         .file_stem()
         .ok_or("Could not get video filename")?;
 
-    // Create temporary audio file path
-    let temp_audio_path =
-        video_dir.join(format!("{}_temp_audio.wav", video_stem.to_string_lossy()));
-    let temp_audio_str = temp_audio_path.to_string_lossy().to_string();
+    // Check the video has an audio track before creating any temp files.
+    // Skipped gracefully if ffprobe is unavailable — FFmpeg will surface the failure instead.
+    if let Some(e) = check_video_has_audio(&video_path).await {
+        let _ = app_handle.emit(
+            "subtitle-generation-progress",
+            SubtitleGenerationProgress {
+                stage: "error".to_string(),
+                progress: 0.0,
+                message: e.clone(),
+            },
+        );
+        return Err(e);
+    }
 
-    // Output subtitle path
+    // Output subtitle path (alongside the video file)
     let subtitle_path = video_dir.join(format!("{}.srt", video_stem.to_string_lossy()));
     let subtitle_path_str = subtitle_path.to_string_lossy().to_string();
+
+    // Create a uniquely named temp audio file in the system temp directory,
+    // using the same pid+nanos+create_new pattern as remux_with_audio_track.
+    let temp_dir = std::env::temp_dir();
+    let mut temp_audio_path_opt: Option<std::path::PathBuf> = None;
+    for i in 0..100u128 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let candidate = temp_dir.join(format!(
+            "glucose_subtitle_{}_{}.wav",
+            std::process::id(),
+            nanos + i,
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(_) => {
+                temp_audio_path_opt = Some(candidate);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("Failed to create temporary audio file: {}", e)),
+        }
+    }
+    let temp_audio_path = temp_audio_path_opt
+        .ok_or_else(|| "Failed to generate a unique temporary audio file path".to_string())?;
+    let temp_audio_str = temp_audio_path.to_string_lossy().to_string();
 
     // Step 1: Extract audio from video
     let _ = app_handle.emit(
@@ -1336,7 +1424,12 @@ async fn generate_subtitles(
         },
     );
 
-    extract_audio_from_video(&video_path, &temp_audio_str)?;
+    extract_audio_from_video(&video_path, &temp_audio_str)
+        .await
+        .map_err(|e| {
+            let _ = fs::remove_file(&temp_audio_str);
+            e
+        })?;
 
     // Step 2: Load Whisper model
     let _ = app_handle.emit(
@@ -1348,7 +1441,6 @@ async fn generate_subtitles(
         },
     );
 
-    // Get model path from user's home directory or use default location
     let model_name = match model_size.as_str() {
         "tiny" => "ggml-tiny.bin",
         "small" => "ggml-small.bin",
@@ -1356,29 +1448,26 @@ async fn generate_subtitles(
         _ => "ggml-tiny.bin",
     };
 
-    let model_path = storage::whisper_models_dir()?.join(model_name);
-
-    if !model_path.exists() {
-        let error_msg = format!(
-            "Whisper model not found at: {}\n\nPlease download the model first. You can download it from:\nhttps://huggingface.co/ggerganov/whisper.cpp/tree/main\n\nPlace it in: {}",
-            model_path.display(),
-            model_path.parent().unwrap().display()
-        );
-
-        // Clean up temp audio file
-        let _ = fs::remove_file(&temp_audio_str);
-
-        let _ = app_handle.emit(
-            "subtitle-generation-progress",
-            SubtitleGenerationProgress {
-                stage: "error".to_string(),
-                progress: 0.0,
-                message: error_msg.clone(),
-            },
-        );
-
-        return Err(error_msg);
-    }
+    // Find the model in AppData (Windows) or home directory
+    let model_path = match find_model_path(model_name) {
+        Some(p) => p,
+        None => {
+            let error_msg = format!(
+                "Whisper {} model not found. Please download it from the Settings page.",
+                model_size
+            );
+            let _ = fs::remove_file(&temp_audio_str);
+            let _ = app_handle.emit(
+                "subtitle-generation-progress",
+                SubtitleGenerationProgress {
+                    stage: "error".to_string(),
+                    progress: 0.0,
+                    message: error_msg.clone(),
+                },
+            );
+            return Err(error_msg);
+        }
+    };
 
     // Step 3: Transcribe audio with Whisper
     let _ = app_handle.emit(
@@ -1397,7 +1486,7 @@ async fn generate_subtitles(
     let app_handle_clone = app_handle.clone();
     let language_clone = language.clone();
 
-    tokio::task::spawn_blocking(move || {
+    let transcription_result = tokio::task::spawn_blocking(move || {
         transcribe_audio_with_whisper(
             &model_path_clone.to_string_lossy(),
             &temp_audio_clone,
@@ -1407,10 +1496,26 @@ async fn generate_subtitles(
         )
     })
     .await
-    .map_err(|e| format!("Transcription task failed: {}", e))??;
+    .map_err(|e| format!("Transcription task failed: {}", e))
+    .and_then(|r| r);
 
-    // Clean up temporary audio file
+    // Always clean up the temp audio file regardless of outcome.
     let _ = fs::remove_file(&temp_audio_str);
+
+    if let Err(e) = transcription_result {
+        if SUBTITLE_CANCEL.load(Ordering::Relaxed) {
+            let _ = app_handle.emit(
+                "subtitle-generation-progress",
+                SubtitleGenerationProgress {
+                    stage: "cancelled".to_string(),
+                    progress: 0.0,
+                    message: "Subtitle generation cancelled.".to_string(),
+                },
+            );
+            return Err("cancelled".to_string());
+        }
+        return Err(e);
+    }
 
     // Step 4: Complete
     let _ = app_handle.emit(
@@ -1423,6 +1528,11 @@ async fn generate_subtitles(
     );
 
     Ok(subtitle_path_str)
+}
+
+#[tauri::command]
+fn cancel_subtitle_generation() {
+    SUBTITLE_CANCEL.store(true, Ordering::Relaxed);
 }
 
 // Transcribe audio using whisper-rs
@@ -1463,6 +1573,24 @@ fn transcribe_audio_with_whisper(
     params.set_max_len(0); // Disable max length limit per segment
     params.set_split_on_word(true); // Split on word boundaries
 
+    // Emit real-time progress during state.full() via whisper's native progress callback.
+    // Whisper reports 0-100; we map that to the 50-90% band in our UI.
+    let app_handle_cb = app_handle.clone();
+    params.set_progress_callback_safe(move |progress: i32| {
+        let mapped = 50.0 + (progress as f32 / 100.0) * 40.0;
+        let _ = app_handle_cb.emit(
+            "subtitle-generation-progress",
+            SubtitleGenerationProgress {
+                stage: "transcribing".to_string(),
+                progress: mapped,
+                message: "Transcribing audio with AI...".to_string(),
+            },
+        );
+    });
+
+    // Abort callback — checked at each whisper processing boundary.
+    params.set_abort_callback_safe(|| SUBTITLE_CANCEL.load(Ordering::Relaxed));
+
     // Run transcription
     let mut state = ctx
         .create_state()
@@ -1475,7 +1603,7 @@ fn transcribe_audio_with_whisper(
     #[cfg(debug_assertions)]
     println!("Transcription complete, extracting segments...");
 
-    // Extract segments with timestamps
+    // Extract segments — progress was already reported live via the callback above.
     let num_segments = state.full_n_segments();
 
     #[cfg(debug_assertions)]
@@ -1484,41 +1612,20 @@ fn transcribe_audio_with_whisper(
     let mut segments = Vec::new();
 
     for i in 0..num_segments {
-        // 1. Fetch the segment object for this loop iteration
-        // USING .ok_or_else() INSTEAD OF .map_err() because get_segment returns an Option
         let segment = state
             .get_segment(i)
             .ok_or_else(|| format!("Failed to get segment {}", i))?;
 
-        // 2. Grab the timestamps from the object
-        let start_timestamp = segment.start_timestamp();
-        let end_timestamp = segment.end_timestamp();
+        let start_seconds = segment.start_timestamp() as f64 / 100.0;
+        let end_seconds = segment.end_timestamp() as f64 / 100.0;
 
-        // 3. Grab the text
         let text = segment
             .to_str()
             .map_err(|e| format!("Failed to parse segment text: {}", e))?
             .to_string();
 
-        // Convert from Whisper's timestamp units (10ms) to seconds
-        let start_seconds = start_timestamp as f64 / 100.0;
-        let end_seconds = end_timestamp as f64 / 100.0;
-
         if !text.trim().is_empty() {
             segments.push((start_seconds, end_seconds, text));
-        }
-
-        // Emit progress periodically
-        if i % 10 == 0 {
-            let progress = 50.0 + (i as f32 / num_segments as f32) * 40.0;
-            let _ = app_handle.emit(
-                "subtitle-generation-progress",
-                SubtitleGenerationProgress {
-                    stage: "transcribing".to_string(),
-                    progress,
-                    message: format!("Processing segment {} of {}...", i + 1, num_segments),
-                },
-            );
         }
     }
 
@@ -1585,35 +1692,96 @@ fn read_wav_file(path: &str) -> Result<Vec<f32>, String> {
 // End of AI subtitle generation block.
 // =============================================================================
 
-// Save watch progress for a video
-#[tauri::command]
-fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> Result<(), String> {
-    let progress_file = storage::watch_progress_file_path()?;
-    let config_dir = progress_file
-        .parent()
-        .ok_or_else(|| "Could not get progress directory".to_string())?;
+static WATCH_PROGRESS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-    // Create config directory if it doesn't exist
+fn watch_progress_lock() -> &'static Mutex<()> {
+    WATCH_PROGRESS_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn watch_progress_path() -> Result<std::path::PathBuf, String> {
+    // On macOS the app is sandboxed (Mac App Store) and cannot write to ~/.glucose,
+    // so use the app-data location (storage:: also migrates any legacy file).
+    #[cfg(target_os = "macos")]
+    {
+        storage::watch_progress_file_path()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        Ok(home.join(".glucose").join("watch_progress.json"))
+    }
+}
+
+fn read_watch_progress(
+    progress_file: &std::path::Path,
+) -> Result<std::collections::HashMap<String, WatchProgress>, String> {
+    match fs::read_to_string(progress_file) {
+        Ok(content) => serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse progress file: {}", e)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok(std::collections::HashMap::new())
+        }
+        Err(e) => Err(format!("Failed to read progress file: {}", e)),
+    }
+}
+
+fn write_watch_progress(
+    progress_file: &std::path::Path,
+    map: &std::collections::HashMap<String, WatchProgress>,
+) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(map)
+        .map_err(|e| format!("Failed to serialize progress: {}", e))?;
+    let temp_file = progress_file.with_extension("json.tmp");
+    fs::write(&temp_file, &content)
+        .map_err(|e| format!("Failed to write temp progress file: {}", e))?;
+    fs::rename(&temp_file, progress_file)
+        .map_err(|e| format!("Failed to replace progress file: {}", e))?;
+    Ok(())
+}
+
+fn open_progress_lock_file(progress_file: &std::path::Path, read: bool) -> Result<fs::File, String> {
+    let config_dir = progress_file.parent().ok_or("Invalid progress file path")?;
     fs::create_dir_all(config_dir)
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    let lock_path = progress_file.with_file_name("watch_progress.lock");
+    fs::OpenOptions::new()
+        .read(read)
+        .write(true)
+        .create(true)
+        .open(&lock_path)
+        .map_err(|e| format!("Failed to open progress lock file: {}", e))
+}
 
-    // Load existing progress data or create new
-    let mut progress_map: std::collections::HashMap<String, WatchProgress> =
-        if progress_file.exists() {
-            let content = fs::read_to_string(&progress_file)
-                .map_err(|e| format!("Failed to read progress file: {}", e))?;
-            serde_json::from_str(&content).unwrap_or_else(|_| std::collections::HashMap::new())
-        } else {
-            std::collections::HashMap::new()
-        };
+fn acquire_watch_progress_file_lock_exclusive(progress_file: &std::path::Path) -> Result<fs::File, String> {
+    let f = open_progress_lock_file(progress_file, false)?;
+    FileExt::lock(&f)
+        .map_err(|e| format!("Failed to acquire exclusive progress file lock: {}", e))?;
+    Ok(f)
+}
 
-    // Get current time as Unix timestamp
+fn acquire_watch_progress_file_lock_shared(progress_file: &std::path::Path) -> Result<fs::File, String> {
+    // lock_shared requires read access on Unix
+    let f = open_progress_lock_file(progress_file, true)?;
+    FileExt::lock_shared(&f)
+        .map_err(|e| format!("Failed to acquire shared progress file lock: {}", e))?;
+    Ok(f)
+}
+
+#[tauri::command]
+fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> Result<(), String> {
+    let progress_file = watch_progress_path()?;
+    let _guard = watch_progress_lock()
+        .lock()
+        .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
+
+    let mut progress_map = read_watch_progress(&progress_file)?;
+
     let last_watched = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_err(|e| format!("Failed to get current time: {}", e))?
         .as_secs();
 
-    // Update or insert progress for this video
     progress_map.insert(
         video_path.clone(),
         WatchProgress {
@@ -1624,52 +1792,74 @@ fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> 
         },
     );
 
-    // Save to file
-    let content = serde_json::to_string_pretty(&progress_map)
-        .map_err(|e| format!("Failed to serialize progress: {}", e))?;
-
-    fs::write(progress_file, content)
-        .map_err(|e| format!("Failed to write progress file: {}", e))?;
-
-    Ok(())
+    write_watch_progress(&progress_file, &progress_map)
 }
 
 // Get watch progress for a video
 #[tauri::command]
 fn get_watch_progress(video_path: String) -> Result<Option<WatchProgress>, String> {
-    let progress_file = storage::watch_progress_file_path()?;
-
-    if !progress_file.exists() {
-        return Ok(None);
-    }
-
-    let content = fs::read_to_string(&progress_file)
-        .map_err(|e| format!("Failed to read progress file: {}", e))?;
-
-    let progress_map: std::collections::HashMap<String, WatchProgress> =
-        serde_json::from_str(&content).unwrap_or_else(|_| std::collections::HashMap::new());
-
+    let progress_file = watch_progress_path()?;
+    let _guard = watch_progress_lock()
+        .lock()
+        .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock_shared(&progress_file)?;
+    let progress_map = read_watch_progress(&progress_file)?;
     Ok(progress_map.get(&video_path).cloned())
 }
 
 // Get video file info
 #[tauri::command]
-fn get_video_info(video_path: String) -> Result<VideoInfo, String> {
+async fn get_video_info(video_path: String) -> Result<VideoInfo, String> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
     let path = Path::new(&video_path);
 
-    // Get file size
     let metadata = fs::metadata(path).map_err(|e| format!("Failed to get file metadata: {}", e))?;
     let size_bytes = metadata.len();
     let size_mb = size_bytes as f64 / (1024.0 * 1024.0);
 
-    // Get format from extension
     let format = path
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or("unknown")
         .to_uppercase();
 
-    Ok(VideoInfo { format, size_mb })
+    let video_codec = {
+        let mut cmd = get_ffprobe_command();
+        cmd.args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "json",
+            &video_path,
+        ]);
+        match run_with_timeout(cmd, TIMEOUT, "ffprobe").await {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                serde_json::from_str::<serde_json::Value>(&stdout)
+                    .ok()
+                    .and_then(|v| {
+                        v["streams"]
+                            .as_array()?
+                            .first()?
+                            .get("codec_name")?
+                            .as_str()
+                            .map(str::to_string)
+                    })
+            }
+            _ => None,
+        }
+    };
+
+    Ok(VideoInfo {
+        format,
+        size_mb,
+        video_codec,
+    })
 }
 
 // Estimate converted file size (rough estimation)
@@ -1811,19 +2001,44 @@ fn convert_video_with_ffmpeg(
 // Get all watch progress data
 #[tauri::command]
 fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchProgress>, String> {
-    let progress_file = storage::watch_progress_file_path()?;
+    let progress_file = watch_progress_path()?;
+    let _guard = watch_progress_lock()
+        .lock()
+        .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock_shared(&progress_file)?;
+    read_watch_progress(&progress_file)
+}
 
-    if !progress_file.exists() {
-        return Ok(std::collections::HashMap::new());
+#[tauri::command]
+fn delete_watch_progress(video_path: String) -> Result<(), String> {
+    let progress_file = watch_progress_path()?;
+    let _guard = watch_progress_lock()
+        .lock()
+        .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
+
+    let mut progress_map = read_watch_progress(&progress_file)?;
+    progress_map.remove(&video_path);
+    write_watch_progress(&progress_file, &progress_map)
+}
+
+#[tauri::command]
+fn clear_watch_history_since(cutoff_timestamp: u64) -> Result<(), String> {
+    let progress_file = watch_progress_path()?;
+    let _guard = watch_progress_lock()
+        .lock()
+        .map_err(|_| "Watch progress lock poisoned".to_string())?;
+    let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
+
+    let mut progress_map = read_watch_progress(&progress_file)?;
+
+    if cutoff_timestamp == 0 {
+        progress_map.clear();
+    } else {
+        progress_map.retain(|_, v| v.last_watched < cutoff_timestamp);
     }
 
-    let content = fs::read_to_string(&progress_file)
-        .map_err(|e| format!("Failed to read progress file: {}", e))?;
-
-    let progress_map: std::collections::HashMap<String, WatchProgress> =
-        serde_json::from_str(&content).unwrap_or_else(|_| std::collections::HashMap::new());
-
-    Ok(progress_map)
+    write_watch_progress(&progress_file, &progress_map)
 }
 
 fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
@@ -2112,6 +2327,7 @@ pub fn run() {
             delete_temp_file,
             // AI commands commented out for Mac App Store first submission:
             // generate_subtitles,
+            // cancel_subtitle_generation,
             check_ffmpeg_installed,
             check_installed_models,
             get_setup_status,
@@ -2120,6 +2336,8 @@ pub fn run() {
             save_watch_progress,
             get_watch_progress,
             get_all_watch_progress,
+            delete_watch_progress,
+            clear_watch_history_since,
             get_video_info,
             convert_video,
             enter_pip_mode,
@@ -2127,7 +2345,10 @@ pub fn run() {
             save_pip_window_layout,
             settle_pip_window,
             updater_supported,
-            is_macos
+            is_macos,
+            ffmpeg::get_ffmpeg_path,
+            ffmpeg::pick_ffmpeg_executable,
+            ffmpeg::save_ffmpeg_custom_path
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

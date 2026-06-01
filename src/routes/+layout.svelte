@@ -14,8 +14,11 @@
       "--surface-panel":           theme.surface.panel,
       "--surface-badge":           theme.surface.badge,
       "--color-accent":            theme.color.accent,
+      "--color-accent-hover":      theme.color.accentHover,
       "--color-accent-subtle":     theme.color.accentSubtle,
       "--color-accent-border":     theme.color.accentBorder,
+      "--color-accent-border-hover": theme.color.accentBorderHover,
+      "--color-accent-gradient-end": theme.color.accentGradientEnd,
       "--color-border":            theme.color.border,
       "--color-border-strong":     theme.color.borderStrong,
       "--color-interactive":       theme.color.interactive,
@@ -29,7 +32,7 @@
   }
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { onMount, setContext } from "svelte";
+  import { onMount, setContext, tick } from "svelte";
   import { fade } from "svelte/transition";
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
@@ -55,15 +58,39 @@
     Star,
     Keyboard,
     FolderOpen,
+    Play,
+    Maximize2,
+    PictureInPicture2,
+    Ban,
+    Repeat,
+    SkipForward,
+    ZapOff,
+    Gauge,
+    Waves,
+    Wind,
+    RotateCcw,
+    Plus,
   } from "lucide-svelte";
   import Button from "$lib/components/Button.svelte";
   import LibrarySettings from "$lib/components/LibrarySettings.svelte";
+  import FFmpegSettings from "$lib/components/FFmpegSettings.svelte";
+  import PlayerPreferencesPicker, {
+    type PlayerPreferenceOption,
+  } from "$lib/components/PlayerPreferencesPicker.svelte";
   import UpdateManager, {
     type UpdateManagerAPI,
   } from "$lib/components/UpdateManager.svelte";
   import UpdateNotification from "$lib/components/UpdateNotification.svelte";
   import { getFormattedVersion } from "$lib/utils/version";
   import { isAudio } from "$lib/utils/mediaType";
+  import {
+    getDefaultPlayMode,
+    getEndBehavior,
+    getFadeMode,
+    type DefaultPlayMode,
+    type EndBehavior,
+    type FadeMode,
+  } from "$lib/utils/playerPreferences";
   import {
     appSettings,
     setupStore,
@@ -83,11 +110,267 @@
   let downloadProgress = $state(0);
   let downloadMessage = $state("");
   let isCheckingForUpdates = $state(false);
-  let selectedTab = $state("ai"); // 'ai' | 'library' | 'shortcuts' | 'updates' | 'community' | 'about'
+  let selectedTab = $state("ai"); // 'ai' | 'library' | 'player' | 'shortcuts' | 'updates' | 'community' | 'about'
   let modelsExpanded = $state(false);
   let updaterSupported = $state(false);
   // macOS (Mac App Store) build hides AI features; default tab falls back to "library" there.
   let isMacOS = $state(false);
+  let skipPlayerPreferencePersist = false;
+
+  const defaultPlayModeOptions: PlayerPreferenceOption<DefaultPlayMode>[] = [
+    {
+      value: "cinematic",
+      icon: Play,
+      label: "Cinematic",
+      description: "Focused view with blurred background",
+    },
+    {
+      value: "fullscreen",
+      icon: Maximize2,
+      label: "Fullscreen",
+      description: "Video fills the entire window",
+    },
+    {
+      value: "pip",
+      icon: PictureInPicture2,
+      label: "Picture-in-Picture",
+      description: "Floating compact window",
+    },
+  ];
+
+  const endBehaviorOptions: PlayerPreferenceOption<EndBehavior>[] = [
+    {
+      value: "nothing",
+      icon: Ban,
+      label: "Do Nothing",
+      description: "Stop at the end of the video",
+    },
+    {
+      value: "loop",
+      icon: Repeat,
+      label: "Loop",
+      description: "Replay the same video",
+    },
+    {
+      value: "next",
+      icon: SkipForward,
+      label: "Play Next",
+      description: "Automatically play the next video from your gallery",
+    },
+  ];
+
+  const fadeModeOptions: PlayerPreferenceOption<FadeMode>[] = [
+    {
+      value: "off",
+      icon: ZapOff,
+      label: "Off",
+      description: "Instant volume change, no fade",
+    },
+    {
+      value: "short",
+      icon: Gauge,
+      label: "Short",
+      description: "Quick 300ms fade",
+    },
+    {
+      value: "default",
+      icon: Waves,
+      label: "Default",
+      description: "Smooth 800ms fade",
+    },
+    {
+      value: "long",
+      icon: Wind,
+      label: "Long",
+      description: "Slow 1.5s cinematic fade",
+    },
+  ];
+
+  const _savedDefaultMode = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_default_mode") : null;
+  let defaultPlayMode = $state<DefaultPlayMode>(
+    getDefaultPlayMode(_savedDefaultMode)
+  );
+
+  $effect(() => {
+    if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_default_mode", defaultPlayMode);
+  });
+
+  const _savedEndBehavior = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_end_behavior") : null;
+  let endBehavior = $state<EndBehavior>(
+    getEndBehavior(_savedEndBehavior)
+  );
+
+  $effect(() => {
+    if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_end_behavior", endBehavior);
+  });
+
+  const _savedFadeMode = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_fade") : null;
+  let fadeMode = $state<FadeMode>(getFadeMode(_savedFadeMode));
+
+  $effect(() => {
+    if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_fade", fadeMode);
+  });
+
+  const _isFirstRun = _savedDefaultMode === null && _savedEndBehavior === null && _savedFadeMode === null;
+  let showOnboarding = $state(_isFirstRun);
+  let onboardingModalEl = $state<HTMLDivElement | undefined>(undefined);
+  let onboardingError = $state<string | null>(null);
+  let onboardingPathsRequestId = 0;
+  $effect(() => {
+    if (showOnboarding) {
+      const requestId = ++onboardingPathsRequestId;
+      // Seed library folder list from backend defaults / saved config
+      invoke<string[]>("get_gallery_paths").then((p) => {
+        if (showOnboarding && requestId === onboardingPathsRequestId && onboardingPaths.length === 0) {
+          onboardingPaths = p;
+          if (p.length > 0) onboardingError = null;
+        }
+      }).catch((err) => {
+        console.error("get_gallery_paths failed", { err, requestId, onboardingPathsRequestId });
+      });
+      return () => {
+        onboardingPathsRequestId++;
+      };
+    }
+  });
+
+  let onboardingPaths = $state<string[]>([]);
+
+  function trapFocus(node: HTMLElement) {
+    const previous = document.activeElement as HTMLElement | null;
+    const focusableSelector = [
+      "a[href]",
+      "button:not([disabled])",
+      "input:not([disabled])",
+      "select:not([disabled])",
+      "textarea:not([disabled])",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+
+    function getFocusable() {
+      return Array.from(node.querySelectorAll<HTMLElement>(focusableSelector))
+        .filter((el) => !el.hasAttribute("disabled") && el.offsetParent !== null);
+    }
+
+    function focusModal() {
+      node.focus();
+    }
+
+    function handleKeydown(event: KeyboardEvent) {
+      if (event.key !== "Tab") return;
+
+      const focusable = getFocusable();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        focusModal();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (event.shiftKey && (active === first || active === node)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    function handleFocusIn(event: FocusEvent) {
+      if (event.target instanceof Node && !node.contains(event.target)) {
+        focusModal();
+      }
+    }
+
+    node.addEventListener("keydown", handleKeydown);
+    document.addEventListener("focusin", handleFocusIn);
+    queueMicrotask(focusModal);
+
+    return {
+      destroy() {
+        node.removeEventListener("keydown", handleKeydown);
+        document.removeEventListener("focusin", handleFocusIn);
+        previous?.focus();
+      },
+    };
+  }
+
+  function _obNormPath(p: string): string {
+    return p.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '');
+  }
+
+  async function obAddFolder() {
+    let folder: string | null = null;
+    try {
+      folder = await invoke<string | null>("open_folder_dialog");
+    } catch (err) {
+      console.error("Failed to open folder dialog:", err);
+      onboardingError = "Failed to add folder. Try again.";
+      return;
+    }
+    if (!folder) return;
+    const folderPath = folder;
+    if (onboardingPaths.some(p => _obNormPath(p) === _obNormPath(folderPath))) return;
+    onboardingPaths = [...onboardingPaths, folderPath];
+    onboardingError = null;
+  }
+
+  function obRemoveFolder(path: string) {
+    if (onboardingPaths.length <= 1) return;
+    onboardingPaths = onboardingPaths.filter(p => p !== path);
+  }
+
+  function _maybeShowSetupDialog() {
+    if (setupStatus && !setupStatus.setup_completed && setupStatus.models_installed.length === 0) {
+      showSetupDialog = true;
+    }
+  }
+
+  async function completeOnboarding(): Promise<boolean> {
+    if (onboardingPaths.length === 0) {
+      onboardingError = "Add at least one folder to continue";
+      onboardingModalEl?.focus();
+      return false;
+    }
+    try {
+      await invoke("save_gallery_paths", { paths: onboardingPaths });
+      onboardingError = null;
+      showOnboarding = false;
+      _maybeShowSetupDialog();
+      return true;
+    } catch (err) {
+      console.error("Failed to save gallery paths:", err);
+      onboardingError = "Failed to save folders. Try again.";
+      return false;
+    }
+  }
+
+  function skipOnboarding() {
+    resetPlayerPreferences();
+    showOnboarding = false;
+    _maybeShowSetupDialog();
+  }
+
+  function resetPlayerPreferences() {
+    defaultPlayMode = getDefaultPlayMode(null);
+    endBehavior = getEndBehavior(null);
+    fadeMode = getFadeMode(null);
+  }
+
+  async function clearPlayerPreferences() {
+    skipPlayerPreferencePersist = true;
+    resetPlayerPreferences();
+    if (typeof localStorage !== "undefined") {
+      localStorage.removeItem("glucose_default_mode");
+      localStorage.removeItem("glucose_end_behavior");
+      localStorage.removeItem("glucose_fade");
+    }
+    await tick();
+    skipPlayerPreferencePersist = false;
+  }
 
   // Update manager
   let updateManager = $state<UpdateManagerAPI | undefined>(undefined);
@@ -128,20 +411,22 @@
       const results = await Promise.allSettled([
         listen<string>("open-file", async (event) => {
           const encodedPath = encodeURIComponent(event.payload);
+          const params = new URLSearchParams({ mode: defaultPlayMode });
           await goto(
             isAudio(event.payload)
               ? `/audio/${encodedPath}`
-              : `/player/${encodedPath}`,
+              : `/player/${encodedPath}?${params.toString()}`,
           );
           invoke("mark_file_processed").catch(console.error);
         }),
         listen<string[]>("tauri://drag-drop", async (event) => {
           if (event.payload && event.payload.length > 0) {
             const encodedPath = encodeURIComponent(event.payload[0]);
+            const params = new URLSearchParams({ mode: defaultPlayMode });
             await goto(
               isAudio(event.payload[0])
                 ? `/audio/${encodedPath}`
-                : `/player/${encodedPath}`,
+                : `/player/${encodedPath}?${params.toString()}`,
             );
           }
         }),
@@ -212,7 +497,7 @@
       const status = await invoke<SetupStatus>("get_setup_status");
       setupStore.setStatus(status);
 
-      // Show setup dialog on first launch if not completed.
+      // Show setup dialog on first launch if not completed (deferred until after onboarding).
       // Skipped on macOS, where AI features are disabled for the Mac App Store build.
       if (
         !isMacOS &&
@@ -220,7 +505,7 @@
         status.models_installed.length === 0
       ) {
         setTimeout(() => {
-          showSetupDialog = true;
+          if (!showOnboarding) showSetupDialog = true;
         }, 1500);
       }
     } catch (err) {
@@ -294,6 +579,11 @@
       localStorage.setItem("lastAutoCheckTime", time.toString());
     }
   }
+
+  function ffmpegLocationLabel(status: SetupStatus) {
+    if (!status.ffmpeg_path) return "Not found";
+    return status.ffmpeg_is_custom ? "Custom path" : "Detected at";
+  }
 </script>
 
 {#if updaterSupported}
@@ -314,7 +604,14 @@
   </div>
 {/if}
 
-{@render children()}
+<div style="display: contents" inert={showOnboarding}>{@render children()}</div>
+
+<svelte:window onkeydown={(e) => {
+  if (e.key === 'Escape') {
+    if (showOnboarding) { e.stopPropagation(); void completeOnboarding(); }
+    else if (showSettings) { e.stopPropagation(); showSettings = false; }
+  }
+}} />
 
 <!-- Settings Overlay -->
 {#if showSettings}
@@ -365,6 +662,14 @@
           </button>
           <button
             class="sidebar-tab"
+            class:active={selectedTab === "player"}
+            onclick={() => (selectedTab = "player")}
+          >
+            <Play size={18} />
+            <span>Player</span>
+          </button>
+          <button
+            class="sidebar-tab"
             class:active={selectedTab === "shortcuts"}
             onclick={() => (selectedTab = "shortcuts")}
           >
@@ -408,6 +713,7 @@
                   <div
                     class="requirement-card"
                     class:ready={setupStatus.ffmpeg_installed}
+                    title={setupStatus.ffmpeg_path ?? undefined}
                   >
                     <div class="requirement-info">
                       <span class="requirement-label">FFmpeg</span>
@@ -582,6 +888,8 @@
                 </div>
               {/if}
             </div>
+
+            <FFmpegSettings onPathChange={checkSetupStatus} />
 
             <div class="settings-section">
               <h3>Language Preferences</h3>
@@ -793,6 +1101,37 @@
             </div>
           {:else if selectedTab === "library"}
             <LibrarySettings />
+          {:else if selectedTab === "player"}
+            <PlayerPreferencesPicker
+              id="default-view-mode"
+              label="Default View Mode"
+              description="Choose how videos open when you play them from the gallery."
+              bind:value={defaultPlayMode}
+              options={defaultPlayModeOptions}
+            />
+            <PlayerPreferencesPicker
+              id="when-video-ends"
+              label="When Video Ends"
+              description="Choose what happens after a video finishes playing."
+              bind:value={endBehavior}
+              options={endBehaviorOptions}
+            />
+            <PlayerPreferencesPicker
+              id="playback-fade"
+              label="Play/Pause Fade"
+              description="Controls how smoothly volume transitions when you play or pause."
+              bind:value={fadeMode}
+              options={fadeModeOptions}
+            />
+            <div class="reset-prefs-row">
+              <button class="reset-prefs-btn" onclick={resetPlayerPreferences}>
+                <RotateCcw size={13} />
+                Reset to defaults
+              </button>
+              <button class="reset-prefs-btn reset-prefs-btn--clear" onclick={clearPlayerPreferences}>
+                Clear preferences
+              </button>
+            </div>
           {:else if selectedTab === "shortcuts"}
             <div class="settings-section">
               <div class="shortcuts-layout">
@@ -962,8 +1301,8 @@
 <!-- First-Run Setup Dialog -->
 {#if showSetupDialog}
   <div class="setup-overlay">
-    <div class="setup-modal">
-      <h2>Enable AI Subtitle Generation?</h2>
+    <div class="setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-dialog-title" tabindex="-1" use:trapFocus>
+      <h2 id="setup-dialog-title">Enable AI Subtitle Generation?</h2>
       <p class="setup-description">
         Automatically generate subtitles from video audio using AI. This feature
         requires downloading additional components.
@@ -988,7 +1327,10 @@
                 <div class="setup-item-title">FFmpeg (Required)</div>
                 <div class="setup-item-desc">
                   {#if setupStatus.ffmpeg_installed}
-                    ✓ Already installed
+                    ✓ {ffmpegLocationLabel(setupStatus)}:
+                    <span title={setupStatus.ffmpeg_path ?? undefined}
+                      >{setupStatus.ffmpeg_path}</span
+                    >
                   {:else}
                     ❌ Not installed - Please install FFmpeg manually
                   {/if}
@@ -1140,6 +1482,94 @@
   </div>
 {/if}
 
+<!-- First-Run Onboarding -->
+{#if appReady && showOnboarding}
+  <div class="onboarding-overlay" transition:fade={{ duration: 300 }}>
+    <div
+      class="onboarding-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="ob-dialog-title"
+      aria-describedby="ob-dialog-desc"
+      tabindex="-1"
+      bind:this={onboardingModalEl}
+      use:trapFocus
+    >
+      <div class="onboarding-header">
+        <h2 id="ob-dialog-title">How do you like to watch?</h2>
+        <p id="ob-dialog-desc" class="onboarding-subtitle">Set up your preferences to get started.</p>
+      </div>
+
+      <div class="onboarding-body">
+        <PlayerPreferencesPicker
+          id="ob-view-mode"
+          label="Default View Mode"
+          description="Choose how videos open when you play them from the gallery."
+          bind:value={defaultPlayMode}
+          options={defaultPlayModeOptions}
+        />
+
+        <PlayerPreferencesPicker
+          id="ob-end-behavior"
+          label="When Video Ends"
+          description="Choose what happens after a video finishes playing."
+          bind:value={endBehavior}
+          options={endBehaviorOptions}
+        />
+
+        <PlayerPreferencesPicker
+          id="ob-fade"
+          label="Play/Pause Fade"
+          description="Controls how smoothly volume transitions when you play or pause."
+          bind:value={fadeMode}
+          options={fadeModeOptions}
+        />
+
+        <div class="settings-section">
+          <h3 id="ob-library-label">Media Library</h3>
+          <p class="settings-description">These folders are scanned for your videos and audio files, including subfolders.</p>
+          <div class="ob-path-list" role="list" aria-labelledby="ob-library-label">
+            {#each onboardingPaths as path (path)}
+              <div class="ob-path-row" role="listitem">
+                <FolderOpen size={15} />
+                <span class="ob-path-text" title={path}>{path}</span>
+                <button
+                  class="ob-path-remove"
+                  onclick={() => obRemoveFolder(path)}
+                  disabled={onboardingPaths.length <= 1}
+                  title={onboardingPaths.length <= 1 ? "At least one folder is required" : "Remove folder"}
+                  aria-label={`Remove ${path}`}
+                >✕</button>
+              </div>
+            {/each}
+          </div>
+          <button class="ob-add-folder" onclick={obAddFolder}>
+            <Plus size={14} /> Add Folder
+          </button>
+          {#if onboardingError}
+            <p class="onboarding-error" role="alert">{onboardingError}</p>
+          {/if}
+        </div>
+      </div>
+
+      <div class="onboarding-actions">
+        <button
+          class="onboarding-cta"
+          onclick={() => void completeOnboarding()}
+          disabled={onboardingPaths.length === 0}
+          aria-disabled={onboardingPaths.length === 0}
+          title={onboardingPaths.length === 0 ? "Add at least one folder to continue" : "Finish setup"}
+        >
+          Get Started
+        </button>
+        <button class="onboarding-skip" onclick={skipOnboarding}>
+          Skip / Use Defaults
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .splash-screen {
     position: fixed;
@@ -1281,9 +1711,9 @@
   }
 
   .sidebar-tab.active {
-    background: rgba(192, 101, 182, 0.15);
-    color: #c065b6;
-    border-color: rgba(192, 101, 182, 0.3);
+    background: var(--color-accent-subtle);
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   }
 
@@ -1293,7 +1723,7 @@
     padding: 1.5rem 2.5rem 2.5rem;
     background: radial-gradient(
       circle at top right,
-      rgba(192, 101, 182, 0.03),
+      var(--color-accent-subtle),
       transparent 40%
     );
   }
@@ -1438,16 +1868,16 @@
   .about-logo {
     width: 112px;
     height: auto;
-    filter: drop-shadow(0 0 20px rgba(192, 101, 182, 0.3));
+    filter: drop-shadow(0 0 20px var(--color-accent-border));
     margin-top: 1rem;
   }
 
   .about-version-pill {
     font-size: 0.75rem;
     font-weight: 700;
-    color: #c065b6;
-    background: rgba(192, 101, 182, 0.1);
-    border: 1px solid rgba(192, 101, 182, 0.2);
+    color: var(--color-accent);
+    background: var(--color-accent-subtle);
+    border: 1px solid var(--color-accent-border);
     padding: 0.25rem 0.75rem;
     border-radius: 20px;
     letter-spacing: 0.02em;
@@ -1512,7 +1942,7 @@
   .credit-sub {
     display: block;
     font-size: 0.8125rem;
-    color: #c065b6;
+    color: var(--color-accent);
     font-weight: 500;
   }
 
@@ -1557,7 +1987,7 @@
   }
 
   .about-link-item:hover {
-    color: #c065b6;
+    color: var(--color-accent);
   }
 
   /* Inline AI Settings Styles */
@@ -1575,18 +2005,20 @@
     padding: 1rem;
     display: flex;
     align-items: center;
+    min-width: 0;
     transition: all 0.2s ease;
   }
 
   .requirement-card.ready {
-    border-color: rgba(192, 101, 182, 0.2);
-    background: rgba(192, 101, 182, 0.05);
+    border-color: var(--color-accent-border);
+    background: var(--color-accent-subtle);
   }
 
   .requirement-info {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+    min-width: 0;
   }
 
   .requirement-label {
@@ -1595,6 +2027,13 @@
     color: rgba(255, 255, 255, 0.4);
     text-transform: uppercase;
     letter-spacing: 0.05em;
+  }
+
+  /* Player Tab Styles */
+  .settings-description {
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+    margin-bottom: 1rem;
   }
 
   /* Shortcuts Tab Styles */
@@ -1614,7 +2053,7 @@
   .shortcut-category-title {
     font-size: 0.7rem;
     font-weight: 500;
-    color: #c065b6;
+    color: var(--color-accent);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     margin-bottom: 1rem;
@@ -1673,7 +2112,7 @@
   }
 
   .requirement-card.ready .requirement-status {
-    color: #c065b6;
+    color: var(--color-accent);
   }
 
   .models-collapsible-card {
@@ -1692,7 +2131,7 @@
 
   .models-collapsible-card.expanded {
     background: rgba(255, 255, 255, 0.03);
-    border-color: rgba(192, 101, 182, 0.2);
+    border-color: var(--color-accent-border);
   }
 
   .collapsible-header {
@@ -1731,11 +2170,11 @@
   .active-model-pill {
     font-size: 0.6875rem;
     font-weight: 700;
-    color: #c065b6;
-    background: rgba(192, 101, 182, 0.1);
+    color: var(--color-accent);
+    background: var(--color-accent-subtle);
     padding: 0.25rem 0.625rem;
     border-radius: 6px;
-    border: 1px solid rgba(192, 101, 182, 0.2);
+    border: 1px solid var(--color-accent-border);
     text-transform: uppercase;
     letter-spacing: 0.02em;
   }
@@ -1749,11 +2188,11 @@
   .downloading-badge-mini {
     font-size: 0.75rem;
     font-weight: 600;
-    color: #c065b6;
+    color: var(--color-accent);
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    background: rgba(192, 101, 182, 0.1);
+    background: var(--color-accent-subtle);
     padding: 0.25rem 0.625rem;
     border-radius: 20px;
   }
@@ -1791,9 +2230,9 @@
   }
 
   .model-mgmt-card.active {
-    background: rgba(192, 101, 182, 0.08);
-    border-color: rgba(192, 101, 182, 0.4);
-    box-shadow: inset 0 0 20px rgba(192, 101, 182, 0.05);
+    background: var(--color-accent-subtle);
+    border-color: var(--color-accent-border);
+    box-shadow: inset 0 0 20px var(--color-accent-subtle);
   }
 
   .model-mgmt-info {
@@ -1819,7 +2258,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #c065b6;
+    color: var(--color-accent);
     flex-shrink: 0;
   }
 
@@ -1871,7 +2310,7 @@
 
   .inline-progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, #c065b6, #8c77ff);
+    background: linear-gradient(90deg, var(--color-accent), var(--color-accent-gradient-end));
     border-radius: 10px;
     transition: width 0.3s ease;
   }
@@ -1958,8 +2397,8 @@
   }
 
   .checkbox.checked {
-    background: #c065b6;
-    border-color: #c065b6;
+    background: var(--color-accent);
+    border-color: var(--color-accent);
   }
 
   .setup-item-info {
@@ -1980,6 +2419,12 @@
   .setup-item-desc {
     font-size: 0.875rem;
     color: rgba(255, 255, 255, 0.6);
+    line-height: 1.4;
+  }
+
+  .setup-item-desc span {
+    font-family: monospace;
+    overflow-wrap: anywhere;
   }
 
   .model-choices {
@@ -2007,8 +2452,8 @@
   }
 
   .model-radio:has(input[type="radio"]:checked) {
-    background: rgba(192, 101, 182, 0.12);
-    border-color: rgba(192, 101, 182, 0.4);
+    background: var(--color-accent-subtle);
+    border-color: var(--color-accent-border);
   }
 
   .model-radio input[type="radio"] {
@@ -2021,7 +2466,7 @@
   }
 
   .model-radio input[type="radio"]:checked + .radio-content .radio-title {
-    color: #c065b6;
+    color: var(--color-accent);
   }
 
   .radio-content {
@@ -2047,11 +2492,11 @@
   .installed-badge {
     font-size: 0.75rem;
     font-weight: 600;
-    color: #c065b6;
-    background: rgba(192, 101, 182, 0.15);
+    color: var(--color-accent);
+    background: var(--color-accent-subtle);
     padding: 0.125rem 0.5rem;
     border-radius: 4px;
-    border: 1px solid rgba(192, 101, 182, 0.3);
+    border: 1px solid var(--color-accent-border);
   }
 
   .radio-desc {
@@ -2074,10 +2519,10 @@
 
   .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, #c065b6, #8c77ff);
+    background: linear-gradient(90deg, var(--color-accent), var(--color-accent-gradient-end));
     border-radius: 4px;
     transition: width 0.3s ease;
-    box-shadow: 0 0 10px rgba(192, 101, 182, 0.5);
+    box-shadow: 0 0 10px var(--color-accent-border-hover);
   }
 
   .download-status {
@@ -2105,7 +2550,222 @@
   }
 
   .setup-warning a {
-    color: #c065b6;
+    color: var(--color-accent);
     text-decoration: underline;
+  }
+
+  /* Reset preferences */
+  .reset-prefs-row {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 1.25rem;
+    margin-top: 0.5rem;
+  }
+
+  .reset-prefs-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    background: none;
+    border: none;
+    color: var(--color-text-subtle);
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0.25rem 0;
+    transition: color 0.15s ease;
+  }
+
+  .reset-prefs-btn:hover {
+    color: #e05a5a;
+  }
+
+  .reset-prefs-btn--clear {
+    color: rgba(255, 255, 255, 0.2);
+  }
+
+  .reset-prefs-btn--clear:hover {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  /* First-Run Onboarding */
+  .onboarding-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2100;
+  }
+
+  .onboarding-modal {
+    background: rgba(20, 20, 20, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    width: 90%;
+    max-width: 640px;
+    max-height: 85vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+    animation: slideUp 0.3s ease;
+  }
+
+  .onboarding-header {
+    text-align: center;
+    padding: 2.5rem 2.5rem 1.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    flex-shrink: 0;
+  }
+
+  .onboarding-header h2 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #fff;
+    margin: 0 0 0.5rem;
+  }
+
+  .onboarding-subtitle {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+
+  .onboarding-body {
+    padding: 2rem 2.5rem;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .onboarding-actions {
+    padding: 1.5rem 2.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    flex-shrink: 0;
+  }
+
+  .onboarding-cta {
+    width: 100%;
+    padding: 0.875rem 2rem;
+    background: var(--color-accent);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+  }
+
+  .onboarding-cta:hover {
+    opacity: 0.85;
+  }
+
+  .onboarding-cta:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .onboarding-skip {
+    background: none;
+    border: none;
+    color: var(--color-text-subtle);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .onboarding-skip:hover {
+    color: var(--color-text-muted);
+  }
+
+  .ob-path-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    margin-bottom: 0.875rem;
+  }
+
+  .ob-path-row {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 8px;
+  }
+
+  :global(.ob-path-row svg) {
+    color: rgba(255, 255, 255, 0.35);
+    flex-shrink: 0;
+  }
+
+  .ob-path-text {
+    flex: 1;
+    font-size: 0.75rem;
+    font-family: monospace;
+    color: rgba(255, 255, 255, 0.65);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .ob-path-remove {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0.125rem 0.25rem;
+    border-radius: 4px;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: color 0.15s ease;
+  }
+
+  .ob-path-remove:hover:not(:disabled) {
+    color: rgba(255, 100, 100, 0.8);
+  }
+
+  .ob-path-remove:disabled {
+    opacity: 0.25;
+    cursor: default;
+  }
+
+  .ob-add-folder {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.8125rem;
+    padding: 0.4rem 0.875rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .ob-add-folder:hover {
+    background: rgba(255, 255, 255, 0.09);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .onboarding-error {
+    margin: 0.75rem 0 0;
+    color: #ff8f8f;
+    font-size: 0.8125rem;
   }
 </style>
