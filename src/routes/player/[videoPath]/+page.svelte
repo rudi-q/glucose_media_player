@@ -878,7 +878,9 @@
     clearTimeout(volumeMenuAutoTimer);
     volumeMenuAutoTimer = setTimeout(() => {
       showVolumeMenu = false;
-      showControls = false;
+      // Respect the same hover guard as scheduleHideControls — don't yank the
+      // controls (and cursor) away while the pointer is resting over them.
+      if (!pointerInControls) showControls = false;
     }, 1500);
   }
 

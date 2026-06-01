@@ -455,6 +455,31 @@ async fn run_with_timeout(
     }
 }
 
+// Compute an FFmpeg I/O timeout scaled to the input file size. Stream-copy
+// remux and full-container demux are disk-bound and read (and sometimes write)
+// the whole file, so a fixed timeout starves multi-GB inputs. We assume a
+// deliberately pessimistic effective throughput so slow HDDs and cloud-synced
+// drives still finish, clamped between `floor_secs` and `cap_secs`.
+fn size_scaled_timeout(file_path: &str, floor_secs: u64, cap_secs: u64) -> std::time::Duration {
+    // 15 MB/s per input byte — conservative enough to cover read+write contention.
+    const MIN_BYTES_PER_SEC: u64 = 15 * 1024 * 1024;
+    let size = fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
+    let secs = (size / MIN_BYTES_PER_SEC).clamp(floor_secs, cap_secs);
+    std::time::Duration::from_secs(secs)
+}
+
+// Human-readable byte size for user-facing error messages.
+fn format_bytes(bytes: u64) -> String {
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else {
+        format!("{:.0} MB", b / MB)
+    }
+}
+
 // Return the list of text-based subtitle streams embedded in a video file.
 // Bitmap formats (PGS, VobSub, DVB) are silently skipped because they cannot
 // be converted to a text format that the browser can render.
@@ -546,7 +571,10 @@ async fn extract_embedded_subtitle(
         return Err(format!("Invalid stream index: {}", stream_index));
     }
 
-    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    // Subtitle packets are interleaved throughout the container, so extraction
+    // reads the whole file — scale the timeout with size so large MKVs don't hit
+    // a premature cap. Floor 30 s, cap 30 min.
+    let timeout = size_scaled_timeout(&video_path, 30, 1800);
 
     #[cfg(debug_assertions)]
     println!(
@@ -567,7 +595,7 @@ async fn extract_embedded_subtitle(
         "pipe:1",
     ]);
 
-    let output = run_with_timeout(cmd, TIMEOUT, "ffmpeg").await?;
+    let output = run_with_timeout(cmd, timeout, "ffmpeg").await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -793,6 +821,23 @@ async fn remux_with_audio_track(
     }
 
     let temp_dir = std::env::temp_dir();
+
+    // Remux writes a full stream-copy of the file to the temp folder. Bail early
+    // with a clear message if the temp filesystem can't hold a copy, rather than
+    // failing partway through and leaving a giant half-written file on disk.
+    if let Ok(meta) = fs::metadata(&video_path) {
+        let needed = meta.len();
+        if let Ok(available) = fs4::available_space(&temp_dir) {
+            if available < needed {
+                return Err(format!(
+                    "Not enough free space to switch audio tracks. Need about {} in the temp folder but only {} is available.",
+                    format_bytes(needed),
+                    format_bytes(available)
+                ));
+            }
+        }
+    }
+
     let mut temp_path_opt: Option<std::path::PathBuf> = None;
 
     for i in 0..100 {
@@ -827,7 +872,9 @@ async fn remux_with_audio_track(
     let temp_path_str = temp_path.to_string_lossy().to_string();
     let out = temp_path_str.clone();
 
-    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+    // Stream-copy reads the input and writes a near-equal-size output, so the old
+    // fixed 120 s cap starved multi-GB files. Scale with size. Floor 120 s, cap 1 h.
+    let timeout = size_scaled_timeout(&video_path, 120, 3600);
 
     #[cfg(debug_assertions)]
     println!(
@@ -851,7 +898,7 @@ async fn remux_with_audio_track(
         &temp_path_str,
     ]);
 
-    let output_result = run_with_timeout(cmd, TIMEOUT, "ffmpeg").await;
+    let output_result = run_with_timeout(cmd, timeout, "ffmpeg").await;
 
     match output_result {
         Ok(output) => {
@@ -1636,52 +1683,58 @@ fn transcribe_audio_with_whisper(
     Ok(())
 }
 
-// Read WAV file and convert to f32 samples for Whisper
+// Read WAV file and convert to f32 samples for Whisper.
+//
+// The body is streamed in chunks rather than read whole with read_to_end: whisper
+// already needs the full f32 buffer in memory, and holding a second full-file copy
+// of the raw bytes alongside it roughly doubled peak memory for long recordings.
 fn read_wav_file(path: &str) -> Result<Vec<f32>, String> {
     use std::fs::File;
-    use std::io::Read;
+    use std::io::{BufReader, Read};
 
-    let mut file = File::open(path).map_err(|e| format!("Failed to open audio file: {}", e))?;
+    let file = File::open(path).map_err(|e| format!("Failed to open audio file: {}", e))?;
+    let mut reader = BufReader::new(file);
 
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)
-        .map_err(|e| format!("Failed to read audio file: {}", e))?;
+    // Skip the 44-byte standard WAV header.
+    let mut header = [0u8; 44];
+    reader.read_exact(&mut header).map_err(|_| {
+        "Invalid or truncated WAV file: expected at least 44 bytes for header".to_string()
+    })?;
 
-    // Validate buffer has at least 44 bytes (standard WAV header size)
-    if buffer.len() < 44 {
-        return Err(format!(
-            "Invalid or truncated WAV file: expected at least 44 bytes for header, got {} bytes",
-            buffer.len()
-        ));
+    // Convert 16-bit little-endian PCM to f32 (-1.0..1.0), carrying a stray byte
+    // across chunk boundaries so samples spanning two reads are not corrupted.
+    let mut samples: Vec<f32> = Vec::new();
+    let mut chunk = [0u8; 16384];
+    let mut carry: Option<u8> = None;
+
+    loop {
+        let n = reader
+            .read(&mut chunk)
+            .map_err(|e| format!("Failed to read audio file: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        let mut data = &chunk[..n];
+
+        if let Some(b0) = carry.take() {
+            let sample = i16::from_le_bytes([b0, data[0]]);
+            samples.push(sample as f32 / 32768.0);
+            data = &data[1..];
+        }
+
+        let mut pairs = data.chunks_exact(2);
+        for pair in &mut pairs {
+            let sample = i16::from_le_bytes([pair[0], pair[1]]);
+            samples.push(sample as f32 / 32768.0);
+        }
+        if let Some(&last) = pairs.remainder().first() {
+            carry = Some(last);
+        }
     }
 
-    // Skip WAV header (44 bytes for standard WAV)
-    let audio_data = &buffer[44..];
-
-    // Validate audio data has at least 2 bytes for one sample
-    if audio_data.len() < 2 {
-        return Err(format!(
-            "Invalid or truncated WAV file: audio data is too short ({} bytes)",
-            audio_data.len()
-        ));
+    if samples.is_empty() {
+        return Err("Invalid or truncated WAV file: no audio samples found".to_string());
     }
-
-    // Validate audio data length is even (complete 16-bit samples)
-    if audio_data.len() % 2 != 0 {
-        return Err(format!(
-            "Invalid WAV file: audio data length ({} bytes) is not even, cannot parse complete 16-bit samples",
-            audio_data.len()
-        ));
-    }
-
-    // Convert 16-bit PCM to f32 samples (-1.0 to 1.0)
-    let samples: Vec<f32> = audio_data
-        .chunks_exact(2)
-        .map(|chunk| {
-            let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-            sample as f32 / 32768.0
-        })
-        .collect();
 
     Ok(samples)
 }
