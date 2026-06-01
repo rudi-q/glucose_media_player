@@ -1732,6 +1732,13 @@ fn read_wav_file(path: &str) -> Result<Vec<f32>, String> {
         }
     }
 
+    if carry.is_some() {
+        return Err(
+            "Invalid or truncated WAV file: odd trailing byte in PCM data (file may be corrupt)"
+                .to_string(),
+        );
+    }
+
     if samples.is_empty() {
         return Err("Invalid or truncated WAV file: no audio samples found".to_string());
     }
