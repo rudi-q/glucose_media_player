@@ -1,5 +1,6 @@
 mod ffmpeg;
 mod pip_window;
+mod storage;
 
 use pip_window::{enter_pip_mode, exit_pip_mode, save_pip_window_layout, settle_pip_window};
 use serde::Serialize;
@@ -8,10 +9,12 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use fs4::FileExt;
+#[allow(unused_imports)] // Ordering is only used by the AI subtitle code, disabled on macOS.
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 // Signals an in-progress subtitle generation to abort at the next whisper checkpoint.
+#[allow(dead_code)] // Used only by the AI subtitle code, disabled for the Mac App Store build.
 static SUBTITLE_CANCEL: AtomicBool = AtomicBool::new(false);
 use std::thread;
 use std::time::Duration;
@@ -32,6 +35,7 @@ use tauri::RunEvent;
 
 // Helper to create a Command with hidden console window on Windows
 pub(crate) fn create_hidden_command(program: &str) -> Command {
+    #[allow(unused_mut)]
     let mut cmd = Command::new(program);
 
     #[cfg(target_os = "windows")]
@@ -44,11 +48,31 @@ pub(crate) fn create_hidden_command(program: &str) -> Command {
     cmd
 }
 
+// On macOS, resolves a Tauri externalBin sidecar that lives next to the main app binary
+// (Contents/MacOS/<name> in production, target/<profile>/<name> in dev).
+#[cfg(target_os = "macos")]
+fn resolve_macos_sidecar(name: &str) -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let sidecar = exe.parent()?.join(name);
+    if sidecar.exists() {
+        Some(sidecar)
+    } else {
+        None
+    }
+}
+
 // Resolves the ffmpeg binary path: custom config path first, then bundled AppData, then system PATH
 fn get_ffmpeg_command() -> Command {
     let path_info = ffmpeg::resolve_ffmpeg_path_info();
     if let Some(path) = path_info.path {
         return create_hidden_command(&path);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(path) = resolve_macos_sidecar("ffmpeg") {
+            return create_hidden_command(path.to_str().unwrap_or("ffmpeg"));
+        }
     }
 
     create_hidden_command("ffmpeg")
@@ -87,6 +111,13 @@ fn get_ffprobe_command() -> Command {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(path) = resolve_macos_sidecar("ffprobe") {
+            return create_hidden_command(path.to_str().unwrap_or("ffprobe"));
+        }
+    }
+
     create_hidden_command("ffprobe")
 }
 
@@ -106,86 +137,32 @@ const FINAL_ATTEMPT_DELAY_MS: u64 = 500;
 const INITIAL_ATTEMPT_COUNT: u32 = 5;
 const MIDDLE_ATTEMPT_COUNT: u32 = 15;
 
-fn default_gallery_paths() -> Vec<String> {
-    let mut paths = Vec::new();
-    for dir in [
-        dirs::video_dir(),
-        dirs::download_dir(),
-        dirs::desktop_dir(),
-        dirs::document_dir(),
-    ] {
-        if let Some(p) = dir {
-            paths.push(p.to_string_lossy().to_string());
-        }
-    }
-    paths
-}
-
 #[tauri::command]
 fn get_gallery_paths() -> Result<Vec<String>, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let config_file = home.join(".glucose").join("config.json");
-
-    if !config_file.exists() {
-        return Ok(default_gallery_paths());
-    }
-
-    let content =
-        fs::read_to_string(&config_file).map_err(|e| format!("Failed to read config: {}", e))?;
-    let config: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))?;
-
-    if let Some(arr) = config.get("gallery_paths").and_then(|v| v.as_array()) {
-        let result: Vec<String> = arr
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-        return Ok(result);
-    }
-
-    Ok(default_gallery_paths())
+    storage::load_gallery_paths()
 }
 
 #[tauri::command]
 fn save_gallery_paths(paths: Vec<String>) -> Result<(), String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let config_dir = home.join(".glucose");
-    let config_file = config_dir.join("config.json");
-
-    fs::create_dir_all(&config_dir)
-        .map_err(|e| format!("Failed to create config directory: {}", e))?;
-
-    let _guard = CONFIG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-
-    let mut config: serde_json::Value = if config_file.exists() {
-        let content = fs::read_to_string(&config_file)
-            .map_err(|e| format!("Failed to read config: {}", e))?;
-        serde_json::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))?
-    } else {
-        serde_json::json!({})
-    };
-
-    let config_object = config
-        .as_object_mut()
-        .ok_or_else(|| "Config root must be a JSON object".to_string())?;
-    config_object.insert("gallery_paths".to_string(), serde_json::json!(paths));
-
-    let content = serde_json::to_string_pretty(&config)
-        .map_err(|e| format!("Failed to serialize config: {}", e))?;
-    let temp_file = config_file.with_extension("json.tmp");
-    fs::write(&temp_file, &content).map_err(|e| format!("Failed to write temp config: {}", e))?;
-    fs::rename(&temp_file, &config_file).map_err(|e| format!("Failed to replace config: {}", e))?;
-
-    Ok(())
+    storage::save_gallery_paths(&paths)
 }
 
 #[tauri::command]
 async fn open_folder_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
+    #[cfg(target_os = "macos")]
+    use tauri_plugin_dialog::FileAccessMode;
 
-    let result = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
-        .await
-        .map_err(|e| e.to_string())?;
+    let result = tokio::task::spawn_blocking(move || {
+        let dialog = app.dialog().file();
+
+        #[cfg(target_os = "macos")]
+        let dialog = dialog.set_file_access_mode(FileAccessMode::Scoped);
+
+        dialog.blocking_pick_folder()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     match result {
         Some(folder) => {
@@ -632,12 +609,16 @@ fn is_windows_hidden(_metadata: &fs::Metadata) -> bool {
     false
 }
 
+// AI subtitle generation — commented out for Mac App Store first submission.
+// Uncomment to re-enable (along with the matching deps in Cargo.toml).
+/*
 #[derive(Serialize, Clone)]
 struct SubtitleGenerationProgress {
     stage: String,
     progress: f32,
     message: String,
 }
+*/
 
 #[derive(Serialize, Clone)]
 struct SetupStatus {
@@ -648,6 +629,8 @@ struct SetupStatus {
     setup_completed: bool,
 }
 
+// AI model-download progress — commented out for MAS submission.
+/*
 #[derive(Serialize, Clone)]
 struct DownloadProgress {
     downloaded: u64,
@@ -655,6 +638,7 @@ struct DownloadProgress {
     percentage: f32,
     message: String,
 }
+*/
 
 #[derive(Serialize, serde::Deserialize, Clone)]
 struct WatchProgress {
@@ -936,11 +920,23 @@ fn check_ffmpeg_installed() -> Result<bool, String> {
         } else {
             println!("[FFmpeg Check] ✓ Found FFmpeg");
         }
-        Ok(true)
-    } else {
-        println!("[FFmpeg Check] ✗ FFmpeg not found in system PATH");
-        Ok(false)
     }
+
+    // get_ffmpeg_command() resolves a custom/bundled path and, on macOS, the
+    // bundled sidecar (Contents/MacOS/ffmpeg); otherwise it falls back to PATH.
+    println!("[FFmpeg Check] Verifying FFmpeg availability...");
+    let result = get_ffmpeg_command()
+        .arg("-version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+
+    if result {
+        println!("[FFmpeg Check] ✓ FFmpeg available");
+    } else {
+        println!("[FFmpeg Check] ✗ FFmpeg not available");
+    }
+    Ok(result)
 }
 
 // Returns the candidate directories to search for Whisper model files, in priority order.
@@ -1036,9 +1032,7 @@ fn mark_setup_completed() -> Result<(), String> {
 
 // Load setup completion status from config
 fn load_setup_completed() -> Result<bool, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let config_dir = home.join(".glucose");
-    let config_file = config_dir.join("config.json");
+    let config_file = storage::config_file_path()?;
 
     if !config_file.exists() {
         return Ok(false);
@@ -1058,11 +1052,12 @@ fn load_setup_completed() -> Result<bool, String> {
 
 // Save setup completion status to config
 fn save_setup_completed(completed: bool) -> Result<(), String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let config_dir = home.join(".glucose");
-    let config_file = config_dir.join("config.json");
+    let config_file = storage::config_file_path()?;
+    let config_dir = config_file
+        .parent()
+        .ok_or_else(|| "Could not get config directory".to_string())?;
 
-    fs::create_dir_all(&config_dir)
+    fs::create_dir_all(config_dir)
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
 
     let _guard = CONFIG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -1089,6 +1084,14 @@ fn save_setup_completed(completed: bool) -> Result<(), String> {
     Ok(())
 }
 
+// =============================================================================
+// AI subtitle generation block — commented out for Mac App Store first submission.
+// Uncomment this whole block (down to the matching `*/` just above
+// "Save watch progress for a video") and uncomment whisper-rs / reqwest /
+// futures-util in Cargo.toml plus the two invoke_handler entries below to
+// re-enable AI features (Windows builds, future MAS resubmissions, etc.).
+// =============================================================================
+/*
 // Download Whisper model
 #[tauri::command]
 async fn download_whisper_model(
@@ -1107,8 +1110,7 @@ async fn download_whisper_model(
         model_name
     );
 
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let models_dir = home.join(".whisper").join("models");
+    let models_dir = storage::whisper_models_dir()?;
 
     // Create models directory
     fs::create_dir_all(&models_dir)
@@ -1685,6 +1687,10 @@ fn read_wav_file(path: &str) -> Result<Vec<f32>, String> {
 
     Ok(samples)
 }
+*/
+// =============================================================================
+// End of AI subtitle generation block.
+// =============================================================================
 
 static WATCH_PROGRESS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -1693,8 +1699,17 @@ fn watch_progress_lock() -> &'static Mutex<()> {
 }
 
 fn watch_progress_path() -> Result<std::path::PathBuf, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    Ok(home.join(".glucose").join("watch_progress.json"))
+    // On macOS the app is sandboxed (Mac App Store) and cannot write to ~/.glucose,
+    // so use the app-data location (storage:: also migrates any legacy file).
+    #[cfg(target_os = "macos")]
+    {
+        storage::watch_progress_file_path()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        Ok(home.join(".glucose").join("watch_progress.json"))
+    }
 }
 
 fn read_watch_progress(
@@ -2092,10 +2107,7 @@ fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
 
 #[tauri::command]
 async fn get_recent_videos() -> Result<Vec<VideoFile>, String> {
-    let search_dirs: Vec<std::path::PathBuf> = get_gallery_paths()?
-        .into_iter()
-        .map(std::path::PathBuf::from)
-        .collect();
+    let search_dirs = storage::load_gallery_scan_dirs()?;
 
     let handles: Vec<_> = search_dirs
         .into_iter()
@@ -2231,6 +2243,7 @@ fn process_video_files(app_handle: &tauri::AppHandle, video_files: Vec<String>) 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -2245,6 +2258,8 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            storage::set_app_handle(app.handle().clone());
+
             // Handle command line arguments for file associations
             let args: Vec<String> = std::env::args().collect();
 
@@ -2282,7 +2297,7 @@ pub fn run() {
                 if !video_files.is_empty() {
                     #[cfg(debug_assertions)]
                     println!("Queued {} video files", video_files.len());
-                    process_video_files(&app.handle(), video_files);
+                    process_video_files(app.handle(), video_files);
                 }
             } else {
                 #[cfg(debug_assertions)]
@@ -2310,13 +2325,14 @@ pub fn run() {
             get_embedded_audio_tracks,
             remux_with_audio_track,
             delete_temp_file,
-            generate_subtitles,
-            cancel_subtitle_generation,
+            // AI commands commented out for Mac App Store first submission:
+            // generate_subtitles,
+            // cancel_subtitle_generation,
             check_ffmpeg_installed,
             check_installed_models,
             get_setup_status,
             mark_setup_completed,
-            download_whisper_model,
+            // download_whisper_model,
             save_watch_progress,
             get_watch_progress,
             get_all_watch_progress,
@@ -2328,6 +2344,8 @@ pub fn run() {
             exit_pip_mode,
             save_pip_window_layout,
             settle_pip_window,
+            updater_supported,
+            is_macos,
             ffmpeg::get_ffmpeg_path,
             ffmpeg::pick_ffmpeg_executable,
             ffmpeg::save_ffmpeg_custom_path
@@ -2341,52 +2359,62 @@ pub fn run() {
             }
 
             #[cfg(any(target_os = "macos", target_os = "ios"))]
-            match event {
+            if let RunEvent::Opened { urls } = event {
                 // Handle macOS file association events
-                RunEvent::Opened { urls } => {
+                #[cfg(debug_assertions)]
+                {
+                    println!("*** FILE ASSOCIATION EVENT RECEIVED ***");
+                    println!("Received opened event with URLs: {:?}", urls);
+                }
+
+                let mut video_files: Vec<String> = Vec::new();
+
+                for url in urls {
+                    let url_str = url.to_string();
                     #[cfg(debug_assertions)]
-                    {
-                        println!("*** FILE ASSOCIATION EVENT RECEIVED ***");
-                        println!("Received opened event with URLs: {:?}", urls);
-                    }
+                    println!("Processing URL: {}", url_str);
 
-                    let mut video_files: Vec<String> = Vec::new();
+                    if url_str.starts_with("file://") {
+                        let path = url_str.replace("file://", "");
+                        let decoded_path = urlencoding::decode(&path).unwrap_or_default();
 
-                    for url in urls {
-                        let url_str = url.to_string();
                         #[cfg(debug_assertions)]
-                        println!("Processing URL: {}", url_str);
+                        println!("Decoded path: {}", decoded_path);
 
-                        if url_str.starts_with("file://") {
-                            let path = url_str.replace("file://", "");
-                            let decoded_path = urlencoding::decode(&path).unwrap_or_default();
-
+                        let is_media = Path::new(decoded_path.as_ref())
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .map(|ext| is_media_extension(&ext.to_lowercase()))
+                            .unwrap_or(false);
+                        if is_media {
+                            video_files.push(decoded_path.to_string());
                             #[cfg(debug_assertions)]
-                            println!("Decoded path: {}", decoded_path);
-
-                            let is_media = Path::new(decoded_path.as_ref())
-                                .extension()
-                                .and_then(|s| s.to_str())
-                                .map(|ext| is_media_extension(&ext.to_lowercase()))
-                                .unwrap_or(false);
-                            if is_media {
-                                video_files.push(decoded_path.to_string());
-                                #[cfg(debug_assertions)]
-                                println!("Found video file from opened event: {}", decoded_path);
-                            }
+                            println!("Found video file from opened event: {}", decoded_path);
                         }
                     }
-
-                    if !video_files.is_empty() {
-                        #[cfg(debug_assertions)]
-                        println!(
-                            "Processing {} video files from file association event",
-                            video_files.len()
-                        );
-                        process_video_files(&_app_handle, video_files);
-                    }
                 }
-                _ => {}
+
+                if !video_files.is_empty() {
+                    #[cfg(debug_assertions)]
+                    println!(
+                        "Processing {} video files from file association event",
+                        video_files.len()
+                    );
+                    process_video_files(_app_handle, video_files);
+                }
             }
         });
+}
+
+#[tauri::command]
+fn updater_supported() -> bool {
+    cfg!(target_os = "windows")
+}
+
+/// Whether the app is running on macOS. The frontend uses this to hide
+/// features disabled for the Mac App Store build (AI subtitle generation,
+/// AI settings, external sponsor links) while keeping them on other platforms.
+#[tauri::command]
+fn is_macos() -> bool {
+    cfg!(target_os = "macos")
 }

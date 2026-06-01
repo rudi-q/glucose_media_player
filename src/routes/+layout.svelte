@@ -112,6 +112,9 @@
   let isCheckingForUpdates = $state(false);
   let selectedTab = $state("ai"); // 'ai' | 'library' | 'player' | 'shortcuts' | 'updates' | 'community' | 'about'
   let modelsExpanded = $state(false);
+  let updaterSupported = $state(false);
+  // macOS (Mac App Store) build hides AI features; default tab falls back to "library" there.
+  let isMacOS = $state(false);
   let skipPlayerPreferencePersist = false;
 
   const defaultPlayModeOptions: PlayerPreferenceOption<DefaultPlayMode>[] = [
@@ -370,7 +373,7 @@
   }
 
   // Update manager
-  let updateManager: UpdateManagerAPI;
+  let updateManager = $state<UpdateManagerAPI | undefined>(undefined);
   let isOnGallery = $state(true);
 
   // Initialize from localStorage if available
@@ -457,10 +460,22 @@
       }
     })();
 
-    // Check setup status on first launch, then reveal the app
-    checkSetupStatus().finally(() => {
-      appReady = true;
-    });
+    // Resolve platform capability flags first so checkSetupStatus and the UI
+    // can rely on `isMacOS` before deciding what to show.
+    Promise.allSettled([
+      invoke<boolean>("updater_supported").then((supported) => {
+        updaterSupported = supported;
+      }),
+      invoke<boolean>("is_macos").then((mac) => {
+        isMacOS = mac;
+        // AI Settings tab is hidden on macOS; fall back to the Library tab.
+        if (mac && selectedTab === "ai") selectedTab = "library";
+      }),
+    ])
+      .then(() => checkSetupStatus())
+      .finally(() => {
+        appReady = true;
+      });
 
     // Notify backend that frontend is ready
     invoke("frontend_ready").catch(console.error);
@@ -482,8 +497,13 @@
       const status = await invoke<SetupStatus>("get_setup_status");
       setupStore.setStatus(status);
 
-      // Show setup dialog on first launch if not completed (deferred until after onboarding)
-      if (!status.setup_completed && status.models_installed.length === 0) {
+      // Show setup dialog on first launch if not completed (deferred until after onboarding).
+      // Skipped on macOS, where AI features are disabled for the Mac App Store build.
+      if (
+        !isMacOS &&
+        !status.setup_completed &&
+        status.models_installed.length === 0
+      ) {
         setTimeout(() => {
           if (!showOnboarding) showSetupDialog = true;
         }, 1500);
@@ -566,15 +586,17 @@
   }
 </script>
 
-<!-- Update System -->
-<UpdateManager
-  bind:this={updateManager}
-  disableAutoCheck={!isOnGallery}
-  onAutoCheckStart={handleAutoCheckStart}
-  onAutoCheckTimeUpdate={handleAutoCheckTimeUpdate}
-  {lastAutoCheckTime}
-/>
-<UpdateNotification />
+{#if updaterSupported}
+  <!-- Update System -->
+  <UpdateManager
+    bind:this={updateManager}
+    disableAutoCheck={!isOnGallery}
+    onAutoCheckStart={handleAutoCheckStart}
+    onAutoCheckTimeUpdate={handleAutoCheckTimeUpdate}
+    {lastAutoCheckTime}
+  />
+  <UpdateNotification />
+{/if}
 
 {#if !appReady}
   <div class="splash-screen" out:fade={{ duration: 250 }}>
@@ -619,14 +641,17 @@
 
       <div class="settings-layout">
         <div class="settings-sidebar">
-          <button
-            class="sidebar-tab"
-            class:active={selectedTab === "ai"}
-            onclick={() => (selectedTab = "ai")}
-          >
-            <Cpu size={18} />
-            <span>AI Settings</span>
-          </button>
+          <!-- AI Settings tab hidden on macOS (AI features disabled for the Mac App Store build). -->
+          {#if !isMacOS}
+            <button
+              class="sidebar-tab"
+              class:active={selectedTab === "ai"}
+              onclick={() => (selectedTab = "ai")}
+            >
+              <Cpu size={18} />
+              <span>AI Settings</span>
+            </button>
+          {/if}
           <button
             class="sidebar-tab"
             class:active={selectedTab === "library"}
@@ -651,14 +676,16 @@
             <Keyboard size={18} />
             <span>Shortcuts</span>
           </button>
-          <button
-            class="sidebar-tab"
-            class:active={selectedTab === "updates"}
-            onclick={() => (selectedTab = "updates")}
-          >
-            <Download size={18} />
-            <span>Updates</span>
-          </button>
+          {#if updaterSupported}
+            <button
+              class="sidebar-tab"
+              class:active={selectedTab === "updates"}
+              onclick={() => (selectedTab = "updates")}
+            >
+              <Download size={18} />
+              <span>Updates</span>
+            </button>
+          {/if}
           <button
             class="sidebar-tab"
             class:active={selectedTab === "community"}
@@ -1014,23 +1041,27 @@
                   </div>
                 </div>
 
-                <div class="settings-item">
-                  <div class="settings-item-label">
-                    <div class="settings-item-title">Report Subtitles</div>
-                    <div class="settings-item-desc">
-                      Report inappropriate AI-generated subtitles
+                <!-- "Report inappropriate AI subtitles" item hidden on macOS (AI features disabled for the Mac App Store build). -->
+                {#if !isMacOS}
+                  <div class="settings-item">
+                    <div class="settings-item-label">
+                      <div class="settings-item-title">Report Subtitles</div>
+                      <div class="settings-item-desc">
+                        Report inappropriate AI-generated subtitles
+                      </div>
+                    </div>
+                    <div class="settings-item-action">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onclick={() => openUrl("mailto:support@glucose.media?subject=Report%20Inappropriate%20AI%20Subtitles")}
+                      >
+                        <ShieldAlert size={14} /> Report
+                      </Button>
                     </div>
                   </div>
-                  <div class="settings-item-action">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onclick={() => openUrl("mailto:support@glucose.media?subject=Report%20Inappropriate%20AI%20Subtitles")}
-                    >
-                      <ShieldAlert size={14} /> Report
-                    </Button>
-                  </div>
-                </div>
+                {/if}
+
 
                 <div class="settings-item">
                   <div class="settings-item-label">
@@ -1043,14 +1074,17 @@
                     class="settings-item-action"
                     style="gap: 0.5rem; display: flex; flex-wrap: wrap; justify-content: flex-end;"
                   >
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      onclick={() =>
-                        openUrl("https://github.com/sponsors/rudi-q")}
-                    >
-                      <Heart size={14} fill="white" /> Sponsor
-                    </Button>
+                    <!-- Sponsor button hidden on macOS (Mac App Store guideline 3.1.1 — external payments must use IAP). -->
+                    {#if !isMacOS}
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onclick={() =>
+                          openUrl("https://github.com/sponsors/rudi-q")}
+                      >
+                        <Heart size={14} fill="white" /> Sponsor
+                      </Button>
+                    {/if}
                     <Button
                       variant="secondary"
                       size="sm"
@@ -1195,8 +1229,14 @@
                     class="about-logo"
                   />
                   <p class="about-description">
-                    A lightweight, AI-powered minimalist video player designed
-                    for seamless playback and accessibility.
+                    <!-- "AI-powered" wording dropped on macOS for the Mac App Store build. -->
+                    {#if isMacOS}
+                      A lightweight, minimalist video player designed for seamless
+                      playback and accessibility.
+                    {:else}
+                      A lightweight, AI-powered minimalist video player designed
+                      for seamless playback and accessibility.
+                    {/if}
                   </p>
                 </div>
                 <span class="about-version-pill">{getFormattedVersion()}</span>

@@ -132,6 +132,8 @@
   let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
   let isCancelling = $state(false);   // true after cancel button clicked, suppresses error alert
   let showModelSelector = $state(false);
+  // macOS (Mac App Store) build hides AI subtitle generation.
+  let isMacOS = $state(false);
   let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
 
   // HEVC codec warning
@@ -224,6 +226,13 @@
   $effect(() => {
     setWindowTitle(currentVideoPath ? videoBaseName(currentVideoPath) : null);
   });
+
+  // Resolve platform so AI-only UI (e.g. "Generate with AI") can be hidden on macOS.
+  invoke<boolean>("is_macos")
+    .then((mac) => {
+      if (!disposed) isMacOS = mac;
+    })
+    .catch(console.error);
 
   $effect(() => {
     const videoPath = data.videoPath;
@@ -2036,10 +2045,13 @@
                     >Open .srt, .vtt or compatible file</span
                   >
                 </button>
-                <button class="model-option" onclick={openAIFromUnifiedMenu}>
-                  <span class="model-name">Generate with AI</span>
-                  <span class="model-desc">Auto-generate using Whisper AI</span>
-                </button>
+                <!-- "Generate with AI" hidden on macOS -->
+                {#if !isMacOS}
+                  <button class="model-option" onclick={openAIFromUnifiedMenu}>
+                    <span class="model-name">Generate with AI</span>
+                    <span class="model-desc">Auto-generate using Whisper AI</span>
+                  </button>
+                {/if}
                 {#if embeddedSubtitleTracks.length > 0}
                   <div class="subtitle-menu-divider"></div>
                   {#each embeddedSubtitleTracks as track}

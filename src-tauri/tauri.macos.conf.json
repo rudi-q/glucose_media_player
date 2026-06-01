@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "shortDescription": "A minimalist video player for macOS — UI fades away so the film takes center stage.",
+    "longDescription": "Glucose Media Player offers a truly minimalist video experience on macOS. The interface fades away when not in use, letting you focus on the content. Move the mouse or press space to reveal the bare-essential playback controls. Glucose plays the most common video and audio formats, supports embedded audio tracks and subtitles, and stays out of your way. Free and open-source under the EUPL 1.2.",
+    "createUpdaterArtifacts": false,
+    "externalBin": [
+      "binaries/ffmpeg",
+      "binaries/ffprobe"
+    ],
+    "macOS": {
+      "entitlements": "entitlements.mas.plist",
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}

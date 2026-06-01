@@ -64,6 +64,14 @@
 
   let libraryHeaderHeight = $state(96);
 
+  // macOS-only: when a user clicks a cloud-only (dataless) file, we block
+  // playback and prompt them to download it via Finder instead. On Windows,
+  // OneDrive's cloud handling differs and clicking through works, so the
+  // dialog stays disabled there.
+  const isMacOS = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  let showCloudOnlyDialog = $state(false);
+  let cloudOnlyVideo = $state<VideoFile | null>(null);
+
   let filteredVideos = $derived(
     filterBy === 'all'
       ? recentVideos
@@ -494,6 +502,34 @@
     await goto(`/player/${encodedPath}?${params.toString()}`);
   }
 
+  function activateVideoCard(video: VideoFile) {
+    // On macOS, reading a dataless cloud placeholder routes through the
+    // provider's FileProvider extension to materialize the file. For OneDrive,
+    // that can take long enough that the <video> element appears to hang
+    // forever. Surface a clear dialog instead so users know to download first.
+    if (isMacOS && video.is_cloud_only) {
+      cloudOnlyVideo = video;
+      showCloudOnlyDialog = true;
+      return;
+    }
+    loadVideo(video.path);
+  }
+
+  function closeCloudOnlyDialog() {
+    showCloudOnlyDialog = false;
+    cloudOnlyVideo = null;
+  }
+
+  async function revealCloudOnlyInFinder() {
+    if (!cloudOnlyVideo) return;
+    try {
+      await revealItemInDir(cloudOnlyVideo.path);
+    } catch (err) {
+      console.error("Failed to reveal cloud video in Finder:", err);
+    }
+    closeCloudOnlyDialog();
+  }
+
   async function openContainingFolder(path: string) {
     showCardContextMenu = false;
     try {
@@ -687,8 +723,8 @@
                     data-index={index}
                     role="button"
                     tabindex="0"
-                    onclick={() => loadVideo(video.path)}
-                    onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); loadVideo(video.path); } }}
+                    onclick={() => activateVideoCard(video)}
+                    onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activateVideoCard(video); } }}
                     onmouseenter={() => onCardHoverEnter(video)}
                     onmouseleave={onCardHoverLeave}
                   >
@@ -874,6 +910,43 @@
       <button class="sort-option" class:active={filterBy === 'audio'} onclick={() => { filterBy = 'audio'; showFilterMenu = false; }}>
         Audio Only
       </button>
+    </div>
+  {/if}
+
+  {#if showCloudOnlyDialog && cloudOnlyVideo}
+    <div
+      class="cloud-only-overlay"
+      role="presentation"
+      onclick={closeCloudOnlyDialog}
+      onkeydown={(e) => { if (e.key === 'Escape') closeCloudOnlyDialog(); }}
+    >
+      <div
+        class="cloud-only-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cloud-only-title"
+        tabindex="-1"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => e.stopPropagation()}
+      >
+        <div class="cloud-only-icon">
+          <Cloud size={32} />
+        </div>
+        <h2 id="cloud-only-title">Video not downloaded</h2>
+        <p class="cloud-only-description">
+          <strong>{cloudOnlyVideo.name}</strong> is stored in the cloud and hasn't
+          been downloaded to this Mac yet. Download it from Finder first, then come
+          back to play it.
+        </p>
+        <div class="cloud-only-actions">
+          <Button variant="secondary" size="md" onclick={closeCloudOnlyDialog}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="md" onclick={revealCloudOnlyInFinder}>
+            <FolderOpen size={16} /> Show in Finder
+          </Button>
+        </div>
+      </div>
     </div>
   {/if}
 </main>
@@ -1126,6 +1199,78 @@
     background: rgba(255, 255, 255, 0.9);
     transition: width 0.3s ease;
     box-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+  }
+
+  .cloud-only-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.9);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    animation: fadeIn 0.2s ease;
+  }
+
+  .cloud-only-modal {
+    background: rgba(20, 20, 20, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 2rem;
+    width: min(440px, calc(100vw - 2rem));
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+    animation: slideUp 0.2s ease;
+    text-align: center;
+  }
+
+  .cloud-only-icon {
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 1rem;
+    border-radius: 50%;
+    background: rgba(192, 101, 182, 0.15);
+    color: #c065b6;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .cloud-only-modal h2 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin: 0 0 0.75rem 0;
+    color: #fff;
+  }
+
+  .cloud-only-description {
+    font-size: 0.9375rem;
+    color: rgba(255, 255, 255, 0.7);
+    line-height: 1.6;
+    margin: 0 0 1.75rem 0;
+  }
+
+  .cloud-only-description strong {
+    color: rgba(255, 255, 255, 0.9);
+    font-weight: 600;
+    word-break: break-word;
+  }
+
+  .cloud-only-actions {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes slideUp {
+    from { transform: translateY(8px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
   }
 
   .cloud-badge {
