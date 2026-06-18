@@ -1,7 +1,8 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { getCurrentWindow, currentMonitor } from "@tauri-apps/api/window";
+  import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
@@ -18,6 +19,7 @@
     Captions,
     CaptionsOff,
     Maximize,
+    Minimize,
     Minimize2,
     Loader2,
     AlertTriangle,
@@ -261,6 +263,115 @@
     return disposed || setupId !== videoSetupId;
   }
 
+  // Saved windowed geometry so leaving fullscreen restores the exact pre-fullscreen
+  // size/position. null whenever we are NOT in borderless fullscreen.
+  let savedFullscreenGeometry:
+    | { size: PhysicalSize; position: PhysicalPosition; maximized: boolean }
+    | null = null;
+
+  // Single source of truth for native window chrome for the two non-PiP view modes.
+  // PiP is intentionally excluded — its window state is owned by the Rust
+  // enter_pip_mode/exit_pip_mode commands, which we always feed a cleared baseline
+  // (see enterPipMode).
+  async function applyWindowChrome(mode: NonPipViewMode) {
+    if (mode === "fullscreen") {
+      await enterBorderlessFullscreen();
+    } else {
+      await exitBorderlessFullscreen();
+    }
+  }
+
+  // Borderless fullscreen sized to the FULL monitor (taskbar strip included). We size
+  // the window explicitly instead of relying on setFullscreen() because, on Windows, a
+  // transparent (layered) frameless window is sized to the work area by the OS
+  // fullscreen path — leaving the taskbar uncovered. always-on-top then lifts the
+  // window above the (topmost) taskbar; it is released/re-applied on blur/focus (see
+  // the focus listener in onMount) so the user can still Alt-Tab away.
+  async function enterBorderlessFullscreen() {
+    const win = getCurrentWindow();
+    // Already fullscreen: just re-assert the pin (e.g. after a focus blip) and bail so
+    // we never overwrite the saved windowed geometry with the full-monitor size.
+    if (savedFullscreenGeometry) {
+      await win.setAlwaysOnTop(true);
+      return;
+    }
+    const monitor = await currentMonitor();
+    if (!monitor) {
+      // Could not resolve the monitor — fall back to the OS fullscreen path so we at
+      // least fill the work area rather than doing nothing.
+      await win.setFullscreen(true);
+      await win.setAlwaysOnTop(true);
+      return;
+    }
+    const maximized = await win.isMaximized();
+    savedFullscreenGeometry = {
+      // innerSize (not outerSize): the exit restore uses setSize(), which sets the
+      // INNER size. Saving the outer size here would re-inflate the window by the
+      // frameless border margin on every fullscreen round-trip (it would creep larger
+      // each cycle). position stays outer — setPosition is outer-relative too.
+      size: await win.innerSize(),
+      position: await win.outerPosition(),
+      maximized,
+    };
+    // A maximized window reports work-area bounds; clear it so the exit restore puts
+    // the window back to its true pre-fullscreen geometry.
+    if (maximized) {
+      await win.unmaximize();
+    }
+    await win.setSize(
+      new PhysicalSize(monitor.size.width, monitor.size.height),
+    );
+    // setSize sizes the inner/client area, but a frameless Windows window can still
+    // carry an invisible resize-border margin — making the OUTER window larger than the
+    // monitor. Anchored at (0,0) that pushes the centered video right/down and leaves a
+    // black strip on the left/top edge. Re-center the outer window over the monitor so
+    // the invisible margin bleeds equally off every edge and the video sits flush.
+    // (When no margin is present this resolves to the monitor origin — a no-op.)
+    const outer = await win.outerSize();
+    const overflowX = outer.width - monitor.size.width;
+    const overflowY = outer.height - monitor.size.height;
+    await win.setPosition(
+      new PhysicalPosition(
+        monitor.position.x - Math.round(overflowX / 2),
+        monitor.position.y - Math.round(overflowY / 2),
+      ),
+    );
+    await win.setAlwaysOnTop(true);
+  }
+
+  async function exitBorderlessFullscreen() {
+    const win = getCurrentWindow();
+    // Drop the pin and any OS-fullscreen fallback first. Re-assert resizability as a
+    // self-healing safety net — the window must never get stuck non-resizable
+    // (otherwise edge-resize and maximize silently stop working) — before restoring
+    // geometry.
+    await win.setAlwaysOnTop(false);
+    await win.setFullscreen(false);
+    await win.setResizable(true);
+    if (!savedFullscreenGeometry) {
+      return;
+    }
+    const { size, position, maximized } = savedFullscreenGeometry;
+    savedFullscreenGeometry = null;
+    if (maximized) {
+      await win.maximize();
+    } else {
+      await win.setSize(size);
+      await win.setPosition(position);
+    }
+  }
+
+  // Strip the windowed rounded corners/border (set on <body> globally) while in
+  // fullscreen so the video reaches the physical screen edges. The cleanup runs when
+  // viewMode changes away from fullscreen or when the player unmounts, so the class
+  // never leaks onto the gallery/audio routes (they share the same <body>).
+  $effect(() => {
+    if (viewMode === "fullscreen") {
+      document.body.classList.add("fullscreen-chrome");
+      return () => document.body.classList.remove("fullscreen-chrome");
+    }
+  });
+
   async function applyInitialViewMode(mode: string) {
     const nextMode: NonPipViewMode =
       mode === "fullscreen" ? "fullscreen" : "cinematic";
@@ -275,6 +386,7 @@
     if (viewMode === "pip") {
       await exitPipMode(nextMode);
     } else {
+      await applyWindowChrome(nextMode);
       viewMode = nextMode;
     }
   }
@@ -525,6 +637,23 @@
     document.addEventListener("keydown", handleKeyPress);
     document.addEventListener("click", handleClickOutside);
 
+    let unlistenResized: (() => void) | undefined;
+    getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
+    getCurrentWindow().onResized(() => {
+      getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
+    }).then(fn => { unlistenResized = fn; });
+
+    // Focus-tied always-on-top: in fullscreen we pin the window above the (topmost)
+    // taskbar, but release the pin while glucose is unfocused so the user can Alt-Tab
+    // to other windows. Only fullscreen is affected — PiP must stay pinned even when
+    // blurred (its always-on-top is owned by Rust), and cinematic is never pinned.
+    let unlistenFocus: (() => void) | undefined;
+    getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (viewMode === "fullscreen") {
+        getCurrentWindow().setAlwaysOnTop(focused).catch(() => {});
+      }
+    }).then(fn => { unlistenFocus = fn; });
+
     return () => {
       disposed = true;
       videoSetupId++;
@@ -563,8 +692,16 @@
       }
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
+      unlistenResized?.();
+      unlistenFocus?.();
       if (viewMode === "pip") {
         exitNativePipWindow().catch(() => resetPipBodyBackground());
+      }
+      if (viewMode === "fullscreen") {
+        // Fully exit fullscreen on unmount: restore the pre-fullscreen geometry,
+        // resizability and drop the always-on-top pin, so navigating back to the
+        // gallery doesn't leave the window full-monitor-sized or stuck non-resizable.
+        exitBorderlessFullscreen().catch(() => {});
       }
       // Clear subtitle generation watchdog
       if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
@@ -604,6 +741,7 @@
       if (viewMode === "pip") {
         await exitPipMode("cinematic");
       } else if (viewMode === "fullscreen") {
+        await applyWindowChrome("cinematic");
         viewMode = "cinematic";
       } else {
         await goHome();
@@ -810,8 +948,14 @@
     await goto("/");
   }
 
+  let isMaximized = $state(false);
+
   async function minimizeApp() {
     await getCurrentWindow().minimize();
+  }
+
+  async function toggleMaximize() {
+    await getCurrentWindow().toggleMaximize();
   }
 
   async function closeApp() {
@@ -981,12 +1125,19 @@
       return;
     }
 
+    await applyWindowChrome(nextMode as NonPipViewMode);
     viewMode = nextMode;
   }
 
   async function enterPipMode() {
     try {
       const wasPlaying = isPlaying;
+      // Clear native fullscreen/always-on-top before entering PiP so the Rust
+      // enter_pip_mode snapshot captures a clean windowed baseline. PiP sets its own
+      // always-on-top, and exit_pip_mode restores exactly what we leave here — keeping
+      // that baseline cleared guarantees the Rust save/restore never re-applies a stale
+      // fullscreen/always-on-top that would fight applyWindowChrome on the way out.
+      await applyWindowChrome("cinematic");
       await enterNativePipWindow();
       viewMode = "pip";
       await applyPipVideoMode(videoElement, true, wasPlaying, () =>
@@ -1001,6 +1152,10 @@
     try {
       const wasPlaying = isPlaying;
       await exitNativePipWindow();
+      // exit_pip_mode (Rust) restores the pre-PiP geometry; explicitly enforce the
+      // fullscreen/always-on-top chrome for the mode we're actually returning to so
+      // the OS window state and viewMode can never disagree.
+      await applyWindowChrome(nextMode);
       viewMode = nextMode;
       await applyPipVideoMode(videoElement, false, wasPlaying, () =>
         fadedPlayback.play({ fade: false }),
@@ -1765,9 +1920,17 @@
   ondrop={(e) => e.preventDefault()}
 >
   {#if viewMode !== "pip"}
+    <div class="player-drag-bar" data-tauri-drag-region></div>
     <div class="window-controls" class:visible={showCloseButton}>
       <button class="window-btn" onclick={minimizeApp} data-tooltip="Minimize" aria-label="Minimize">
         <Minus size={16} />
+      </button>
+      <button class="window-btn" onclick={toggleMaximize} data-tooltip={isMaximized ? "Restore" : "Maximize"} aria-label={isMaximized ? "Restore" : "Maximize"}>
+        {#if isMaximized}
+          <Minimize size={16} />
+        {:else}
+          <Maximize size={16} />
+        {/if}
       </button>
       <button class="window-btn window-btn-close" onclick={closeApp} data-tooltip="Close" aria-label="Close">
         <X size={16} />
@@ -2413,6 +2576,20 @@
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
     border: 0;
+  }
+
+  .player-drag-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    z-index: 2;
+    cursor: grab;
+  }
+
+  .player-drag-bar:active {
+    cursor: grabbing;
   }
 
   .player-container.video-player {

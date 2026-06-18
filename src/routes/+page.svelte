@@ -5,7 +5,7 @@
   import { onMount, getContext } from "svelte";
   import { goto } from "$app/navigation";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { X, Minus, Settings, FolderOpen, Play, Music2, Maximize2, PictureInPicture2, Cloud, ArrowUpDown, Volume2, VolumeX, ListFilter, RotateCcw, Trash2 } from "lucide-svelte";
+  import { X, Minus, Settings, FolderOpen, Play, Music2, Maximize, Maximize2, Minimize, PictureInPicture2, Cloud, ArrowUpDown, Volume2, VolumeX, ListFilter, RotateCcw, Trash2 } from "lucide-svelte";
   import { getFormattedVersion } from "$lib/utils/version";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { isAudio } from "$lib/utils/mediaType";
@@ -189,7 +189,13 @@
     document.addEventListener("click", handleClickOutside);
 
     let unlistenDuration: (() => void) | undefined;
+    let unlistenResized: (() => void) | undefined;
     let cancelled = false;
+
+    getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
+    getCurrentWindow().onResized(() => {
+      getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
+    }).then(fn => { unlistenResized = fn; });
 
     // Await listener registration before triggering any duration fetches so no
     // "video-duration-ready" events are dropped between invoke and handler setup
@@ -232,6 +238,7 @@
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
       unlistenDuration?.();
+      unlistenResized?.();
     };
   });
 
@@ -513,8 +520,14 @@
     }
   }
 
+  let isMaximized = $state(false);
+
   async function minimizeApp() {
     await getCurrentWindow().minimize();
+  }
+
+  async function toggleMaximize() {
+    await getCurrentWindow().toggleMaximize();
   }
 
   async function closeApp() {
@@ -635,7 +648,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="empty-state" class:dragging={isDragging}>
     <div class="library-container">
-      <div class="library-header" bind:offsetHeight={libraryHeaderHeight}>
+      <div class="library-header" bind:offsetHeight={libraryHeaderHeight} data-tauri-drag-region>
         <div class="logo-group">
           <img src="/logo-dark.svg" alt="glucose" class="logo" class:logo-animate={logoReady} />
           <span class="version-tag" class:logo-animate={logoReady}>{getFormattedVersion()}</span>
@@ -655,6 +668,13 @@
           </Button>
           <button class="window-btn header-window-btn" onclick={minimizeApp} data-tooltip="Minimize" aria-label="Minimize">
             <Minus size={15} />
+          </button>
+          <button class="window-btn header-window-btn" onclick={toggleMaximize} data-tooltip={isMaximized ? "Restore" : "Maximize"} aria-label={isMaximized ? "Restore" : "Maximize"}>
+            {#if isMaximized}
+              <Minimize size={15} />
+            {:else}
+              <Maximize size={15} />
+            {/if}
           </button>
           <button class="window-btn window-btn-close header-window-btn" onclick={closeApp} data-tooltip="Close" aria-label="Close">
             <X size={15} />
@@ -926,6 +946,15 @@
     margin-right: -5rem;
     padding-left: 5rem;
     padding-right: 5rem;
+    cursor: grab;
+  }
+
+  .library-header:active {
+    cursor: grabbing;
+  }
+
+  .library-header .header-buttons {
+    cursor: default;
   }
 
   @keyframes logo-smoke-in {

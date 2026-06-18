@@ -8,7 +8,7 @@
   import { createFadedMediaPlayback } from '$lib/utils/fadedMediaPlayback';
   import { getFadeDurationMs } from '$lib/utils/playerPreferences';
   import { formatDuration } from '$lib/utils/time';
-  import { X, Minus, Play, Pause, Volume1, Volume2, VolumeX, Home } from 'lucide-svelte';
+  import { X, Minus, Maximize, Minimize, Play, Pause, Volume1, Volume2, VolumeX, Home } from 'lucide-svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { setWindowTitle } from '$lib/utils/windowTitle';
 
@@ -505,8 +505,14 @@
     goto('/');
   }
 
+  let isMaximized = $state(false);
+
   async function minimizeApp() {
     await getCurrentWindow().minimize();
+  }
+
+  async function toggleMaximize() {
+    await getCurrentWindow().toggleMaximize();
   }
 
   // ── Controls visibility ─────────────────────────────────────────────────────
@@ -628,11 +634,18 @@
       if (isPlaying && duration > 0) saveProgress();
     }, 5000);
 
+    let unlistenResized: (() => void) | undefined;
+    getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
+    getCurrentWindow().onResized(() => {
+      getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
+    }).then(fn => { unlistenResized = fn; });
+
     return () => {
       window.removeEventListener('resize', resizeCanvas);
       window.removeEventListener('keydown', handleKey);
       clearInterval(progressSaveInterval);
       fadedPlayback.destroy();
+      unlistenResized?.();
     };
   });
 
@@ -677,9 +690,17 @@
         ondragover={(e) => e.preventDefault()}
         ondrop={(e) => e.preventDefault()}
 >
+  <div class="drag-bar" data-tauri-drag-region></div>
   <div class="window-controls" class:visible={showCloseBtn}>
     <button class="window-btn" onclick={minimizeApp} data-tooltip="Minimize" aria-label="Minimize">
       <Minus size={16} />
+    </button>
+    <button class="window-btn" onclick={toggleMaximize} data-tooltip={isMaximized ? "Restore" : "Maximize"} aria-label={isMaximized ? "Restore" : "Maximize"}>
+      {#if isMaximized}
+        <Minimize size={16} />
+      {:else}
+        <Maximize size={16} />
+      {/if}
     </button>
     <button class="window-btn window-btn-close" onclick={goBack} data-tooltip="Back to Gallery" aria-label="Back to library">
       <X size={16} />
@@ -826,6 +847,20 @@
     font-family: 'Inter Variable', 'Inter', system-ui, sans-serif;
     color: rgba(255, 255, 255, 0.9);
     cursor: default;
+  }
+
+  .drag-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    z-index: 2;
+    cursor: grab;
+  }
+
+  .drag-bar:active {
+    cursor: grabbing;
   }
 
 

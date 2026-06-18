@@ -30,6 +30,7 @@
     const root = document.documentElement;
     for (const [k, v] of Object.entries(tokens)) root.style.setProperty(k, v);
   }
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, setContext, tick } from "svelte";
@@ -460,6 +461,7 @@
     // Check setup status on first launch, then reveal the app
     checkSetupStatus().finally(() => {
       appReady = true;
+      getCurrentWindow().show().catch(console.error);
     });
 
     // Notify backend that frontend is ready
