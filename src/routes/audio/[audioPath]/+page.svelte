@@ -1230,13 +1230,16 @@
   .volume-slider-vertical {
     width: 4px;
     height: 100px;
-    -webkit-appearance: slider-vertical;
-    appearance: slider-vertical;
+    -webkit-appearance: none;
+    appearance: none;
+    /* Vertical range without the deprecated `slider-vertical`/`bt-lr` keywords:
+       writing-mode makes the track run vertically and rtl puts max at the top. */
+    writing-mode: vertical-lr;
+    direction: rtl;
     background: rgba(255, 255, 255, 0.2);
     border-radius: 2px;
     outline: none;
     cursor: pointer;
-    writing-mode: bt-lr;
   }
 
   .volume-slider-vertical::-webkit-slider-thumb {
