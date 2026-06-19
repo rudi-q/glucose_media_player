@@ -2290,6 +2290,41 @@ fn process_video_files(app_handle: &tauri::AppHandle, video_files: Vec<String>) 
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+// Toggle Windows 11 DWM corner rounding for the main window, PER MODE. The visible
+// rounded corners come from the OS (not CSS), so we round in windowed/cinematic/PiP to
+// match the app's look and square it off only in fullscreen, where the opaque video must
+// reach the physical screen edges. A global disable would (and did) square every mode.
+// No-op on non-Windows.
+#[tauri::command]
+fn set_window_corner_rounded(app: tauri::AppHandle, rounded: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri::Manager;
+        use windows::Win32::Graphics::Dwm::{
+            DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND,
+        };
+        let window = app
+            .get_webview_window("main")
+            .ok_or_else(|| "Failed to get main window".to_string())?;
+        let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+        let pref = if rounded { DWMWCP_ROUND } else { DWMWCP_DONOTROUND };
+        unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &pref as *const _ as *const core::ffi::c_void,
+                std::mem::size_of_val(&pref) as u32,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (&app, rounded);
+    }
+    Ok(())
+}
+
 pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -2364,6 +2399,7 @@ pub fn run() {
             mark_file_processed,
             frontend_ready,
             exit_app,
+            set_window_corner_rounded,
             find_subtitle_for_video,
             get_embedded_subtitle_tracks,
             extract_embedded_subtitle,

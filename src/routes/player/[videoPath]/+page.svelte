@@ -18,6 +18,7 @@
     Captions,
     CaptionsOff,
     Maximize,
+    Minimize,
     Minimize2,
     Loader2,
     AlertTriangle,
@@ -43,6 +44,10 @@
     resetPipBodyBackground,
     savePipWindowLayout,
   } from "$lib/utils/pipWindow";
+  import {
+    enterBorderlessFullscreen,
+    exitBorderlessFullscreen,
+  } from "$lib/utils/windowChrome";
   import { loadSubtitleFile, convertSrtToVtt } from "$lib/utils/subtitles";
   import SubtitleOverlay from "$lib/subtitle/SubtitleOverlay.svelte";
   import SubtitleStylePanel from "$lib/subtitle/SubtitleStylePanel.svelte";
@@ -261,6 +266,19 @@
     return disposed || setupId !== videoSetupId;
   }
 
+  // Single source of truth for native window chrome for the two non-PiP view modes.
+  // PiP is intentionally excluded — its window state is owned by the Rust
+  // enter_pip_mode/exit_pip_mode commands, which we always feed a cleared baseline
+  // (see enterPipMode). The borderless-fullscreen primitives are shared with the audio
+  // player via $lib/utils/windowChrome.
+  async function applyWindowChrome(mode: NonPipViewMode) {
+    if (mode === "fullscreen") {
+      await enterBorderlessFullscreen();
+    } else {
+      await exitBorderlessFullscreen();
+    }
+  }
+
   async function applyInitialViewMode(mode: string) {
     const nextMode: NonPipViewMode =
       mode === "fullscreen" ? "fullscreen" : "cinematic";
@@ -275,6 +293,7 @@
     if (viewMode === "pip") {
       await exitPipMode(nextMode);
     } else {
+      await applyWindowChrome(nextMode);
       viewMode = nextMode;
     }
   }
@@ -525,6 +544,23 @@
     document.addEventListener("keydown", handleKeyPress);
     document.addEventListener("click", handleClickOutside);
 
+    let unlistenResized: (() => void) | undefined;
+    getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
+    getCurrentWindow().onResized(() => {
+      getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
+    }).then(fn => { unlistenResized = fn; });
+
+    // Focus-tied always-on-top: in fullscreen we pin the window above the (topmost)
+    // taskbar, but release the pin while glucose is unfocused so the user can Alt-Tab
+    // to other windows. Only fullscreen is affected — PiP must stay pinned even when
+    // blurred (its always-on-top is owned by Rust), and cinematic is never pinned.
+    let unlistenFocus: (() => void) | undefined;
+    getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (viewMode === "fullscreen") {
+        getCurrentWindow().setAlwaysOnTop(focused).catch(() => {});
+      }
+    }).then(fn => { unlistenFocus = fn; });
+
     return () => {
       disposed = true;
       videoSetupId++;
@@ -563,8 +599,16 @@
       }
       document.removeEventListener("keydown", handleKeyPress);
       document.removeEventListener("click", handleClickOutside);
+      unlistenResized?.();
+      unlistenFocus?.();
       if (viewMode === "pip") {
         exitNativePipWindow().catch(() => resetPipBodyBackground());
+      }
+      if (viewMode === "fullscreen") {
+        // Fully exit fullscreen on unmount: restore the pre-fullscreen geometry,
+        // resizability and drop the always-on-top pin, so navigating back to the
+        // gallery doesn't leave the window full-monitor-sized or stuck non-resizable.
+        exitBorderlessFullscreen().catch(() => {});
       }
       // Clear subtitle generation watchdog
       if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
@@ -604,6 +648,7 @@
       if (viewMode === "pip") {
         await exitPipMode("cinematic");
       } else if (viewMode === "fullscreen") {
+        await applyWindowChrome("cinematic");
         viewMode = "cinematic";
       } else {
         await goHome();
@@ -810,8 +855,22 @@
     await goto("/");
   }
 
+  let isMaximized = $state(false);
+
   async function minimizeApp() {
     await getCurrentWindow().minimize();
+  }
+
+  async function toggleMaximize() {
+    // While in fullscreen the button acts as "restore" — exit fullscreen back to the
+    // windowed cinematic view (an OS-maximize is meaningless when we already fill the
+    // whole screen). Otherwise it's the normal maximize/restore toggle.
+    if (viewMode === "fullscreen") {
+      await applyWindowChrome("cinematic");
+      viewMode = "cinematic";
+      return;
+    }
+    await getCurrentWindow().toggleMaximize();
   }
 
   async function closeApp() {
@@ -967,26 +1026,28 @@
   }
 
   async function toggleViewMode() {
-    const modes: ViewMode[] = ["cinematic", "fullscreen", "pip"];
-    const currentIndex = modes.indexOf(viewMode);
-    const nextMode = modes[(currentIndex + 1) % modes.length];
-
+    // F is a pure fullscreen toggle; P owns PiP. From PiP, F exits to fullscreen
+    // so the key always means "go fullscreen" unless we're already there.
     if (viewMode === "pip") {
-      await exitPipMode(nextMode as NonPipViewMode);
+      await exitPipMode("fullscreen");
       return;
     }
 
-    if (nextMode === "pip") {
-      await enterPipMode();
-      return;
-    }
-
+    const nextMode: NonPipViewMode =
+      viewMode === "fullscreen" ? "cinematic" : "fullscreen";
+    await applyWindowChrome(nextMode);
     viewMode = nextMode;
   }
 
   async function enterPipMode() {
     try {
       const wasPlaying = isPlaying;
+      // Clear native fullscreen/always-on-top before entering PiP so the Rust
+      // enter_pip_mode snapshot captures a clean windowed baseline. PiP sets its own
+      // always-on-top, and exit_pip_mode restores exactly what we leave here — keeping
+      // that baseline cleared guarantees the Rust save/restore never re-applies a stale
+      // fullscreen/always-on-top that would fight applyWindowChrome on the way out.
+      await applyWindowChrome("cinematic");
       await enterNativePipWindow();
       viewMode = "pip";
       await applyPipVideoMode(videoElement, true, wasPlaying, () =>
@@ -1001,6 +1062,10 @@
     try {
       const wasPlaying = isPlaying;
       await exitNativePipWindow();
+      // exit_pip_mode (Rust) restores the pre-PiP geometry; explicitly enforce the
+      // fullscreen/always-on-top chrome for the mode we're actually returning to so
+      // the OS window state and viewMode can never disagree.
+      await applyWindowChrome(nextMode);
       viewMode = nextMode;
       await applyPipVideoMode(videoElement, false, wasPlaying, () =>
         fadedPlayback.play({ fade: false }),
@@ -1765,9 +1830,21 @@
   ondrop={(e) => e.preventDefault()}
 >
   {#if viewMode !== "pip"}
+    {#if viewMode !== "fullscreen"}
+      <!-- Only the windowed/cinematic view gets a drag region; in fullscreen it would
+           let the top strip drag the full-screen window off the monitor. -->
+      <div class="player-drag-bar" data-tauri-drag-region></div>
+    {/if}
     <div class="window-controls" class:visible={showCloseButton}>
       <button class="window-btn" onclick={minimizeApp} data-tooltip="Minimize" aria-label="Minimize">
         <Minus size={16} />
+      </button>
+      <button class="window-btn" onclick={toggleMaximize} data-tooltip={(isMaximized || viewMode === "fullscreen") ? "Restore" : "Maximize"} aria-label={(isMaximized || viewMode === "fullscreen") ? "Restore" : "Maximize"}>
+        {#if isMaximized || viewMode === "fullscreen"}
+          <Minimize size={16} />
+        {:else}
+          <Maximize size={16} />
+        {/if}
       </button>
       <button class="window-btn window-btn-close" onclick={closeApp} data-tooltip="Close" aria-label="Close">
         <X size={16} />
@@ -2165,8 +2242,8 @@
           <button
             class="control-button"
             onclick={toggleViewMode}
-            data-tooltip="View Mode (F)"
-            aria-label="View Mode (F)"
+            data-tooltip="Fullscreen (F)"
+            aria-label="Fullscreen (F)"
           >
             <Maximize size={20} />
           </button>
@@ -2223,12 +2300,10 @@
       >
         <Maximize size={16} />
         <span>
-          {#if viewMode === "cinematic"}
-            Fullscreen Mode
-          {:else if viewMode === "fullscreen"}
+          {#if viewMode === "fullscreen"}
             Cinematic Mode
           {:else}
-            Cinematic Mode
+            Fullscreen Mode
           {/if}
         </span>
         <span class="shortcut">F</span>
@@ -2413,6 +2488,20 @@
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
     border: 0;
+  }
+
+  .player-drag-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    z-index: 2;
+    cursor: grab;
+  }
+
+  .player-drag-bar:active {
+    cursor: grabbing;
   }
 
   .player-container.video-player {
@@ -2861,13 +2950,16 @@
   .volume-slider-vertical {
     width: 4px;
     height: 100px;
-    -webkit-appearance: slider-vertical;
-    appearance: slider-vertical;
+    -webkit-appearance: none;
+    appearance: none;
+    /* Vertical range without the deprecated `slider-vertical`/`bt-lr` keywords:
+       writing-mode makes the track run vertically and rtl puts max at the top. */
+    writing-mode: vertical-lr;
+    direction: rtl;
     background: rgba(255, 255, 255, 0.2);
     border-radius: 2px;
     outline: none;
     cursor: pointer;
-    writing-mode: bt-lr;
   }
 
   .volume-slider-vertical::-webkit-slider-thumb {

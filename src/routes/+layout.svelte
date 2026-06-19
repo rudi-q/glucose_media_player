@@ -30,6 +30,7 @@
     const root = document.documentElement;
     for (const [k, v] of Object.entries(tokens)) root.style.setProperty(k, v);
   }
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, setContext, tick } from "svelte";
@@ -457,9 +458,18 @@
       }
     })();
 
-    // Check setup status on first launch, then reveal the app
-    checkSetupStatus().finally(() => {
+    // Check setup status on first launch, then reveal the app. A fail-safe timeout
+    // independently reveals the window if the setup check ever hangs, so a stuck invoke
+    // can't leave the app permanently hidden behind the splash. The finally clears it
+    // when the check completes normally; show()/appReady are idempotent.
+    const revealFailSafe = setTimeout(() => {
       appReady = true;
+      getCurrentWindow().show().catch(console.error);
+    }, 3000);
+    checkSetupStatus().finally(() => {
+      clearTimeout(revealFailSafe);
+      appReady = true;
+      getCurrentWindow().show().catch(console.error);
     });
 
     // Notify backend that frontend is ready
