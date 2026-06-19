@@ -1124,21 +1124,16 @@
   }
 
   async function toggleViewMode() {
-    const modes: ViewMode[] = ["cinematic", "fullscreen", "pip"];
-    const currentIndex = modes.indexOf(viewMode);
-    const nextMode = modes[(currentIndex + 1) % modes.length];
-
+    // F is a pure fullscreen toggle; P owns PiP. From PiP, F exits to fullscreen
+    // so the key always means "go fullscreen" unless we're already there.
     if (viewMode === "pip") {
-      await exitPipMode(nextMode as NonPipViewMode);
+      await exitPipMode("fullscreen");
       return;
     }
 
-    if (nextMode === "pip") {
-      await enterPipMode();
-      return;
-    }
-
-    await applyWindowChrome(nextMode as NonPipViewMode);
+    const nextMode: NonPipViewMode =
+      viewMode === "fullscreen" ? "cinematic" : "fullscreen";
+    await applyWindowChrome(nextMode);
     viewMode = nextMode;
   }
 
@@ -2345,8 +2340,8 @@
           <button
             class="control-button"
             onclick={toggleViewMode}
-            data-tooltip="View Mode (F)"
-            aria-label="View Mode (F)"
+            data-tooltip="Fullscreen (F)"
+            aria-label="Fullscreen (F)"
           >
             <Maximize size={20} />
           </button>
@@ -2403,12 +2398,10 @@
       >
         <Maximize size={16} />
         <span>
-          {#if viewMode === "cinematic"}
-            Fullscreen Mode
-          {:else if viewMode === "fullscreen"}
+          {#if viewMode === "fullscreen"}
             Cinematic Mode
           {:else}
-            Cinematic Mode
+            Fullscreen Mode
           {/if}
         </span>
         <span class="shortcut">F</span>
