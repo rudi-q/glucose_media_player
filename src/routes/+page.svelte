@@ -195,7 +195,11 @@
     getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
     getCurrentWindow().onResized(() => {
       getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
-    }).then(fn => { unlistenResized = fn; });
+    }).then(fn => {
+      // If the component unmounted before this resolved, `cancelled` is already true —
+      // unlisten immediately so the listener can't leak onto the shared window.
+      if (cancelled) { fn(); } else { unlistenResized = fn; }
+    });
 
     // Await listener registration before triggering any duration fetches so no
     // "video-duration-ready" events are dropped between invoke and handler setup

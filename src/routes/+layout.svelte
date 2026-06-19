@@ -458,8 +458,16 @@
       }
     })();
 
-    // Check setup status on first launch, then reveal the app
+    // Check setup status on first launch, then reveal the app. A fail-safe timeout
+    // independently reveals the window if the setup check ever hangs, so a stuck invoke
+    // can't leave the app permanently hidden behind the splash. The finally clears it
+    // when the check completes normally; show()/appReady are idempotent.
+    const revealFailSafe = setTimeout(() => {
+      appReady = true;
+      getCurrentWindow().show().catch(console.error);
+    }, 3000);
     checkSetupStatus().finally(() => {
+      clearTimeout(revealFailSafe);
       appReady = true;
       getCurrentWindow().show().catch(console.error);
     });

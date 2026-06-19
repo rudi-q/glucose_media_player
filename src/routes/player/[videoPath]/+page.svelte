@@ -1933,7 +1933,11 @@
   ondrop={(e) => e.preventDefault()}
 >
   {#if viewMode !== "pip"}
-    <div class="player-drag-bar" data-tauri-drag-region></div>
+    {#if viewMode !== "fullscreen"}
+      <!-- Only the windowed/cinematic view gets a drag region; in fullscreen it would
+           let the top strip drag the full-screen window off the monitor. -->
+      <div class="player-drag-bar" data-tauri-drag-region></div>
+    {/if}
     <div class="window-controls" class:visible={showCloseButton}>
       <button class="window-btn" onclick={minimizeApp} data-tooltip="Minimize" aria-label="Minimize">
         <Minus size={16} />

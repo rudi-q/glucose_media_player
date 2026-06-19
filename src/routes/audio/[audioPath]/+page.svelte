@@ -634,13 +634,18 @@
       if (isPlaying && duration > 0) saveProgress();
     }, 5000);
 
+    // onMount can't be async (Svelte would then ignore the returned cleanup), so guard
+    // the async listener registration with a flag instead of awaiting it: if the
+    // component unmounts first, unlisten immediately so the listener can't leak.
+    let resizedDisposed = false;
     let unlistenResized: (() => void) | undefined;
     getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
     getCurrentWindow().onResized(() => {
       getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
-    }).then(fn => { unlistenResized = fn; });
+    }).then(fn => { if (resizedDisposed) { fn(); } else { unlistenResized = fn; } });
 
     return () => {
+      resizedDisposed = true;
       window.removeEventListener('resize', resizeCanvas);
       window.removeEventListener('keydown', handleKey);
       clearInterval(progressSaveInterval);
