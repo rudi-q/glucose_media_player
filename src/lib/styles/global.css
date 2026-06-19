@@ -14,6 +14,15 @@ body {
   font-feature-settings: 'kern' 1, 'liga' 1, 'calt' 1;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+/* In fullscreen the video must reach the physical screen edges — drop the windowed
+   rounded corners and inset border that would otherwise show as a thin frame. */
+body.fullscreen-chrome {
+  border-radius: 0;
+  box-shadow: none;
 }
 
 ::-webkit-scrollbar {

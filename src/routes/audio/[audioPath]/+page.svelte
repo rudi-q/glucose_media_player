@@ -8,9 +8,21 @@
   import { createFadedMediaPlayback } from '$lib/utils/fadedMediaPlayback';
   import { getFadeDurationMs } from '$lib/utils/playerPreferences';
   import { formatDuration } from '$lib/utils/time';
-  import { X, Minus, Play, Pause, Volume1, Volume2, VolumeX, Home } from 'lucide-svelte';
+  import { X, Minus, Maximize, Minimize, Minimize2, Play, Pause, Volume1, Volume2, VolumeX, Home } from 'lucide-svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { setWindowTitle } from '$lib/utils/windowTitle';
+  import {
+    enterBorderlessFullscreen,
+    exitBorderlessFullscreen,
+  } from '$lib/utils/windowChrome';
+  import {
+    createPipWindowSettler,
+    enterNativePipWindow,
+    exitNativePipWindow,
+    resetPipBodyBackground,
+    savePipWindowLayout,
+  } from '$lib/utils/pipWindow';
+  import PipWindowFrame from '$lib/components/PipWindowFrame.svelte';
 
   let { data } = $props();
   const audioPath: string = $derived(data.audioPath);
@@ -476,6 +488,14 @@
         setVolume(volume - 0.1);
         flashVolumeMenu();
         break;
+      case 'f':
+        e.preventDefault();
+        toggleViewMode();
+        break;
+      case 'p':
+        e.preventDefault();
+        togglePipMode();
+        break;
       case 'm':
         toggleMute();
         flashVolumeMenu();
@@ -501,12 +521,92 @@
   }
 
   async function goBack() {
+    // Persist the PiP layout before navigating away; the unmount teardown also exits
+    // PiP, but saving here guarantees the size/position stick even if that races.
+    if (viewMode === 'pip') {
+      await savePipWindowLayout().catch(() => {});
+    }
     if (isPlaying) await fadedPlayback.pause();
     goto('/');
   }
 
+  type ViewMode = 'windowed' | 'fullscreen' | 'pip';
+  let viewMode = $state<ViewMode>('windowed');
+  let isMaximized = $state(false);
+
   async function minimizeApp() {
     await getCurrentWindow().minimize();
+  }
+
+  async function toggleMaximize() {
+    // In fullscreen the maximize/restore button drops back to the windowed view
+    // (mirrors the video player) instead of toggling OS maximize beneath fullscreen.
+    if (viewMode === 'fullscreen') {
+      await applyWindowChrome('windowed');
+      viewMode = 'windowed';
+      return;
+    }
+    await getCurrentWindow().toggleMaximize();
+  }
+
+  // Borderless-fullscreen primitives are shared with the video player via
+  // $lib/utils/windowChrome. PiP is owned by the Rust enter_pip_mode/exit_pip_mode
+  // commands; we always feed them a cleared (windowed) baseline so their save/restore
+  // never fights applyWindowChrome on the way out.
+  async function applyWindowChrome(mode: 'windowed' | 'fullscreen') {
+    if (mode === 'fullscreen') {
+      await enterBorderlessFullscreen();
+    } else {
+      await exitBorderlessFullscreen();
+    }
+  }
+
+  // F: pure fullscreen toggle (windowed<->fullscreen); from PiP it exits to fullscreen
+  // so F always means "go fullscreen" unless already there. P is the sole PiP control.
+  async function toggleViewMode() {
+    if (viewMode === 'pip') {
+      await exitPipMode('fullscreen');
+      return;
+    }
+    const nextMode = viewMode === 'fullscreen' ? 'windowed' : 'fullscreen';
+    await applyWindowChrome(nextMode);
+    viewMode = nextMode;
+  }
+
+  async function togglePipMode() {
+    if (viewMode === 'pip') {
+      await exitPipMode('windowed');
+    } else {
+      await enterPipMode();
+    }
+  }
+
+  async function enterPipMode() {
+    try {
+      // Clear fullscreen/always-on-top first so the Rust enter_pip_mode snapshot
+      // captures a clean windowed baseline.
+      await applyWindowChrome('windowed');
+      await enterNativePipWindow();
+      viewMode = 'pip';
+      // The visualizer canvas tracks the window via the resize listener; refit it now
+      // so it matches the PiP size immediately instead of waiting for the resize event.
+      resizeCanvas();
+    } catch (err) {
+      console.error('Failed to enter PiP mode:', err);
+    }
+  }
+
+  async function exitPipMode(nextMode: 'windowed' | 'fullscreen') {
+    try {
+      await exitNativePipWindow();
+      // exit_pip_mode (Rust) restores the pre-PiP geometry; explicitly enforce the
+      // chrome for the mode we're returning to so OS window state and viewMode agree.
+      await applyWindowChrome(nextMode);
+      viewMode = nextMode;
+      resizeCanvas();
+    } catch (err) {
+      console.error('Failed to exit PiP mode:', err);
+    }
   }
 
   // ── Controls visibility ─────────────────────────────────────────────────────
@@ -628,11 +728,50 @@
       if (isPlaying && duration > 0) saveProgress();
     }, 5000);
 
+    // onMount can't be async (Svelte would then ignore the returned cleanup), so guard
+    // the async listener registration with a flag instead of awaiting it: if the
+    // component unmounts first, unlisten immediately so the listener can't leak.
+    let listenersDisposed = false;
+    let unlistenResized: (() => void) | undefined;
+    let unlistenFocus: (() => void) | undefined;
+    let unlistenPipSettle: (() => void) | undefined;
+    getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
+    getCurrentWindow().onResized(() => {
+      getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
+    }).then(fn => { if (listenersDisposed) { fn(); } else { unlistenResized = fn; } });
+
+    // Focus-tied always-on-top: in fullscreen we pin the window above the (topmost)
+    // taskbar but release the pin while unfocused so the user can Alt-Tab away. Only
+    // fullscreen is affected — PiP stays pinned (its always-on-top is owned by Rust)
+    // and the windowed view is never pinned.
+    getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (viewMode === 'fullscreen') {
+        getCurrentWindow().setAlwaysOnTop(focused).catch(() => {});
+      }
+    }).then(fn => { if (listenersDisposed) { fn(); } else { unlistenFocus = fn; } });
+
+    // Keep the PiP window snapped/aspect-correct as it is dragged or resized.
+    createPipWindowSettler(() => viewMode === 'pip')
+      .then(fn => { if (listenersDisposed) { fn(); } else { unlistenPipSettle = fn; } })
+      .catch((err) => console.error('Failed to register PiP settler:', err));
+
     return () => {
+      listenersDisposed = true;
       window.removeEventListener('resize', resizeCanvas);
       window.removeEventListener('keydown', handleKey);
       clearInterval(progressSaveInterval);
       fadedPlayback.destroy();
+      unlistenResized?.();
+      unlistenFocus?.();
+      unlistenPipSettle?.();
+      // Leave any transient window mode cleanly on unmount so navigating back to the
+      // gallery never leaves the window full-monitor-sized, pinned, or frameless.
+      if (viewMode === 'pip') {
+        exitNativePipWindow().catch(() => resetPipBodyBackground());
+      }
+      if (viewMode === 'fullscreen') {
+        exitBorderlessFullscreen().catch(() => {});
+      }
     };
   });
 
@@ -677,14 +816,32 @@
         ondragover={(e) => e.preventDefault()}
         ondrop={(e) => e.preventDefault()}
 >
-  <div class="window-controls" class:visible={showCloseBtn}>
-    <button class="window-btn" onclick={minimizeApp} data-tooltip="Minimize" aria-label="Minimize">
-      <Minus size={16} />
-    </button>
-    <button class="window-btn window-btn-close" onclick={goBack} data-tooltip="Back to Gallery" aria-label="Back to library">
-      <X size={16} />
-    </button>
-  </div>
+  {#if viewMode !== 'pip'}
+    {#if viewMode !== 'fullscreen'}
+      <!-- Only the windowed view gets a drag region; in fullscreen it would let the top
+           strip drag the full-screen window off the monitor. -->
+      <div class="drag-bar" data-tauri-drag-region></div>
+    {/if}
+    <div class="window-controls" class:visible={showCloseBtn}>
+      <button class="window-btn" onclick={minimizeApp} data-tooltip="Minimize" aria-label="Minimize">
+        <Minus size={16} />
+      </button>
+      <button class="window-btn" onclick={toggleMaximize} data-tooltip={(isMaximized || viewMode === 'fullscreen') ? "Restore" : "Maximize"} aria-label={(isMaximized || viewMode === 'fullscreen') ? "Restore" : "Maximize"}>
+        {#if isMaximized || viewMode === 'fullscreen'}
+          <Minimize size={16} />
+        {:else}
+          <Maximize size={16} />
+        {/if}
+      </button>
+      <button class="window-btn window-btn-close" onclick={goBack} data-tooltip="Back to Gallery" aria-label="Back to library">
+        <X size={16} />
+      </button>
+    </div>
+  {/if}
+
+  {#if viewMode === 'pip'}
+    <PipWindowFrame onClose={goBack} />
+  {/if}
 
   <!-- Visualizer fills the entire screen -->
   <div class="viz-area">
@@ -780,6 +937,12 @@
               </div>
             {/if}
           </div>
+          <button class="control-button" onclick={togglePipMode} data-tooltip="PiP (P)" aria-label="Picture in Picture (P)">
+            <Minimize2 size={20} />
+          </button>
+          <button class="control-button" onclick={toggleViewMode} data-tooltip="Fullscreen (F)" aria-label="Fullscreen (F)">
+            <Maximize size={20} />
+          </button>
         </div>
       </div>
 
@@ -826,6 +989,20 @@
     font-family: 'Inter Variable', 'Inter', system-ui, sans-serif;
     color: rgba(255, 255, 255, 0.9);
     cursor: default;
+  }
+
+  .drag-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    z-index: 2;
+    cursor: grab;
+  }
+
+  .drag-bar:active {
+    cursor: grabbing;
   }
 
 
@@ -1053,13 +1230,16 @@
   .volume-slider-vertical {
     width: 4px;
     height: 100px;
-    -webkit-appearance: slider-vertical;
-    appearance: slider-vertical;
+    -webkit-appearance: none;
+    appearance: none;
+    /* Vertical range without the deprecated `slider-vertical`/`bt-lr` keywords:
+       writing-mode makes the track run vertically and rtl puts max at the top. */
+    writing-mode: vertical-lr;
+    direction: rtl;
     background: rgba(255, 255, 255, 0.2);
     border-radius: 2px;
     outline: none;
     cursor: pointer;
-    writing-mode: bt-lr;
   }
 
   .volume-slider-vertical::-webkit-slider-thumb {
