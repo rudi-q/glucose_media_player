@@ -289,6 +289,13 @@
   // the focus listener in onMount) so the user can still Alt-Tab away.
   async function enterBorderlessFullscreen() {
     const win = getCurrentWindow();
+    // Square off the windowed rounded corners + inset border (set on <body> globally)
+    // so the video reaches the physical screen edges. Done here rather than in a
+    // reactive $effect so it's tied directly to the fullscreen transition that we know
+    // runs. The visible corner rounding is the OS (DWM) one, so also square the window
+    // itself — CSS alone can't override the OS window shape.
+    document.body.classList.add("fullscreen-chrome");
+    invoke("set_window_corner_rounded", { rounded: false }).catch(() => {});
     // Already fullscreen: just re-assert the pin (e.g. after a focus blip) and bail so
     // we never overwrite the saved windowed geometry with the full-monitor size.
     if (savedFullscreenGeometry) {
@@ -318,22 +325,27 @@
     if (maximized) {
       await win.unmaximize();
     }
+    // setSize sizes the inner/client area to the monitor, but a frameless Windows
+    // window carries an invisible resize-border margin around the client. That margin
+    // is NOT symmetric (typically ~13px left/right but ~0 top / ~15 bottom), so simply
+    // centering the outer window leaves a gap at one edge (a strip on the left, or a
+    // gap at the bottom). Instead, measure the actual client offset and shift the outer
+    // window so the client's top-left lands exactly on the monitor origin — the client
+    // (= the video) then covers the monitor precisely, flush on all four edges.
     await win.setSize(
       new PhysicalSize(monitor.size.width, monitor.size.height),
     );
-    // setSize sizes the inner/client area, but a frameless Windows window can still
-    // carry an invisible resize-border margin — making the OUTER window larger than the
-    // monitor. Anchored at (0,0) that pushes the centered video right/down and leaves a
-    // black strip on the left/top edge. Re-center the outer window over the monitor so
-    // the invisible margin bleeds equally off every edge and the video sits flush.
-    // (When no margin is present this resolves to the monitor origin — a no-op.)
-    const outer = await win.outerSize();
-    const overflowX = outer.width - monitor.size.width;
-    const overflowY = outer.height - monitor.size.height;
+    await win.setPosition(
+      new PhysicalPosition(monitor.position.x, monitor.position.y),
+    );
+    const outerPos = await win.outerPosition();
+    const innerPos = await win.innerPosition();
+    const borderX = innerPos.x - outerPos.x;
+    const borderY = innerPos.y - outerPos.y;
     await win.setPosition(
       new PhysicalPosition(
-        monitor.position.x - Math.round(overflowX / 2),
-        monitor.position.y - Math.round(overflowY / 2),
+        monitor.position.x - borderX,
+        monitor.position.y - borderY,
       ),
     );
     await win.setAlwaysOnTop(true);
@@ -341,6 +353,10 @@
 
   async function exitBorderlessFullscreen() {
     const win = getCurrentWindow();
+    // Restore the windowed rounded corners + inset border (CSS) and the OS window
+    // rounding.
+    document.body.classList.remove("fullscreen-chrome");
+    invoke("set_window_corner_rounded", { rounded: true }).catch(() => {});
     // Drop the pin and any OS-fullscreen fallback first. Re-assert resizability as a
     // self-healing safety net — the window must never get stuck non-resizable
     // (otherwise edge-resize and maximize silently stop working) — before restoring
@@ -360,17 +376,6 @@
       await win.setPosition(position);
     }
   }
-
-  // Strip the windowed rounded corners/border (set on <body> globally) while in
-  // fullscreen so the video reaches the physical screen edges. The cleanup runs when
-  // viewMode changes away from fullscreen or when the player unmounts, so the class
-  // never leaks onto the gallery/audio routes (they share the same <body>).
-  $effect(() => {
-    if (viewMode === "fullscreen") {
-      document.body.classList.add("fullscreen-chrome");
-      return () => document.body.classList.remove("fullscreen-chrome");
-    }
-  });
 
   async function applyInitialViewMode(mode: string) {
     const nextMode: NonPipViewMode =
@@ -955,6 +960,14 @@
   }
 
   async function toggleMaximize() {
+    // While in fullscreen the button acts as "restore" — exit fullscreen back to the
+    // windowed cinematic view (an OS-maximize is meaningless when we already fill the
+    // whole screen). Otherwise it's the normal maximize/restore toggle.
+    if (viewMode === "fullscreen") {
+      await applyWindowChrome("cinematic");
+      viewMode = "cinematic";
+      return;
+    }
     await getCurrentWindow().toggleMaximize();
   }
 
@@ -1925,8 +1938,8 @@
       <button class="window-btn" onclick={minimizeApp} data-tooltip="Minimize" aria-label="Minimize">
         <Minus size={16} />
       </button>
-      <button class="window-btn" onclick={toggleMaximize} data-tooltip={isMaximized ? "Restore" : "Maximize"} aria-label={isMaximized ? "Restore" : "Maximize"}>
-        {#if isMaximized}
+      <button class="window-btn" onclick={toggleMaximize} data-tooltip={(isMaximized || viewMode === "fullscreen") ? "Restore" : "Maximize"} aria-label={(isMaximized || viewMode === "fullscreen") ? "Restore" : "Maximize"}>
+        {#if isMaximized || viewMode === "fullscreen"}
           <Minimize size={16} />
         {:else}
           <Maximize size={16} />

@@ -1535,6 +1535,7 @@ dependencies = [
  "tokio",
  "urlencoding",
  "whisper-rs",
+ "windows",
 ]
 
 [[package]]
