@@ -1,4 +1,5 @@
 mod ffmpeg;
+mod mpv;
 mod pip_window;
 
 use pip_window::{enter_pip_mode, exit_pip_mode, save_pip_window_layout, settle_pip_window};
@@ -2426,7 +2427,9 @@ pub fn run() {
             settle_pip_window,
             ffmpeg::get_ffmpeg_path,
             ffmpeg::pick_ffmpeg_executable,
-            ffmpeg::save_ffmpeg_custom_path
+            ffmpeg::save_ffmpeg_custom_path,
+            mpv::check_mpv_installed,
+            mpv::play_with_mpv
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

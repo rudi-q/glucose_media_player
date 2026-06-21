@@ -148,6 +148,12 @@
   let showHevcWarning = $state(false);
   let isWindows = $state(false);
 
+  // SPIKE (spike/mpv-lite-proof): codecs the WebView can't decode at all
+  // (ProRes etc.) → offer subprocess mpv "Lite" playback.
+  let showLiteWarning = $state(false);
+  let liteCodecLabel = $state("");
+  let mpvAvailable = $state(false);
+
   // Context menu state
   let showContextMenu = $state(false);
   let contextMenuPosition = $state({ x: 0, y: 0 });
@@ -354,6 +360,7 @@
     pendingPaused = null;
     currentVideoInfo = null;
     showHevcWarning = false;
+    showLiteWarning = false;
     currentTime = 0;
     duration = 0;
     videoSrc = convertFileSrc(videoPath);
@@ -421,12 +428,25 @@
       const info = await invoke<VideoInfo>("get_video_info", { videoPath });
       if (isVideoSetupStale(setupId)) return;
       currentVideoInfo = info;
-      if (info.videoCodec === "hevc") {
+      const codec = info.videoCodec ?? "";
+      if (codec === "hevc") {
         // readyState >= 2 (HAVE_CURRENT_DATA) means the browser has already
         // decoded at least one frame — codec is working, no warning needed.
         showHevcWarning = !videoElement || videoElement.readyState < 2;
       } else {
         showHevcWarning = false;
+      }
+      // SPIKE: these are never WebView-decodable, so don't gate on readyState
+      // (the audio track can push readyState high while video stays black).
+      const liteCodecs = ["prores", "prores_ks", "prores_aw", "dnxhd", "dnxhr", "cfhd"];
+      if (liteCodecs.includes(codec)) {
+        liteCodecLabel = codec.startsWith("prores") ? "Apple ProRes" : codec.toUpperCase();
+        const mpvPath = await invoke<string | null>("check_mpv_installed").catch(() => null);
+        if (isVideoSetupStale(setupId)) return;
+        mpvAvailable = !!mpvPath;
+        showLiteWarning = true;
+      } else {
+        showLiteWarning = false;
       }
     } catch (err) {
       console.log("Video codec detection failed:", err);
@@ -1202,6 +1222,18 @@
     }
   }
 
+  // SPIKE (spike/mpv-lite-proof): play the current file in glucose's Lite mode
+  // (a detached mpv process), used for codecs the built-in player can't decode.
+  async function openInLiteMode() {
+    if (!currentVideoPath) return;
+    try {
+      await invoke("play_with_mpv", { videoPath: currentVideoPath });
+    } catch (err) {
+      console.error("Failed to open Lite mode:", err);
+      alert(`Couldn't open Lite mode: ${err}`);
+    }
+  }
+
   function handleTimeUpdate() {
     if (!videoElement) return;
     currentTime = videoElement.currentTime;
@@ -1921,6 +1953,31 @@
         onclick={() => (showHevcWarning = false)}
         title="Dismiss"
         aria-label="Dismiss HEVC warning"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  {/if}
+
+  <!-- SPIKE: unsupported-codec → mpv "Lite" playback offer -->
+  {#if showLiteWarning}
+    <div class="hevc-warning-banner">
+      <AlertTriangle size={15} class="hevc-warning-icon" />
+      <span class="hevc-warning-text">
+        This {liteCodecLabel} video needs Lite mode to play.
+        {#if mpvAvailable}
+          <button class="hevc-warning-link" onclick={openInLiteMode}>
+            Open in Lite mode
+          </button>
+        {:else}
+          Lite mode unavailable.
+        {/if}
+      </span>
+      <button
+        class="hevc-warning-dismiss"
+        onclick={() => (showLiteWarning = false)}
+        title="Dismiss"
+        aria-label="Dismiss Lite mode notice"
       >
         <X size={14} />
       </button>
