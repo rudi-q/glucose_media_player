@@ -552,7 +552,7 @@
       resizeTimer = setTimeout(() => {
         getCurrentWindow().isMaximized().then(v => { isMaximized = v; }).catch(() => {});
       }, 150);
-    }).then(fn => { unlistenResized = fn; });
+    }).then(fn => { if (disposed) { fn(); } else { unlistenResized = fn; } });
 
     // Focus-tied always-on-top: in fullscreen we pin the window above the (topmost)
     // taskbar, but release the pin while glucose is unfocused so the user can Alt-Tab
@@ -566,12 +566,14 @@
         const win = getCurrentWindow();
         if (focused) {
           focusTimer = setTimeout(() => {
+            if (viewMode !== "fullscreen") return;
             win.setAlwaysOnTop(true).catch(() => {});
           }, 200);
         } else {
           // Delay dropping always-on-top to check if the window was actually minimized (e.g. via Win+D)
           // If we drop alwaysOnTop while it's minimizing, it crashes the Windows DWM Z-order.
           focusTimer = setTimeout(async () => {
+            if (viewMode !== "fullscreen") return;
             try {
               if (!(await win.isMinimized())) {
                 await win.setAlwaysOnTop(false);
@@ -580,7 +582,7 @@
           }, 150);
         }
       }
-    }).then(fn => { unlistenFocus = fn; });
+    }).then(fn => { if (disposed) { fn(); } else { unlistenFocus = fn; } });
 
     return () => {
       disposed = true;

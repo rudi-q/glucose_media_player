@@ -755,12 +755,14 @@
         const win = getCurrentWindow();
         if (focused) {
           focusTimer = setTimeout(() => {
+            if (viewMode !== 'fullscreen') return;
             win.setAlwaysOnTop(true).catch(() => {});
           }, 200);
         } else {
           // Delay dropping always-on-top to check if the window was actually minimized (e.g. via Win+D)
           // If we drop alwaysOnTop while it's minimizing, it crashes the Windows DWM Z-order.
           focusTimer = setTimeout(async () => {
+            if (viewMode !== 'fullscreen') return;
             try {
               if (!(await win.isMinimized())) {
                 await win.setAlwaysOnTop(false);
