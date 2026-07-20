@@ -1222,8 +1222,10 @@
     }
   }
 
-  // SPIKE (spike/mpv-lite-proof): play the current file in glucose's Lite mode
-  // (a detached mpv process), used for codecs the built-in player can't decode.
+  // SPIKE (spike/mpv-lite-proof): play the current file in glucose's Lite mode.
+  // Temporarily routed to the stable own-window mpv (play_with_mpv) while the
+  // embedded window (open_lite_window) is stabilised — embedding into a
+  // transparent/layered window is crashing mpv's GPU output on some setups.
   async function openInLiteMode() {
     if (!currentVideoPath) return;
     try {

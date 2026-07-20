@@ -1,0 +1,201 @@
+<!doctype html>
+<!--
+  SPIKE (spike/mpv-lite-proof): glucose "Lite mode" window chrome.
+
+  Standalone page (NOT a SvelteKit route) so it doesn't inherit the main app's
+  root layout (splash / settings / onboarding / setup checks). mpv renders into
+  this window behind the transparent WebView via --wid; everything here paints
+  ON TOP. Controls drive mpv through its JSON IPC pipe via Tauri commands.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>glucose Lite</title>
+    <style>
+      :root {
+        --bar: rgba(14, 14, 18, 0.72);
+        --bar-strong: rgba(14, 14, 18, 0.9);
+        --line: rgba(255, 255, 255, 0.1);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.55);
+        --hover: rgba(255, 255, 255, 0.1);
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        width: 100%;
+        height: 100%;
+        /* Transparent so the embedded mpv surface shows through everywhere we
+           don't paint chrome. */
+        background: transparent;
+        overflow: hidden;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: var(--text);
+        user-select: none;
+        cursor: default;
+      }
+
+      /* Full-window transparent layer: click to play/pause. */
+      .stage {
+        position: fixed;
+        inset: 0;
+        background: transparent;
+      }
+
+      .bar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 0.75rem;
+        background: linear-gradient(var(--bar), transparent);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        transition: opacity 0.25s ease;
+      }
+      .titlebar { top: 0; }
+      .controls {
+        bottom: 0;
+        background: linear-gradient(transparent, var(--bar-strong));
+        padding-top: 1.5rem;
+      }
+
+      /* Auto-hide chrome unless the pointer is near it / recently moved. */
+      body.idle .bar { opacity: 0; pointer-events: none; }
+
+      .title {
+        flex: 1;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        color: var(--text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        letter-spacing: 0.01em;
+      }
+      .badge {
+        font-size: 0.625rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0.1rem 0.35rem;
+        margin-right: 0.5rem;
+      }
+
+      button.icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--text);
+        cursor: pointer;
+        transition: background 0.15s ease;
+      }
+      button.icon:hover { background: var(--hover); }
+      button.icon.close:hover { background: #e53935; color: #fff; }
+      .controls .spacer { flex: 1; }
+      svg { width: 18px; height: 18px; display: block; }
+    </style>
+  </head>
+  <body>
+    <div class="stage" id="stage" title="Click to play/pause"></div>
+
+    <div class="bar titlebar" data-tauri-drag-region>
+      <span class="badge">Lite</span>
+      <span class="title" id="title" data-tauri-drag-region>glucose Lite</span>
+      <button class="icon" id="min" title="Minimize" aria-label="Minimize">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+      <button class="icon close" id="close" title="Close" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+      </button>
+    </div>
+
+    <div class="bar controls">
+      <button class="icon" id="back" title="Back 10s" aria-label="Back 10 seconds">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="11 19 2 12 11 5"/><polyline points="22 19 13 12 22 5"/></svg>
+      </button>
+      <button class="icon" id="play" title="Play/Pause" aria-label="Play or pause">
+        <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+        <svg id="pauseIcon" style="display:none" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+      </button>
+      <button class="icon" id="fwd" title="Forward 10s" aria-label="Forward 10 seconds">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="13 19 22 12 13 5"/><polyline points="2 19 11 12 2 5"/></svg>
+      </button>
+      <span class="spacer"></span>
+      <button class="icon" id="full" title="Fullscreen" aria-label="Toggle fullscreen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/></svg>
+      </button>
+    </div>
+
+    <script>
+      const { invoke } = window.__TAURI__.core;
+      const win = window.__TAURI__.window.getCurrentWindow();
+
+      // Filename from the query string set by open_lite_window.
+      const fname = new URLSearchParams(location.search).get("f");
+      if (fname) document.getElementById("title").textContent = fname;
+
+      let paused = false;
+      const playIcon = document.getElementById("playIcon");
+      const pauseIcon = document.getElementById("pauseIcon");
+      function reflectPlayState() {
+        playIcon.style.display = paused ? "block" : "none";
+        pauseIcon.style.display = paused ? "none" : "block";
+      }
+      reflectPlayState();
+
+      function mpv(...args) {
+        return invoke("lite_mpv_command", { args }).catch((e) =>
+          console.error("mpv command failed:", e),
+        );
+      }
+      function togglePlay() {
+        paused = !paused;
+        reflectPlayState();
+        mpv("set_property", "pause", paused);
+      }
+
+      document.getElementById("stage").addEventListener("click", togglePlay);
+      document.getElementById("play").addEventListener("click", (e) => { e.stopPropagation(); togglePlay(); });
+      document.getElementById("back").addEventListener("click", (e) => { e.stopPropagation(); mpv("seek", -10); });
+      document.getElementById("fwd").addEventListener("click", (e) => { e.stopPropagation(); mpv("seek", 10); });
+      document.getElementById("min").addEventListener("click", (e) => { e.stopPropagation(); win.minimize(); });
+      document.getElementById("close").addEventListener("click", (e) => { e.stopPropagation(); invoke("close_lite_window"); });
+
+      let isFs = false;
+      document.getElementById("full").addEventListener("click", async (e) => {
+        e.stopPropagation();
+        isFs = !isFs;
+        try { await win.setFullscreen(isFs); } catch (err) { console.error(err); }
+      });
+
+      // Auto-hide chrome after the pointer is still for a moment.
+      let idleTimer;
+      function wake() {
+        document.body.classList.remove("idle");
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => document.body.classList.add("idle"), 2500);
+      }
+      window.addEventListener("mousemove", wake);
+      wake();
+
+      // Keyboard parity with the main player for the essentials.
+      window.addEventListener("keydown", (e) => {
+        if (e.key === " " || e.key === "k") { e.preventDefault(); togglePlay(); }
+        else if (e.key === "ArrowLeft") mpv("seek", -5);
+        else if (e.key === "ArrowRight") mpv("seek", 5);
+        else if (e.key === "Escape") { if (isFs) { isFs = false; win.setFullscreen(false); } else invoke("close_lite_window"); }
+      });
+    </script>
+  </body>
+</html>

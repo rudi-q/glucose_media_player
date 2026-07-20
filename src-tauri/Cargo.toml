@@ -35,5 +35,5 @@ fs4 = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tauri-plugin-updater = "2.10.0"
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_UI_WindowsAndMessaging"] }
 

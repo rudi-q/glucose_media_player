@@ -2429,7 +2429,10 @@ pub fn run() {
             ffmpeg::pick_ffmpeg_executable,
             ffmpeg::save_ffmpeg_custom_path,
             mpv::check_mpv_installed,
-            mpv::play_with_mpv
+            mpv::play_with_mpv,
+            mpv::open_lite_window,
+            mpv::lite_mpv_command,
+            mpv::close_lite_window
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
