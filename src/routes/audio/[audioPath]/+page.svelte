@@ -735,18 +735,39 @@
     let unlistenResized: (() => void) | undefined;
     let unlistenFocus: (() => void) | undefined;
     let unlistenPipSettle: (() => void) | undefined;
+    let resizeTimer: ReturnType<typeof setTimeout>;
     getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
     getCurrentWindow().onResized(() => {
-      getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        getCurrentWindow().isMaximized().then(v => { isMaximized = v; }).catch(() => {});
+      }, 150);
     }).then(fn => { if (listenersDisposed) { fn(); } else { unlistenResized = fn; } });
 
     // Focus-tied always-on-top: in fullscreen we pin the window above the (topmost)
     // taskbar but release the pin while unfocused so the user can Alt-Tab away. Only
     // fullscreen is affected — PiP stays pinned (its always-on-top is owned by Rust)
     // and the windowed view is never pinned.
+    let focusTimer: ReturnType<typeof setTimeout>;
     getCurrentWindow().onFocusChanged(({ payload: focused }) => {
       if (viewMode === 'fullscreen') {
-        getCurrentWindow().setAlwaysOnTop(focused).catch(() => {});
+        clearTimeout(focusTimer);
+        const win = getCurrentWindow();
+        if (focused) {
+          focusTimer = setTimeout(() => {
+            win.setAlwaysOnTop(true).catch(() => {});
+          }, 200);
+        } else {
+          // Delay dropping always-on-top to check if the window was actually minimized (e.g. via Win+D)
+          // If we drop alwaysOnTop while it's minimizing, it crashes the Windows DWM Z-order.
+          focusTimer = setTimeout(async () => {
+            try {
+              if (!(await win.isMinimized())) {
+                await win.setAlwaysOnTop(false);
+              }
+            } catch (e) {}
+          }, 150);
+        }
       }
     }).then(fn => { if (listenersDisposed) { fn(); } else { unlistenFocus = fn; } });
 
@@ -757,6 +778,8 @@
 
     return () => {
       listenersDisposed = true;
+      if (resizeTimer) clearTimeout(resizeTimer);
+      if (focusTimer) clearTimeout(focusTimer);
       window.removeEventListener('resize', resizeCanvas);
       window.removeEventListener('keydown', handleKey);
       clearInterval(progressSaveInterval);

@@ -191,10 +191,14 @@
     let unlistenDuration: (() => void) | undefined;
     let unlistenResized: (() => void) | undefined;
     let cancelled = false;
+    let resizeTimer: ReturnType<typeof setTimeout>;
 
     getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
     getCurrentWindow().onResized(() => {
-      getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        getCurrentWindow().isMaximized().then(v => { isMaximized = v; }).catch(() => {});
+      }, 150);
     }).then(fn => {
       // If the component unmounted before this resolved, `cancelled` is already true —
       // unlisten immediately so the listener can't leak onto the shared window.
@@ -234,6 +238,7 @@
 
     return () => {
       cancelled = true;
+      if (resizeTimer) clearTimeout(resizeTimer);
       destroyed = true;
       if (hoverTimer !== null) { clearTimeout(hoverTimer); hoverTimer = null; }
       if (previewFadeOutTimer !== null) { clearTimeout(previewFadeOutTimer); previewFadeOutTimer = null; }

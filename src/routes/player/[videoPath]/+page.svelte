@@ -545,9 +545,13 @@
     document.addEventListener("click", handleClickOutside);
 
     let unlistenResized: (() => void) | undefined;
+    let resizeTimer: ReturnType<typeof setTimeout>;
     getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
     getCurrentWindow().onResized(() => {
-      getCurrentWindow().isMaximized().then(v => { isMaximized = v; });
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        getCurrentWindow().isMaximized().then(v => { isMaximized = v; }).catch(() => {});
+      }, 150);
     }).then(fn => { unlistenResized = fn; });
 
     // Focus-tied always-on-top: in fullscreen we pin the window above the (topmost)
@@ -555,15 +559,34 @@
     // to other windows. Only fullscreen is affected — PiP must stay pinned even when
     // blurred (its always-on-top is owned by Rust), and cinematic is never pinned.
     let unlistenFocus: (() => void) | undefined;
+    let focusTimer: ReturnType<typeof setTimeout>;
     getCurrentWindow().onFocusChanged(({ payload: focused }) => {
       if (viewMode === "fullscreen") {
-        getCurrentWindow().setAlwaysOnTop(focused).catch(() => {});
+        clearTimeout(focusTimer);
+        const win = getCurrentWindow();
+        if (focused) {
+          focusTimer = setTimeout(() => {
+            win.setAlwaysOnTop(true).catch(() => {});
+          }, 200);
+        } else {
+          // Delay dropping always-on-top to check if the window was actually minimized (e.g. via Win+D)
+          // If we drop alwaysOnTop while it's minimizing, it crashes the Windows DWM Z-order.
+          focusTimer = setTimeout(async () => {
+            try {
+              if (!(await win.isMinimized())) {
+                await win.setAlwaysOnTop(false);
+              }
+            } catch (e) {}
+          }, 150);
+        }
       }
     }).then(fn => { unlistenFocus = fn; });
 
     return () => {
       disposed = true;
       videoSetupId++;
+      if (resizeTimer) clearTimeout(resizeTimer);
+      if (focusTimer) clearTimeout(focusTimer);
       // Clear progress save interval
       if (progressSaveInterval) {
         clearInterval(progressSaveInterval);
