@@ -35,6 +35,7 @@
   },
   "bundle": {
     "publisher": "DoublOne Studios Limited",
+    "copyright": "© 2026 DoublOne Studios Limited",
     "homepage": "https://glucose.media",
     "category": "Entertainment",
     "shortDescription": "Glucose Media Player offers a minimal, no-UI video playback experience for Windows, prioritizing content over interface clutter and supporting common formats.",
@@ -42,6 +43,11 @@
     "active": true,
     "targets": ["nsis", "dmg"],
     "createUpdaterArtifacts": true,
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
