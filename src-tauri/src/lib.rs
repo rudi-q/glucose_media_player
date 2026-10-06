@@ -1,6 +1,7 @@
 mod ffmpeg;
 mod live_cache;
 mod live_subtitles;
+mod subtitle_format;
 mod pip_window;
 
 use pip_window::{enter_pip_mode, exit_pip_mode, save_pip_window_layout, settle_pip_window};
@@ -1617,8 +1618,7 @@ fn transcribe_audio_with_whisper(
     params.set_print_timestamps(true);
     params.set_translate(false); // Don't translate, keep original language
     params.set_language(Some(language)); // Use selected language
-    params.set_max_len(0); // Disable max length limit per segment
-    params.set_split_on_word(true); // Split on word boundaries
+    subtitle_format::apply_segment_limits(&mut params);
 
     // Emit real-time progress during state.full() via whisper's native progress callback.
     // Whisper reports 0-100; we map that to the 50-90% band in our UI.
@@ -1672,9 +1672,19 @@ fn transcribe_audio_with_whisper(
             .to_string();
 
         if !text.trim().is_empty() {
-            segments.push((start_seconds, end_seconds, text));
+            segments.push(subtitle_format::Cue {
+                start: start_seconds,
+                end: end_seconds,
+                text,
+            });
         }
     }
+
+    let audio_secs = audio_data.len() as f64 / 16_000.0;
+    let segments: Vec<(f64, f64, String)> = subtitle_format::conform(segments, audio_secs)
+        .into_iter()
+        .map(|c| (c.start, c.end, c.text))
+        .collect();
 
     #[cfg(debug_assertions)]
     println!("Generating SRT file with {} segments...", segments.len());
