@@ -28,6 +28,14 @@ export function getAutoLiveSubtitles(raw?: string | null): boolean {
   return raw === "true";
 }
 
+// What the player does when playback reaches a point live subtitles are not ready for.
+export type LiveSubtitleWait = "play" | "pause";
+export const LIVE_SUBTITLE_WAIT_KEY = "glucose_live_subtitle_wait";
+
+export function getLiveSubtitleWait(raw?: string | null): LiveSubtitleWait {
+  return raw === "pause" ? "pause" : "play";
+}
+
 export function getFadeDurationMs(raw?: string | null): number {
   return FADE_MODE_MS[getFadeMode(raw)];
 }

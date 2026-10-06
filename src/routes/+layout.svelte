@@ -91,6 +91,9 @@
     getFadeMode,
     AUTO_LIVE_SUBTITLES_KEY,
     getAutoLiveSubtitles,
+    LIVE_SUBTITLE_WAIT_KEY,
+    getLiveSubtitleWait,
+    type LiveSubtitleWait,
     type DefaultPlayMode,
     type EndBehavior,
     type FadeMode,
@@ -221,6 +224,17 @@
   function toggleAutoLiveSubtitles() {
     autoLiveSubtitles = !autoLiveSubtitles;
     localStorage.setItem(AUTO_LIVE_SUBTITLES_KEY, String(autoLiveSubtitles));
+  }
+
+  let liveSubtitleWait = $state<LiveSubtitleWait>(
+    getLiveSubtitleWait(
+      typeof localStorage !== "undefined" ? localStorage.getItem(LIVE_SUBTITLE_WAIT_KEY) : null,
+    ),
+  );
+
+  function setLiveSubtitleWait(value: string) {
+    liveSubtitleWait = getLiveSubtitleWait(value);
+    localStorage.setItem(LIVE_SUBTITLE_WAIT_KEY, liveSubtitleWait);
   }
 
   // Set while a screen has crashed and its error boundary shows the error screen;
@@ -994,6 +1008,24 @@
                     >
                       <span class="toggle-knob"></span>
                     </button>
+                  </div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">When subtitles aren't ready yet</div>
+                    <div class="settings-item-desc">
+                      Keep the video playing, or pause it until subtitles for that moment are generated.
+                    </div>
+                  </div>
+                  <div class="settings-item-action">
+                    <select
+                      class="language-select"
+                      value={liveSubtitleWait}
+                      onchange={(e) => setLiveSubtitleWait((e.target as HTMLSelectElement).value)}
+                    >
+                      <option value="play">Keep playing</option>
+                      <option value="pause">Pause until ready</option>
+                    </select>
                   </div>
                 </div>
               </div>
