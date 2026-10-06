@@ -250,7 +250,7 @@ impl Job {
         if let Some(ctx) = &self.cached {
             return Ok(ctx.clone());
         }
-        emit_status(&self.app, self.session_id, "loading", "Loading Whisper model...");
+        emit_status(&self.app, self.session_id, "loading", "Loading speech model...");
         let ctx = Arc::new(
             WhisperContext::new_with_params(&self.model_path, WhisperContextParameters::default())
                 .map_err(|e| format!("Failed to load Whisper model: {}", e))?,

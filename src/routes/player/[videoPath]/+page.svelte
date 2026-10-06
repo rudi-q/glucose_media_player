@@ -189,12 +189,17 @@
   // Set when the user presses play during a wait; playback then continues through
   // the current gap without pausing again.
   let liveWaitOverride = false;
+  // What the worker is loading, as reported by the backend (speech or translation model).
+  let liveLoadingMessage = $state("");
   let livePlaceholder = $derived.by(() => {
     if (!liveActive) return null;
     if (liveError) return `Live subtitles: ${liveError}`;
     if (findRange(liveRanges, currentTime) || liveState === "done") return null;
-    if (liveWaiting) return "Waiting for subtitles...";
-    return liveState === "loading" ? "Loading speech model..." : "Generating subtitles...";
+    const lang = liveKey?.translateTo;
+    const what = lang ? `${LIVE_TRANSLATE_NAMES[lang as "de" | "fr"]} subtitles` : "subtitles";
+    if (liveWaiting) return `Waiting for ${what}...`;
+    if (liveState === "loading") return liveLoadingMessage || "Loading speech model...";
+    return `Generating ${what}...`;
   });
   let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
 
@@ -590,6 +595,7 @@
           const status = event.payload;
           if (!liveActive || status.session_id < liveMinSession) return;
           liveState = status.state;
+          if (status.state === "loading") liveLoadingMessage = status.message;
           if (status.state === "error") liveError = status.message;
           checkLiveWait();
         }),
@@ -1939,6 +1945,7 @@
     showSubtitleMenu = false;
     liveActive = true;
     liveState = "loading";
+    liveLoadingMessage = "";
     liveError = null;
     subtitlesEnabled = true;
     loadLiveSession(
