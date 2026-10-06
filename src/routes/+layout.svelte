@@ -93,6 +93,8 @@
     getAutoLiveSubtitles,
     LIVE_SUBTITLE_WAIT_KEY,
     getLiveSubtitleWait,
+    LIVE_TRANSLATE_KEY,
+    getLiveTranslate,
     type LiveSubtitleWait,
     type DefaultPlayMode,
     type EndBehavior,
@@ -235,6 +237,19 @@
   function setLiveSubtitleWait(value: string) {
     liveSubtitleWait = getLiveSubtitleWait(value);
     localStorage.setItem(LIVE_SUBTITLE_WAIT_KEY, liveSubtitleWait);
+  }
+
+  let liveTranslate = $state<string>(
+    getLiveTranslate(
+      typeof localStorage !== "undefined" ? localStorage.getItem(LIVE_TRANSLATE_KEY) : null,
+    ) ?? "off",
+  );
+
+  function setLiveTranslate(value: string) {
+    const lang = getLiveTranslate(value);
+    liveTranslate = lang ?? "off";
+    if (lang) localStorage.setItem(LIVE_TRANSLATE_KEY, lang);
+    else localStorage.removeItem(LIVE_TRANSLATE_KEY);
   }
 
   // Set while a screen has crashed and its error boundary shows the error screen;
@@ -1025,6 +1040,25 @@
                     >
                       <option value="play">Keep playing</option>
                       <option value="pause">Pause until ready</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">Translate live subtitles</div>
+                    <div class="settings-item-desc">
+                      Translate English speech on your device. Applies the next time live subtitles start.
+                    </div>
+                  </div>
+                  <div class="settings-item-action">
+                    <select
+                      class="language-select"
+                      value={liveTranslate}
+                      onchange={(e) => setLiveTranslate((e.target as HTMLSelectElement).value)}
+                    >
+                      <option value="off">Off (original language)</option>
+                      <option value="de">German</option>
+                      <option value="fr">French</option>
                     </select>
                   </div>
                 </div>

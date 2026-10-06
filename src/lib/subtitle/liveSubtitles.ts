@@ -22,11 +22,13 @@ export interface LiveSessionInfo {
 // A processed span of the timeline, [start, end) in seconds.
 export type CoveredRange = [number, number];
 
-// Identifies a live cache file: one per video, audio track and language.
+// Identifies a live cache file: one per video, audio track, language and translation.
 export interface LiveCacheKey {
   videoPath: string;
   audioStreamIndex: number | null;
   language: string;
+  // Target language code ("de", "fr") when English speech is translated, else null.
+  translateTo: string | null;
 }
 
 // Returned by load_live_cache in src-tauri/src/live_cache.rs.

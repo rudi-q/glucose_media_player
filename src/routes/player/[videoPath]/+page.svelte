@@ -74,7 +74,10 @@
     getAutoLiveSubtitles,
     getEndBehavior,
     getLiveSubtitleWait,
+    getLiveTranslate,
     LIVE_SUBTITLE_WAIT_KEY,
+    LIVE_TRANSLATE_KEY,
+    LIVE_TRANSLATE_NAMES,
     getFadeDurationMs,
   } from "$lib/utils/playerPreferences";
   import { generateThumbnail } from "$lib/utils/thumbnail";
@@ -177,7 +180,8 @@
   let liveWorkerPos = 0;
   let livePlayheadSentAt = 0;
   // The video, track and language the current live cues belong to; used as the cache key.
-  let liveKey: LiveCacheKey | null = null;
+  // Raw (not proxied) so the identity checks against a captured key keep working.
+  let liveKey = $state.raw<LiveCacheKey | null>(null);
   let liveDirty = false;
   let liveSaveTimer: ReturnType<typeof setTimeout> | null = null;
   // "Pause until ready": true while the player has paused itself to wait for subtitles.
@@ -1942,6 +1946,7 @@
         videoPath: currentVideoPath,
         audioStreamIndex: selectedAudioTrackIndex,
         language: $appSettings.subtitleLanguage,
+        translateTo: getLiveTranslate(localStorage.getItem(LIVE_TRANSLATE_KEY)),
       },
       videoElement?.currentTime ?? 0,
     );
@@ -2475,7 +2480,11 @@
                       disableLiveSubtitles();
                     }}
                   >
-                    <span class="model-name">Live subtitles{liveModel ? ` · ${liveModel}` : ""}</span>
+                    <span class="model-name"
+                      >Live subtitles{liveModel ? ` · ${liveModel}` : ""}{liveKey?.translateTo
+                        ? ` · ${LIVE_TRANSLATE_NAMES[liveKey.translateTo as "de" | "fr"]}`
+                        : ""}</span
+                    >
                     <span class="model-desc">Turn off live subtitles</span>
                   </button>
                 {/if}

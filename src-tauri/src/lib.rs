@@ -2,6 +2,7 @@ mod ffmpeg;
 mod live_cache;
 mod live_subtitles;
 mod subtitle_format;
+mod translate;
 mod pip_window;
 
 use pip_window::{enter_pip_mode, exit_pip_mode, save_pip_window_layout, settle_pip_window};

@@ -36,6 +36,15 @@ export function getLiveSubtitleWait(raw?: string | null): LiveSubtitleWait {
   return raw === "pause" ? "pause" : "play";
 }
 
+// Language live subtitles translate English speech into; null shows the original.
+export type LiveTranslate = "de" | "fr";
+export const LIVE_TRANSLATE_KEY = "glucose_live_translate";
+export const LIVE_TRANSLATE_NAMES: Record<LiveTranslate, string> = { de: "German", fr: "French" };
+
+export function getLiveTranslate(raw?: string | null): LiveTranslate | null {
+  return raw === "de" || raw === "fr" ? raw : null;
+}
+
 export function getFadeDurationMs(raw?: string | null): number {
   return FADE_MODE_MS[getFadeMode(raw)];
 }

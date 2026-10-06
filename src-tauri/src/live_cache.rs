@@ -29,6 +29,10 @@ struct CacheKey {
     modified: u64,
     audio_stream_index: Option<i64>,
     language: String,
+    // Target language of translated cues. Left out of the file (and the hash) when not
+    // translating, so caches written before translation existed still match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    translate_to: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -56,6 +60,7 @@ fn make_key(
     video_path: &str,
     audio_stream_index: Option<i64>,
     language: &str,
+    translate_to: Option<String>,
 ) -> Result<CacheKey, String> {
     let meta = fs::metadata(video_path).map_err(|e| format!("Failed to read video file: {}", e))?;
     let modified = meta
@@ -70,6 +75,7 @@ fn make_key(
         modified,
         audio_stream_index,
         language: language.to_string(),
+        translate_to,
     })
 }
 
@@ -94,8 +100,9 @@ pub fn load_live_cache(
     video_path: String,
     audio_stream_index: Option<i64>,
     language: String,
+    translate_to: Option<String>,
 ) -> Result<Option<LiveCacheData>, String> {
-    let key = make_key(&video_path, audio_stream_index, &language)?;
+    let key = make_key(&video_path, audio_stream_index, &language, translate_to)?;
     let Ok(raw) = fs::read(cache_path(&key)?) else {
         return Ok(None);
     };
@@ -128,6 +135,7 @@ pub fn save_live_cache(
     video_path: String,
     audio_stream_index: Option<i64>,
     language: String,
+    translate_to: Option<String>,
     model: String,
     ranges: Vec<[f64; 2]>,
     cues: Vec<CachedCue>,
@@ -135,7 +143,7 @@ pub fn save_live_cache(
     if ranges.is_empty() {
         return Ok(());
     }
-    let key = make_key(&video_path, audio_stream_index, &language)?;
+    let key = make_key(&video_path, audio_stream_index, &language, translate_to)?;
     let path = cache_path(&key)?;
     let dir = cache_dir()?;
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create cache folder: {}", e))?;

@@ -3,6 +3,7 @@
 // after a full batch run. See docs/spikes/live-subtitles.md.
 
 use crate::subtitle_format;
+use crate::translate::{self, CueTranslator};
 use serde::Serialize;
 use std::ffi::c_void;
 use std::io::Read;
@@ -60,6 +61,8 @@ struct LiveState {
     session: Option<Session>,
     // Kept across sessions so seeking does not reload the model; dropped on unload.
     model: Option<(String, Arc<WhisperContext>)>,
+    // Same for the translation model, when live subtitles are translated.
+    translator: Option<Arc<CueTranslator>>,
 }
 
 fn state() -> &'static Mutex<LiveState> {
@@ -125,7 +128,12 @@ pub fn start_live_subtitles(
     start_secs: f64,
     audio_stream_index: Option<i64>,
     language: String,
+    // Target language code ("de", "fr") to translate English speech into, if any.
+    translate_to: Option<String>,
 ) -> Result<LiveSessionInfo, String> {
+    if let Some(lang) = &translate_to {
+        translate::check_installed(lang)?;
+    }
     let (model_file, model_label) = LIVE_MODELS
         .iter()
         .find(|(file, _)| super::find_model_path(file).is_some())
@@ -153,6 +161,11 @@ pub fn start_live_subtitles(
         .as_ref()
         .filter(|(path, _)| *path == model_path)
         .map(|(_, ctx)| ctx.clone());
+    let cached_translator = st
+        .translator
+        .as_ref()
+        .filter(|t| Some(&t.lang) == translate_to.as_ref())
+        .cloned();
     drop(st);
 
     PLAYHEAD.store(start_secs.max(0.0).to_bits(), Ordering::Relaxed);
@@ -164,8 +177,10 @@ pub fn start_live_subtitles(
         start_secs: start_secs.max(0.0),
         audio_stream_index,
         language,
+        translate_to,
         model_path,
         cached,
+        cached_translator,
         cancel,
         ffmpeg,
     };
@@ -192,6 +207,7 @@ pub fn stop_live_subtitles(unload: bool) {
     }
     if unload {
         st.model = None;
+        st.translator = None;
     }
 }
 
@@ -207,8 +223,10 @@ struct Job {
     start_secs: f64,
     audio_stream_index: Option<i64>,
     language: String,
+    translate_to: Option<String>,
     model_path: String,
     cached: Option<Arc<WhisperContext>>,
+    cached_translator: Option<Arc<CueTranslator>>,
     cancel: Arc<AtomicBool>,
     ffmpeg: Arc<Mutex<Option<Child>>>,
 }
@@ -246,6 +264,27 @@ impl Job {
         Ok(ctx)
     }
 
+    fn load_translator(&self, threads: usize) -> Result<Option<Arc<CueTranslator>>, String> {
+        let Some(lang) = &self.translate_to else {
+            return Ok(None);
+        };
+        if let Some(t) = &self.cached_translator {
+            return Ok(Some(t.clone()));
+        }
+        emit_status(
+            &self.app,
+            self.session_id,
+            "loading",
+            format!("Loading {} translation model...", translate::language_name(lang)),
+        );
+        let translator = Arc::new(CueTranslator::load(lang, threads)?);
+        let mut st = state().lock().unwrap();
+        if st.session.as_ref().map(|s| s.id) == Some(self.session_id) {
+            st.translator = Some(translator.clone());
+        }
+        Ok(Some(translator))
+    }
+
     fn spawn_ffmpeg(&self) -> Result<std::process::ChildStdout, String> {
         let mut cmd = super::get_ffmpeg_command();
         cmd.args(["-v", "error", "-ss", &format!("{:.3}", self.start_secs)]);
@@ -264,16 +303,19 @@ impl Job {
     }
 
     fn run(self) -> Result<(), String> {
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get().min(MAX_THREADS))
+            .unwrap_or(4) as i32;
         let ctx = self.load_model()?;
+        // Translation runs on this thread right after Whisper, so it can use the same
+        // thread budget without competing with it.
+        let translator = self.load_translator(threads as usize)?;
         if self.cancelled() {
             return Ok(());
         }
         let mut stdout = self.spawn_ffmpeg()?;
         emit_status(&self.app, self.session_id, "running", "");
 
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get().min(MAX_THREADS))
-            .unwrap_or(4) as i32;
         let window = WINDOW_SECS * SAMPLE_RATE;
         let mut buffer: Vec<f32> = Vec::with_capacity(window);
         // Absolute time of buffer[0].
@@ -320,7 +362,7 @@ impl Job {
             }
 
             let (cues, resume) =
-                self.transcribe(&ctx, &buffer[..cut], buffer_start, threads, is_last)?;
+                self.transcribe(&ctx, translator.as_deref(), &buffer[..cut], buffer_start, threads, is_last)?;
             if self.cancelled() {
                 return Ok(());
             }
@@ -377,6 +419,7 @@ impl Job {
     fn transcribe(
         &self,
         ctx: &WhisperContext,
+        translator: Option<&CueTranslator>,
         samples: &[f32],
         offset: f64,
         threads: i32,
@@ -423,6 +466,17 @@ impl Job {
         };
         if let Some(time) = resume {
             cues.retain(|c| c.start < time);
+        }
+        // The translation models only translate English; other speech is shown as is.
+        let english = self.language == "en"
+            || whisper_rs::get_lang_str(state.full_lang_id_from_state()) == Some("en");
+        if let (Some(translator), true) = (translator, english) {
+            let limit = resume.map(|t| t - subtitle_format::MIN_GAP).unwrap_or(limit);
+            match translator.translate_cues(&cues, limit) {
+                Ok(translated) => cues = translated,
+                // Showing the original text beats showing nothing for this chunk.
+                Err(e) => eprintln!("[live subtitles] {}", e),
+            }
         }
         let cues = cues
             .into_iter()
