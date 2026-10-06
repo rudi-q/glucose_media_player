@@ -1,0 +1,148 @@
+[package]
+name = "ct2rs"
+version.workspace = true
+authors.workspace = true
+categories = ["api-bindings"]
+documentation = "https://docs.rs/ct2rs"
+edition.workspace = true
+include = [
+    "/include",
+    "/src",
+    "/build.rs",
+    "/LICENSE",
+    "/examples",
+    "/CTranslate2/CMakeLists.txt",
+    "/CTranslate2/LICENSE",
+    "/CTranslate2/cmake",
+    "/CTranslate2/cpp",
+    "/CTranslate2/include",
+    "/CTranslate2/python",
+    "/CTranslate2/src",
+    "/CTranslate2/third_party",
+    "!/CTranslate2/**/.*",
+    "!/CTranslate2/**/test",
+    "!/CTranslate2/**/docs",
+    "!/CTranslate2/**/media",
+    "!/CTranslate2/third_party/thrust/libcudacxx/*.md",
+]
+keywords = ["ctranslate2", "bindings", "llm", "whisper"]
+license.workspace = true
+readme = "../README.md"
+repository.workspace = true
+description = "Rust bindings for OpenNMT/CTranslate2"
+
+[dependencies]
+anyhow = "1.0"
+cxx = { version = "1.0", features = ["c++17"] }
+intel-onemkl-prebuild = { version = "0.2", optional = true }
+onednn-src = { version = "0.1", optional = true }
+sentencepiece = { version = "0.13", optional = true }
+tokenizers = { version = "0.22", optional = true }
+
+# Dependencies for Whisper model
+mel_spec = { version = "0.3", optional = true }
+ndarray = { version = "0.16", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+
+# Dependencies for Hugging Face integration
+hf-hub = { version = "0.4", optional = true }
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+openblas-src = { version = "0.10", features = ["static"], optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+openblas-src = { version = "0.10", features = ["static", "system"], optional = true }
+
+[dev-dependencies]
+clap = { version = "4.5", features = ["derive"] }
+rand = "0.9"
+ureq = "2.10"
+
+# Dependencies for Whisper example
+hound = { version = "3.5.1" }
+
+[build-dependencies]
+cmake = "0.1"
+cxx-build = "1.0"
+walkdir = "2.5"
+
+[features]
+default = ["all-tokenizers", "ruy", "cuda-small-binary"]
+whisper = [
+    "dep:mel_spec",
+    "dep:ndarray",
+    "dep:serde",
+    "dep:serde_json",
+    "all-tokenizers",
+]
+hub = ["dep:hf-hub"]
+system = ["intel-onemkl-prebuild?/system", "openblas-src?/system"]
+
+# Features to select backends.
+cuda = []
+cudnn = ["cuda"]
+mkl = ["dep:intel-onemkl-prebuild"]
+system-mkl = ["mkl", "intel-onemkl-prebuild/system"]
+openblas = ["dep:openblas-src"]
+dnnl = ["dep:onednn-src"]
+ruy = []
+accelerate = []
+openmp-runtime-comp = []
+openmp-runtime-intel = []
+disable-cpu-dispatch = []
+
+# Features to enable GPU functionality.
+flash-attention = []
+tensor-parallel = []
+cuda-dynamic-loading = ["cuda"]
+cuda-small-binary = []
+
+# Futures to select tokenizers.
+all-tokenizers = ["sentencepiece", "tokenizers"]
+sentencepiece = ["dep:sentencepiece"]
+tokenizers = ["dep:tokenizers"]
+
+[[example]]
+name = "bart"
+
+[[example]]
+name = "bloom"
+
+[[example]]
+name = "falcon"
+
+[[example]]
+name = "marian-mt"
+
+[[example]]
+name = "mpt"
+
+[[example]]
+name = "nllb"
+
+[[example]]
+name = "gpt-2"
+
+[[example]]
+name = "gpt-j"
+
+[[example]]
+name = "gpt-neox"
+
+[[example]]
+name = "opt"
+required-features = ["tokenizers"]
+
+[[example]]
+name = "t5"
+
+[[example]]
+name = "stream"
+
+[[example]]
+name = "whisper"
+required-features = ["whisper"]
+
+[package.metadata.docs.rs]
+features = ["whisper", "hub"]
