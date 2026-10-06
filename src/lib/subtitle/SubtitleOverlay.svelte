@@ -1,16 +1,21 @@
 <script lang="ts">
   import { activeSubtitleStyle } from '$lib/subtitle/subtitleStyleStore';
-  import { parseVtt } from '$lib/subtitle/vttParser';
+  import { parseVtt, type VttCue } from '$lib/subtitle/vttParser';
 
-  let { vttContent, currentTime, enabled, videoElement }: {
+  let { vttContent, currentTime, enabled, videoElement, liveCues = null, placeholder = null }: {
     vttContent: string | null;
     currentTime: number;
     enabled: boolean;
     videoElement: HTMLVideoElement | undefined;
+    // Live subtitles replace the loaded track while active.
+    liveCues?: VttCue[] | null;
+    // Shown when no cue is active, e.g. while live subtitles are still being generated.
+    placeholder?: string | null;
   } = $props();
 
-  let cues = $derived(vttContent ? parseVtt(vttContent) : []);
+  let cues = $derived(liveCues ?? (vttContent ? parseVtt(vttContent) : []));
   let activeCues = $derived(cues.filter(c => currentTime >= c.start && currentTime < c.end));
+  let showPlaceholder = $derived(activeCues.length === 0 && !!placeholder);
   let style = $derived($activeSubtitleStyle);
 
   // Track the exact displayed video content rect within .video-container.
@@ -141,7 +146,7 @@
   }
 </script>
 
-{#if enabled && activeCues.length > 0}
+{#if enabled && (activeCues.length > 0 || showPlaceholder)}
   <div
     class="subtitle-overlay"
     style={overlayPositionStyle}
@@ -163,6 +168,11 @@
           </span>
         </div>
       {/each}
+      {#if showPlaceholder}
+        <div class="cue-wrapper placeholder">
+          <span class="cue-text">{placeholder}</span>
+        </div>
+      {/if}
     </div>
   </div>
 {/if}
@@ -198,4 +208,12 @@
   .cue-wrapper.stripe { padding: 0.3em 1em; max-width: 100%; width: 100%; border-radius: 0; justify-content: center; }
   .cue-wrapper.frosted { border-radius: 8px; padding: 0.25em 0.7em; border: 1px solid rgba(255,255,255,0.15); }
   .cue-text { display: block; text-align: center; }
+  .cue-wrapper.placeholder {
+    border-radius: 6px;
+    padding: 0.2em 0.6em;
+    background-color: rgba(0, 0, 0, 0.5);
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 0.95rem;
+    font-style: italic;
+  }
 </style>
