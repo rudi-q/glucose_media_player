@@ -21,6 +21,13 @@ export function getFadeMode(raw?: string | null): FadeMode {
   return raw === "off" || raw === "short" || raw === "long" ? raw : "default";
 }
 
+// Whether the player starts live subtitles on its own when a video has none.
+export const AUTO_LIVE_SUBTITLES_KEY = "glucose_auto_live_subtitles";
+
+export function getAutoLiveSubtitles(raw?: string | null): boolean {
+  return raw === "true";
+}
+
 export function getFadeDurationMs(raw?: string | null): number {
   return FADE_MODE_MS[getFadeMode(raw)];
 }

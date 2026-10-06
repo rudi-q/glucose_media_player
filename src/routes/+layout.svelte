@@ -88,6 +88,8 @@
     getDefaultPlayMode,
     getEndBehavior,
     getFadeMode,
+    AUTO_LIVE_SUBTITLES_KEY,
+    getAutoLiveSubtitles,
     type DefaultPlayMode,
     type EndBehavior,
     type FadeMode,
@@ -208,6 +210,17 @@
   $effect(() => {
     if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_fade", fadeMode);
   });
+
+  let autoLiveSubtitles = $state(
+    getAutoLiveSubtitles(
+      typeof localStorage !== "undefined" ? localStorage.getItem(AUTO_LIVE_SUBTITLES_KEY) : null,
+    ),
+  );
+
+  function toggleAutoLiveSubtitles() {
+    autoLiveSubtitles = !autoLiveSubtitles;
+    localStorage.setItem(AUTO_LIVE_SUBTITLES_KEY, String(autoLiveSubtitles));
+  }
 
   const _isFirstRun = _savedDefaultMode === null && _savedEndBehavior === null && _savedFadeMode === null;
   let showOnboarding = $state(_isFirstRun);
@@ -910,6 +923,32 @@
                       <option value="pl">Polish</option>
                       <option value="tr">Turkish</option>
                     </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Live Subtitles</h3>
+              <div class="settings-group">
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">Auto-start when no subtitles are found</div>
+                    <div class="settings-item-desc">
+                      If a video has no subtitle file or embedded track, generate subtitles live as it plays.
+                    </div>
+                  </div>
+                  <div class="settings-item-action">
+                    <button
+                      class="toggle-switch"
+                      class:on={autoLiveSubtitles}
+                      role="switch"
+                      aria-checked={autoLiveSubtitles}
+                      aria-label="Auto-start live subtitles when no subtitles are found"
+                      onclick={toggleAutoLiveSubtitles}
+                    >
+                      <span class="toggle-knob"></span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -1802,6 +1841,49 @@
   .language-select:hover {
     background-color: rgba(255, 255, 255, 0.1);
     border-color: rgba(255, 255, 255, 0.3);
+  }
+
+  .toggle-switch {
+    position: relative;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+    padding: 0;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+
+  .toggle-switch:hover {
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+
+  .toggle-switch:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.6);
+    outline-offset: 2px;
+  }
+
+  .toggle-switch.on {
+    background: #fff;
+    border-color: #fff;
+  }
+
+  .toggle-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.7);
+    transition: transform 0.2s ease, background 0.2s ease;
+  }
+
+  .toggle-switch.on .toggle-knob {
+    transform: translateX(18px);
+    background: #000;
   }
 
   .language-select option {
