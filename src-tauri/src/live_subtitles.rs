@@ -2,7 +2,7 @@
 // resulting cues to the frontend, so subtitles appear while the video plays instead of
 // after a full batch run. See docs/spikes/live-subtitles.md.
 
-use crate::subtitle_format::{self, Cue};
+use crate::subtitle_format;
 use serde::Serialize;
 use std::ffi::c_void;
 use std::io::Read;
@@ -312,17 +312,26 @@ impl Job {
             } else {
                 quietest_cut(&buffer[..window.min(buffer.len())])
             };
-            let chunk_end = buffer_start + cut as f64 / SAMPLE_RATE as f64;
+            let is_last = eof && cut == buffer.len();
 
             self.wait_for_playhead(buffer_start);
             if self.cancelled() {
                 return Ok(());
             }
 
-            let cues = self.transcribe(&ctx, &buffer[..cut], buffer_start, threads)?;
+            let (cues, resume) =
+                self.transcribe(&ctx, &buffer[..cut], buffer_start, threads, is_last)?;
             if self.cancelled() {
                 return Ok(());
             }
+            // A cue cut off by the chunk end is transcribed again, whole, in the next chunk.
+            let cut = match resume {
+                // Rounded up so the next chunk never starts before `time`.
+                Some(time) => ((time - buffer_start) * SAMPLE_RATE as f64).ceil() as usize,
+                None => cut,
+            }
+            .min(cut);
+            let chunk_end = buffer_start + cut as f64 / SAMPLE_RATE as f64;
             let _ = self.app.emit(
                 "live-subtitle-chunk",
                 LiveChunk {
@@ -371,7 +380,8 @@ impl Job {
         samples: &[f32],
         offset: f64,
         threads: i32,
-    ) -> Result<Vec<LiveCue>, String> {
+        is_last: bool,
+    ) -> Result<(Vec<LiveCue>, Option<f64>), String> {
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_print_special(false);
         params.set_print_progress(false);
@@ -382,7 +392,7 @@ impl Job {
         params.set_n_threads(threads);
         // Each chunk stands alone: carrying context over can trigger repetition loops.
         params.set_no_context(true);
-        subtitle_format::apply_segment_limits(&mut params);
+        subtitle_format::request_word_timestamps(&mut params);
         params.set_suppress_blank(true);
         // SAFETY: the flag is owned by `self`, which outlives `state.full` below.
         unsafe {
@@ -395,44 +405,34 @@ impl Job {
             .map_err(|e| format!("Failed to create Whisper state: {}", e))?;
         if let Err(e) = state.full(params, samples) {
             if self.cancelled() {
-                return Ok(Vec::new());
+                return Ok((Vec::new(), None));
             }
             return Err(format!("Transcription failed: {}", e));
         }
 
         let chunk_secs = samples.len() as f64 / SAMPLE_RATE as f64;
-        let mut cues = Vec::new();
-        for i in 0..state.full_n_segments() {
-            let Some(segment) = state.get_segment(i) else {
-                continue;
-            };
-            let text = segment
-                .to_str_lossy()
-                .map(|t| t.trim().to_string())
-                .unwrap_or_default();
-            if text.is_empty() {
-                continue;
-            }
-            let start = (segment.start_timestamp() as f64 / 100.0).min(chunk_secs);
-            let end = (segment.end_timestamp() as f64 / 100.0).min(chunk_secs);
-            if end <= start {
-                continue;
-            }
-            cues.push(Cue {
-                start: offset + start,
-                end: offset + end,
-                text,
-            });
+        let words = subtitle_format::words_from_state(&state, offset, chunk_secs);
+        // Cues may not run past this chunk, and leave the usual gap before it ends: the
+        // next chunk's speech is not known yet.
+        let limit = offset + chunk_secs - subtitle_format::MIN_GAP;
+        let mut cues = subtitle_format::build_cues(&words, limit);
+        let resume = if is_last {
+            None
+        } else {
+            subtitle_format::resume_point(&words, &cues, offset, offset + chunk_secs)
+        };
+        if let Some(time) = resume {
+            cues.retain(|c| c.start < time);
         }
-        // Cues may not run past this chunk: the next chunk's speech is not known yet.
-        Ok(subtitle_format::conform(cues, offset + chunk_secs)
+        let cues = cues
             .into_iter()
             .map(|c| LiveCue {
                 start: c.start,
                 end: c.end,
                 text: c.text,
             })
-            .collect())
+            .collect();
+        Ok((cues, resume))
     }
 }
 

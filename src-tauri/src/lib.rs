@@ -1618,7 +1618,7 @@ fn transcribe_audio_with_whisper(
     params.set_print_timestamps(true);
     params.set_translate(false); // Don't translate, keep original language
     params.set_language(Some(language)); // Use selected language
-    subtitle_format::apply_segment_limits(&mut params);
+    subtitle_format::request_word_timestamps(&mut params);
 
     // Emit real-time progress during state.full() via whisper's native progress callback.
     // Whisper reports 0-100; we map that to the 50-90% band in our UI.
@@ -1650,38 +1650,14 @@ fn transcribe_audio_with_whisper(
     #[cfg(debug_assertions)]
     println!("Transcription complete, extracting segments...");
 
-    // Extract segments — progress was already reported live via the callback above.
-    let num_segments = state.full_n_segments();
+    // Whisper returned one segment per word; group them into subtitle cues.
+    let audio_secs = audio_data.len() as f64 / 16_000.0;
+    let words = subtitle_format::words_from_state(&state, 0.0, audio_secs);
 
     #[cfg(debug_assertions)]
-    println!("Found {} segments", num_segments);
+    println!("Found {} words", words.len());
 
-    let mut segments = Vec::new();
-
-    for i in 0..num_segments {
-        let segment = state
-            .get_segment(i)
-            .ok_or_else(|| format!("Failed to get segment {}", i))?;
-
-        let start_seconds = segment.start_timestamp() as f64 / 100.0;
-        let end_seconds = segment.end_timestamp() as f64 / 100.0;
-
-        let text = segment
-            .to_str()
-            .map_err(|e| format!("Failed to parse segment text: {}", e))?
-            .to_string();
-
-        if !text.trim().is_empty() {
-            segments.push(subtitle_format::Cue {
-                start: start_seconds,
-                end: end_seconds,
-                text,
-            });
-        }
-    }
-
-    let audio_secs = audio_data.len() as f64 / 16_000.0;
-    let segments: Vec<(f64, f64, String)> = subtitle_format::conform(segments, audio_secs)
+    let segments: Vec<(f64, f64, String)> = subtitle_format::build_cues(&words, audio_secs)
         .into_iter()
         .map(|c| (c.start, c.end, c.text))
         .collect();
