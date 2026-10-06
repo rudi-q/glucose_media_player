@@ -7,8 +7,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
-// Bumped when cached cues would differ from fresh ones (2: Netflix-style cue formatting).
-const FORMAT_VERSION: u32 = 2;
+// Bumped when cached cues would differ from fresh ones (2: Netflix-style cue formatting,
+// 3: cues built from word timestamps).
+const FORMAT_VERSION: u32 = 3;
 // Total size the cache folder is trimmed back to after each write.
 const MAX_CACHE_BYTES: u64 = 50 * 1024 * 1024;
 
