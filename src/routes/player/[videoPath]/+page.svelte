@@ -2259,6 +2259,18 @@
           ></canvas>
           <div class="preview-time">{formatTime(previewTime)}</div>
         </div>
+        {#if liveActive && duration > 0}
+          <!-- Parts of the timeline live subtitles are ready for. -->
+          {#each liveRanges as [start, end] (start)}
+            <div
+              class="live-covered"
+              style="left: {Math.max(0, (start / duration) * 100)}%; width: {Math.max(
+                0,
+                (Math.min(end, duration) - Math.max(0, start)) / duration,
+              ) * 100}%"
+            ></div>
+          {/each}
+        {/if}
         <div
           class="progress-filled"
           style="width: {duration
@@ -3036,6 +3048,17 @@
     transition: width 0.1s linear;
     border-radius: 2px;
     position: relative;
+    z-index: 1;
+  }
+
+  .live-covered {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 2px;
+    pointer-events: none;
+    transition: width 0.3s ease;
   }
 
   .progress-handle {
