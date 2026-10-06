@@ -2,6 +2,7 @@
 // resulting cues to the frontend, so subtitles appear while the video plays instead of
 // after a full batch run. See docs/spikes/live-subtitles.md.
 
+use crate::subtitle_format::{self, Cue};
 use serde::Serialize;
 use std::ffi::c_void;
 use std::io::Read;
@@ -381,6 +382,7 @@ impl Job {
         params.set_n_threads(threads);
         // Each chunk stands alone: carrying context over can trigger repetition loops.
         params.set_no_context(true);
+        subtitle_format::apply_segment_limits(&mut params);
         params.set_suppress_blank(true);
         // SAFETY: the flag is owned by `self`, which outlives `state.full` below.
         unsafe {
@@ -416,13 +418,21 @@ impl Job {
             if end <= start {
                 continue;
             }
-            cues.push(LiveCue {
+            cues.push(Cue {
                 start: offset + start,
                 end: offset + end,
                 text,
             });
         }
-        Ok(cues)
+        // Cues may not run past this chunk: the next chunk's speech is not known yet.
+        Ok(subtitle_format::conform(cues, offset + chunk_secs)
+            .into_iter()
+            .map(|c| LiveCue {
+                start: c.start,
+                end: c.end,
+                text: c.text,
+            })
+            .collect())
     }
 }
 
