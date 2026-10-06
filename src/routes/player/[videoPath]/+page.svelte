@@ -73,6 +73,8 @@
     AUTO_LIVE_SUBTITLES_KEY,
     getAutoLiveSubtitles,
     getEndBehavior,
+    getLiveSubtitleWait,
+    LIVE_SUBTITLE_WAIT_KEY,
     getFadeDurationMs,
   } from "$lib/utils/playerPreferences";
   import { generateThumbnail } from "$lib/utils/thumbnail";
@@ -178,10 +180,16 @@
   let liveKey: LiveCacheKey | null = null;
   let liveDirty = false;
   let liveSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  // "Pause until ready": true while the player has paused itself to wait for subtitles.
+  let liveWaiting = $state(false);
+  // Set when the user presses play during a wait; playback then continues through
+  // the current gap without pausing again.
+  let liveWaitOverride = false;
   let livePlaceholder = $derived.by(() => {
     if (!liveActive) return null;
     if (liveError) return `Live subtitles: ${liveError}`;
     if (findRange(liveRanges, currentTime) || liveState === "done") return null;
+    if (liveWaiting) return "Waiting for subtitles...";
     return liveState === "loading" ? "Loading speech model..." : "Generating subtitles...";
   });
   let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
@@ -385,7 +393,7 @@
     embeddedSubtitleTracks = [];
     selectedEmbeddedLanguage = "en";
     subtitlesEnabled = true;
-    disableLiveSubtitles();
+    disableLiveSubtitles(false);
 
     await cleanupAudioRemuxFiles();
     if (isVideoSetupStale(setupId)) return;
@@ -579,6 +587,7 @@
           if (!liveActive || status.session_id < liveMinSession) return;
           liveState = status.state;
           if (status.state === "error") liveError = status.message;
+          checkLiveWait();
         }),
         createPipWindowSettler(() => viewMode === "pip"),
       ]);
@@ -669,7 +678,7 @@
           console.error("Failed to revoke subtitle blob URL:", err);
         }
       }
-      disableLiveSubtitles();
+      disableLiveSubtitles(false);
       // Clean up audio remux temp files
       if (audioRemuxPath) {
         invoke("delete_temp_file", { path: audioRemuxPath }).catch(() => {});
@@ -988,6 +997,11 @@
 
   async function togglePlay() {
     if (!videoElement) return;
+    if (liveWaiting) {
+      // Playing by hand during a wait means "don't wait for this gap".
+      liveWaiting = false;
+      liveWaitOverride = true;
+    }
     if (!isPlaying) {
       setupAudioContext();
       if (audioCtx?.state === "suspended") await audioCtx.resume();
@@ -1299,6 +1313,7 @@
       livePlayheadSentAt = Date.now();
       invoke("update_live_subtitles_playhead", { time: currentTime }).catch(() => {});
     }
+    checkLiveWait();
     // Sync background video
     if (
       backgroundVideo &&
@@ -1992,12 +2007,15 @@
     }).catch((err) => console.warn("Failed to save live subtitle cache:", err));
   }
 
-  // Turning live mode off restores whatever subtitle track was loaded before.
-  function disableLiveSubtitles() {
+  // Turning live mode off restores whatever subtitle track was loaded before. A wait
+  // for subtitles ends with it; `resume` is false when the video itself is going away.
+  function disableLiveSubtitles(resume = true) {
     if (!liveActive) return;
     flushLiveCache();
     liveKey = null;
     liveActive = false;
+    if (resume) endLiveWait();
+    else liveWaiting = false;
     liveCues = [];
     liveRanges = [];
     liveState = null;
@@ -2011,6 +2029,7 @@
     liveRanges = addRange(liveRanges, chunk.covered_start, chunk.covered_end);
     liveWorkerPos = chunk.covered_end;
     scheduleLiveSave();
+    checkLiveWait();
 
     // The worker ran into a range transcribed earlier: skip past it.
     const range = findRange(liveRanges, chunk.covered_start);
@@ -2026,6 +2045,8 @@
 
   function handleLiveSeek() {
     if (!liveActive || !videoElement) return;
+    liveWaitOverride = false;
+    checkLiveWait();
     const time = videoElement.currentTime;
     livePlayheadSentAt = Date.now();
     invoke("update_live_subtitles_playhead", { time }).catch(() => {});
@@ -2035,6 +2056,41 @@
     if (Math.abs(target - liveWorkerPos) > 0.5) {
       startLiveSubtitlesAt(target);
     }
+  }
+
+  // "Pause until ready": pauses when playback reaches a point live subtitles are not
+  // ready for, and resumes once they are. Called whenever the playhead, the covered
+  // ranges or the worker state change.
+  function checkLiveWait() {
+    if (!videoElement) return;
+    const waitEnabled =
+      liveActive &&
+      !liveError &&
+      liveState !== "done" &&
+      getLiveSubtitleWait(localStorage.getItem(LIVE_SUBTITLE_WAIT_KEY)) === "pause";
+    const time = videoElement.currentTime;
+    // The last second is treated as ready, in case the audio ends before the video.
+    const ready =
+      !!findRange(liveRanges, time) || (duration > 0 && duration - time < 1);
+
+    if (!waitEnabled || ready) {
+      if (ready) liveWaitOverride = false;
+      endLiveWait();
+      return;
+    }
+    if (liveWaitOverride) return;
+    if (isPlaying) {
+      liveWaiting = true;
+      fadedPlayback.pause().catch(() => {});
+    }
+  }
+
+  // Ends a wait, resuming playback the player paused itself. A pause the user made is
+  // never resumed, since `liveWaiting` is only set by `checkLiveWait`.
+  function endLiveWait() {
+    if (!liveWaiting) return;
+    liveWaiting = false;
+    fadedPlayback.play().catch((err) => console.log("Resume after subtitle wait failed:", err));
   }
 
   async function cancelSubtitleGeneration() {
