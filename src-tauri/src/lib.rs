@@ -1,4 +1,6 @@
 mod ffmpeg;
+mod live_cache;
+mod live_subtitles;
 mod pip_window;
 
 use pip_window::{enter_pip_mode, exit_pip_mode, save_pip_window_layout, settle_pip_window};
@@ -2408,6 +2410,11 @@ pub fn run() {
             delete_temp_file,
             generate_subtitles,
             cancel_subtitle_generation,
+            live_subtitles::start_live_subtitles,
+            live_subtitles::stop_live_subtitles,
+            live_subtitles::update_live_subtitles_playhead,
+            live_cache::load_live_cache,
+            live_cache::save_live_cache,
             check_ffmpeg_installed,
             check_installed_models,
             get_setup_status,
