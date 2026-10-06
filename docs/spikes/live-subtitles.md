@@ -6,7 +6,7 @@ Branch: `spike/live-subtitles`
 
 _Last updated 2026-10-06._
 
-**Where things stand:** step 1 is partly done (gate passes on a high-end machine only). A first in-app version covering steps 3-5 is built and passes `pnpm check` and `pnpm tauri:check`, but has **not yet been tried in the running app**. Seek and audio-track restarts and backpressure (from step 7) are included; the seek-bar strip and status chip (step 6), the playback impact check (step 8) and "Save as SRT" (step 9b) are not. The live cache (step 9a) is built and type-checks but is also untested in the app. The `whisper-rs` abort bug that caused random -6 errors is fixed.
+**Where things stand:** live mode and the live cache have been tried in the app and work so far. Step 1 is partly done (gate passes on a high-end machine only). A first in-app version covering steps 3-5 is built and passes `pnpm check` and `pnpm tauri:check`, but has **not yet been tried in the running app**. Seek and audio-track restarts and backpressure (from step 7) are included; the seek-bar strip and status chip (step 6), the playback impact check (step 8) and "Save as SRT" (step 9b) are not. The live cache (step 9a) is built and type-checks but is also untested in the app. The `whisper-rs` abort bug that caused random -6 errors is fixed.
 
 **What exists:**
 
@@ -19,7 +19,7 @@ _Last updated 2026-10-06._
 - Player page: "Live (real-time)" at the top of the Select AI Model menu; while on, a "Live subtitles · model" entry in the subtitle menu turns it off and restores the previous track. Restarts on seeks outside covered ranges and on audio track changes; skips ahead when it runs into an already covered range; turns off on video change and unmount.
 - Models in `~/.whisper/models`: `ggml-tiny.bin`, `ggml-base.bin`, `ggml-small.bin`, `ggml-small-q5_1.bin`, `ggml-large-v3-turbo-q5_0.bin`, and the VAD model `ggml-silero-v5.1.2.bin`.
 
-**Not committed:** all of the above is uncommitted on `spike/live-subtitles`. `.gitignore` ignores `*.md` except an allowlist, so this doc needs `git add -f` or a `!docs/**/*.md` allowlist entry to be committed. That choice is still open.
+**Committed:** on `spike/live-subtitles` (2026-10-06). This doc is matched by the `*.md` rule in `.gitignore`, so it was added with `git add -f`; later edits to it are tracked normally.
 
 **Running the harness:**
 
