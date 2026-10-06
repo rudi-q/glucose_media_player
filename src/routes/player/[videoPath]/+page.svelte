@@ -69,7 +69,12 @@
     formatEstimatedTime,
     formatTimeForScreenReader,
   } from "$lib/utils/time";
-  import { getEndBehavior, getFadeDurationMs } from "$lib/utils/playerPreferences";
+  import {
+    AUTO_LIVE_SUBTITLES_KEY,
+    getAutoLiveSubtitles,
+    getEndBehavior,
+    getFadeDurationMs,
+  } from "$lib/utils/playerPreferences";
   import { generateThumbnail } from "$lib/utils/thumbnail";
   import { setWindowTitle } from "$lib/utils/windowTitle";
 
@@ -453,6 +458,18 @@
       }
     } catch (err) {
       console.log("Embedded audio track detection failed:", err);
+    }
+
+    // Optional: start live subtitles when the video came with none. Only when a
+    // model is installed and there is audio, so it never surfaces an error by itself.
+    if (
+      !subtitleSrc &&
+      embeddedSubtitleTracks.length === 0 &&
+      embeddedAudioTracks.length > 0 &&
+      getAutoLiveSubtitles(localStorage.getItem(AUTO_LIVE_SUBTITLES_KEY)) &&
+      ((setupStatus || getSetupStatus())?.models_installed.length ?? 0) > 0
+    ) {
+      enableLiveSubtitles();
     }
 
     try {

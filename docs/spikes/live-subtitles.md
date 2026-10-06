@@ -13,6 +13,7 @@ _Last updated 2026-10-06._
 - This plan, with the step 1 results under Findings.
 - `src-tauri/examples/live_bench.rs`, the benchmark harness (standalone Cargo example, does not touch the app).
 - `src-tauri/src/live_subtitles.rs`, the live worker. Commands `start_live_subtitles`, `stop_live_subtitles(unload)` and `update_live_subtitles_playhead`; events `live-subtitle-chunk` (cues plus covered range) and `live-subtitle-status`. Picks the first installed model from small-q5_1, small, base, tiny. 20 s windows with the cut moved to the quietest 50 ms frame in the last 3 s, 8-thread cap, `no_context` on, pauses at 180 s ahead of the playhead.
+- Settings, AI tab, "Live Subtitles": "Auto-start when no subtitles are found" (off by default, `localStorage` key `glucose_auto_live_subtitles`). When on, the player starts live mode for a video with no external subtitle file and no embedded subtitle track, but only if it has an audio track and a Whisper model is installed.
 - `src-tauri/src/live_cache.rs`, commands `load_live_cache` and `save_live_cache`: one JSON file per video, audio track and language, with key check, model-rank check, atomic writes and 50 MB eviction.
 - `src/lib/subtitle/liveSubtitles.ts`, event and cache types plus covered-range and cue-merge helpers.
 - `SubtitleOverlay.svelte` takes optional `liveCues` (replaces the loaded track) and `placeholder` ("Generating subtitles..." when the playhead is in an uncovered range).
