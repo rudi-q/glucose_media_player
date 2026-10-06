@@ -35,8 +35,9 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, setContext, tick } from "svelte";
   import { fade } from "svelte/transition";
-  import { goto } from "$app/navigation";
+  import { afterNavigate, goto } from "$app/navigation";
   import { page } from "$app/stores";
+  import ErrorScreen from "$lib/components/ErrorScreen.svelte";
   import {
     X,
     Settings,
@@ -220,6 +221,28 @@
   function toggleAutoLiveSubtitles() {
     autoLiveSubtitles = !autoLiveSubtitles;
     localStorage.setItem(AUTO_LIVE_SUBTITLES_KEY, String(autoLiveSubtitles));
+  }
+
+  // Set while a screen has crashed and its error boundary shows the error screen;
+  // navigating away resets the boundary so the next screen renders normally.
+  let resetCrashedScreen: (() => void) | null = null;
+
+  afterNavigate(() => {
+    const reset = resetCrashedScreen;
+    resetCrashedScreen = null;
+    reset?.();
+  });
+
+  function decodeURIComponentSafe(value: string): string {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+
+  function screenErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   const _isFirstRun = _savedDefaultMode === null && _savedEndBehavior === null && _savedFadeMode === null;
@@ -605,7 +628,29 @@
   </div>
 {/if}
 
-<div style="display: contents" inert={showOnboarding}>{@render children()}</div>
+<div style="display: contents" inert={showOnboarding}>
+  <svelte:boundary
+    onerror={(error, reset) => {
+      console.error("[glucose] Screen crashed:", error);
+      resetCrashedScreen = reset;
+    }}
+  >
+    {@render children()}
+
+    {#snippet failed(error, reset)}
+      <ErrorScreen
+        status={500}
+        message={screenErrorMessage(error)}
+        screen={decodeURIComponentSafe($page.url.pathname)}
+        onHome={() => goto("/", { replaceState: true })}
+        onRetry={() => {
+          resetCrashedScreen = null;
+          reset();
+        }}
+      />
+    {/snippet}
+  </svelte:boundary>
+</div>
 
 <svelte:window onkeydown={(e) => {
   if (e.key === 'Escape') {

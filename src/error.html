@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>glucose</title>
+    <!-- Shown only when Glucose fails before its own error screen can load. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0a0a0a;
+        color: #fff;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        border-radius: 12px;
+      }
+      main {
+        max-width: 420px;
+        padding: 2rem;
+        text-align: center;
+      }
+      h1 {
+        font-size: 1.375rem;
+        font-weight: 600;
+        margin: 0 0 0.5rem;
+      }
+      p {
+        font-size: 0.875rem;
+        line-height: 1.6;
+        color: rgba(255, 255, 255, 0.55);
+        margin: 0 0 1.5rem;
+      }
+      button {
+        padding: 0.625rem 1.125rem;
+        border-radius: 8px;
+        border: 1px solid #fff;
+        background: #fff;
+        color: #000;
+        font: inherit;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      code {
+        display: block;
+        margin-top: 1.5rem;
+        font-size: 0.7rem;
+        color: rgba(255, 255, 255, 0.4);
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Something went wrong</h1>
+      <p>Glucose couldn't start this screen. Your library and watch progress are safe.</p>
+      <button onclick="location.href = '/'">Back to library</button>
+      <code>%sveltekit.status% · %sveltekit.error.message%</code>
+    </main>
+  </body>
+</html>
