@@ -154,7 +154,7 @@ def main():
     # Side-by-side sample for human judgement.
     first = next(iter(results.values()))
     picks = list(range(0, len(first["sent_in"]), max(1, len(first["sent_in"]) // 15)))[:15]
-    lines = ["# Translation samples (LingDig talk, Whisper small-q5_1)", ""]
+    lines = ["# Translation samples (Whisper small-q5_1 cues)", ""]
     for i in picks:
         lines.append(f"**EN:** {first['sent_in'][i]}")
         for res in results.values():
