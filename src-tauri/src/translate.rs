@@ -49,11 +49,15 @@ pub(crate) fn language_name(code: &str) -> &'static str {
         .unwrap_or("this language")
 }
 
+// Files a model folder needs; a folder missing any of them (for example after an
+// interrupted copy) counts as not installed.
+const MODEL_FILES: &[&str] = &["model.bin", "source.spm", "target.spm"];
+
 fn installed_dir(folder: &str) -> Option<PathBuf> {
     super::model_candidate_dirs()
         .into_iter()
         .map(|dir| dir.join(folder))
-        .find(|dir| dir.join("model.bin").exists())
+        .find(|dir| MODEL_FILES.iter().all(|f| dir.join(f).exists()))
 }
 
 fn model_dir(source: &str, target: &str) -> Result<PathBuf, String> {
@@ -76,9 +80,13 @@ fn model_dir(source: &str, target: &str) -> Result<PathBuf, String> {
     })
 }
 
-// Fails early, before a live session starts, if no installed model translates into
-// `target`.
-pub(crate) fn check_installed(target: &str) -> Result<(), String> {
+// Fails early, before a live session starts, if translating `source` speech into `target`
+// is not possible. With a known source this checks that exact pair; with `None` (the
+// speech language is auto-detected) it checks that some model translates into `target`.
+pub(crate) fn check_installed(source: Option<&str>, target: &str) -> Result<(), String> {
+    if let Some(source) = source {
+        return if source == target { Ok(()) } else { model_dir(source, target).map(|_| ()) };
+    }
     let supported: Vec<_> = MODELS.iter().filter(|(_, t, _)| *t == target).collect();
     if supported.is_empty() {
         return Err(format!("Translation into {} is not supported", language_name(target)));

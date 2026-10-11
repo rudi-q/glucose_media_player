@@ -184,6 +184,8 @@
   // Raw (not proxied) so the identity checks against a captured key keep working.
   let liveKey = $state.raw<LiveCacheKey | null>(null);
   let liveDirty = false;
+  // Whether the current live session was started by auto-start (see enableLiveSubtitles).
+  let liveAutoStarted = false;
   let liveSaveTimer: ReturnType<typeof setTimeout> | null = null;
   // "Pause until ready": true while the player has paused itself to wait for subtitles.
   let liveWaiting = $state(false);
@@ -487,7 +489,7 @@
       getAutoLiveSubtitles(localStorage.getItem(AUTO_LIVE_SUBTITLES_KEY)) &&
       ((setupStatus || getSetupStatus())?.models_installed.length ?? 0) > 0
     ) {
-      enableLiveSubtitles();
+      enableLiveSubtitles(true);
     }
 
     try {
@@ -1934,14 +1936,27 @@
         time: videoElement?.currentTime ?? time,
       }).catch(() => {});
     } catch (err) {
-      if (!liveActive) return;
+      if (!liveActive || liveKey !== key) return;
+      if (liveAutoStarted) {
+        // Auto-start never shows an error: without the translation model it falls back
+        // to the original language, and if it still cannot start it stays off.
+        if (key.translateTo) {
+          loadLiveSession({ ...key, translateTo: null }, time);
+        } else {
+          disableLiveSubtitles();
+        }
+        return;
+      }
       liveError = String(err);
       liveState = "error";
     }
   }
 
-  function enableLiveSubtitles() {
+  // `auto` is true when the player starts live subtitles by itself (the "Auto-start when
+  // no subtitles are found" setting) rather than from the menu.
+  function enableLiveSubtitles(auto = false) {
     if (!currentVideoPath) return;
+    liveAutoStarted = auto;
     showModelSelector = false;
     showSubtitleMenu = false;
     liveActive = true;
@@ -2547,7 +2562,7 @@
               <div class="model-header">Select AI Model</div>
               {#if setupStatus && setupStatus.models_installed.length > 0}
                 {#if !liveActive}
-                  <button class="model-option" onclick={enableLiveSubtitles}>
+                  <button class="model-option" onclick={() => enableLiveSubtitles()}>
                     <span class="model-name">Live (real-time)</span>
                     <span class="model-desc">Subtitles appear as you watch</span>
                   </button>

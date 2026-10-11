@@ -132,8 +132,18 @@ pub fn start_live_subtitles(
     // "nl" for English speech, or "en" for German, French, Spanish or Hindi speech.
     translate_to: Option<String>,
 ) -> Result<LiveSessionInfo, String> {
-    if let Some(lang) = &translate_to {
-        translate::check_installed(lang)?;
+    if let Some(target) = &translate_to {
+        // Every model either translates from English or into English, so the speech
+        // language is English unless English is the target; then it is the language set
+        // in Settings, or unknown when that is "auto".
+        let source = if target != "en" {
+            Some("en")
+        } else if language != "auto" {
+            Some(language.as_str())
+        } else {
+            None
+        };
+        translate::check_installed(source, target)?;
     }
     let (model_file, model_label) = LIVE_MODELS
         .iter()
@@ -183,6 +193,7 @@ pub fn start_live_subtitles(
         model_path,
         cached,
         translators: Mutex::new(cached_translators),
+        failed_translations: Mutex::new(Vec::new()),
         cancel,
         ffmpeg,
     };
@@ -230,6 +241,8 @@ struct Job {
     cached: Option<Arc<WhisperContext>>,
     // Translators this session has loaded or reused, at most one per source language.
     translators: Mutex<Vec<Arc<CueTranslator>>>,
+    // Source languages whose translator failed to load, so it is not retried every chunk.
+    failed_translations: Mutex<Vec<String>>,
     cancel: Arc<AtomicBool>,
     ffmpeg: Arc<Mutex<Option<Child>>>,
 }
@@ -280,7 +293,10 @@ impl Job {
         let Some(target) = &self.translate_to else {
             return Ok(None);
         };
-        if source == target || !translate::is_available(source, target) {
+        if source == target
+            || !translate::is_available(source, target)
+            || self.failed_translations.lock().unwrap().iter().any(|s| s == source)
+        {
             return Ok(None);
         }
         if let Some(t) = self.translators.lock().unwrap().iter().find(|t| t.source == source) {
@@ -292,7 +308,18 @@ impl Job {
             "loading",
             format!("Loading {} translation model...", translate::language_name(target)),
         );
-        let translator = Arc::new(CueTranslator::load(source, target, threads)?);
+        let translator = match CueTranslator::load(source, target, threads) {
+            Ok(t) => Arc::new(t),
+            Err(e) => {
+                // Remember the failure and clear the loading status; the caller shows the
+                // original text instead.
+                self.failed_translations.lock().unwrap().push(source.to_string());
+                if during_run {
+                    emit_status(&self.app, self.session_id, "running", "");
+                }
+                return Err(e);
+            }
+        };
         self.translators.lock().unwrap().push(translator.clone());
         let mut st = state().lock().unwrap();
         if st.session.as_ref().map(|s| s.id) == Some(self.session_id) {
@@ -335,7 +362,11 @@ impl Job {
         if let Some(target) = &self.translate_to {
             let source = if target != "en" { "en" } else { self.language.as_str() };
             if source != "auto" {
-                self.translator_for(source, threads as usize, false)?;
+                // A model that fails to load must not stop the session: chunks then show
+                // the original text.
+                if let Err(e) = self.translator_for(source, threads as usize, false) {
+                    eprintln!("[live subtitles] {}", e);
+                }
             }
         }
         if self.cancelled() {
@@ -493,6 +524,11 @@ impl Job {
         };
         if let Some(time) = resume {
             cues.retain(|c| c.start < time);
+        }
+        // A session cancelled during transcription (for example by a seek) should not
+        // spend CPU on translation while its replacement starts.
+        if self.cancelled() {
+            return Ok((Vec::new(), None));
         }
         // Translate when a model covers this chunk's speech language; otherwise, and if
         // translation fails, the original text is shown, which beats showing nothing.
