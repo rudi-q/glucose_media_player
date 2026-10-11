@@ -1,5 +1,5 @@
-// On-device translation of live subtitle cues from English into German or French, using
-// CTranslate2 and Helsinki-NLP's compact OPUS-MT models.
+// On-device translation of live subtitle cues with CTranslate2 and Helsinki-NLP's OPUS-MT
+// models: from English into several languages, and from several languages into English.
 // See docs/spikes/subtitle-translation.md.
 
 use crate::subtitle_format::{self, Cue, Word};
@@ -7,51 +7,103 @@ use ct2rs::tokenizers::sentencepiece::Tokenizer;
 use ct2rs::{ComputeType, Config, TranslationOptions, Translator};
 use std::path::PathBuf;
 
-// Target language code, model folder name (inside a Whisper model folder), display name.
-// The folder holds a CTranslate2 int8 conversion of the Hugging Face model plus its
-// source.spm and target.spm.
+// Source language, target language, model folder (inside a Whisper model folder). Each
+// folder holds a CTranslate2 int8 conversion of the Hugging Face model plus its
+// source.spm and target.spm. The `opus-mt_tiny_*` models are the compact distilled ones;
+// `opus-mt-hi-en` is standard size, since no compact Hindi model exists.
 const MODELS: &[(&str, &str, &str)] = &[
-    ("de", "opus-mt_tiny_eng-deu", "German"),
-    ("fr", "opus-mt_tiny_eng-fra", "French"),
+    ("en", "de", "opus-mt_tiny_eng-deu"),
+    ("en", "fr", "opus-mt_tiny_eng-fra"),
+    ("en", "es", "opus-mt_tiny_eng-spa"),
+    ("en", "ru", "opus-mt_tiny_eng-rus"),
+    ("en", "tr", "opus-mt_tiny_eng-tur"),
+    ("en", "it", "opus-mt_tiny_eng-ita"),
+    ("en", "nl", "opus-mt_tiny_eng-nld"),
+    ("de", "en", "opus-mt_tiny_deu-eng"),
+    ("fr", "en", "opus-mt_tiny_fra-eng"),
+    ("es", "en", "opus-mt_tiny_spa-eng"),
+    ("hi", "en", "opus-mt-hi-en"),
+];
+
+const LANGUAGE_NAMES: &[(&str, &str)] = &[
+    ("en", "English"),
+    ("de", "German"),
+    ("fr", "French"),
+    ("es", "Spanish"),
+    ("ru", "Russian"),
+    ("tr", "Turkish"),
+    ("it", "Italian"),
+    ("nl", "Dutch"),
+    ("hi", "Hindi"),
 ];
 
 // A sentence group longer than this is translated in pieces, to stay well inside the
 // model's input limit.
 const MAX_GROUP_CHARS: usize = 400;
 
-fn model_entry(lang: &str) -> Result<&'static (&'static str, &'static str, &'static str), String> {
-    MODELS
+pub(crate) fn language_name(code: &str) -> &'static str {
+    LANGUAGE_NAMES
         .iter()
-        .find(|(code, _, _)| *code == lang)
-        .ok_or_else(|| format!("Translation to '{}' is not supported", lang))
+        .find(|(c, _)| *c == code)
+        .map(|(_, name)| *name)
+        .unwrap_or("this language")
 }
 
-fn model_dir(lang: &str) -> Result<PathBuf, String> {
-    let (_, folder, name) = model_entry(lang)?;
+fn installed_dir(folder: &str) -> Option<PathBuf> {
     super::model_candidate_dirs()
         .into_iter()
         .map(|dir| dir.join(folder))
         .find(|dir| dir.join("model.bin").exists())
-        .ok_or_else(|| format!("The {} translation model is not installed", name))
 }
 
-// Fails early, before a live session starts, if the model for `lang` is missing.
-pub(crate) fn check_installed(lang: &str) -> Result<(), String> {
-    model_dir(lang).map(|_| ())
+fn model_dir(source: &str, target: &str) -> Result<PathBuf, String> {
+    let (_, _, folder) = MODELS
+        .iter()
+        .find(|(s, t, _)| *s == source && *t == target)
+        .ok_or_else(|| {
+            format!(
+                "Translation from {} to {} is not supported",
+                language_name(source),
+                language_name(target)
+            )
+        })?;
+    installed_dir(folder).ok_or_else(|| {
+        format!(
+            "The {} to {} translation model is not installed",
+            language_name(source),
+            language_name(target)
+        )
+    })
 }
 
-pub(crate) fn language_name(lang: &str) -> &'static str {
-    model_entry(lang).map(|(_, _, name)| *name).unwrap_or("translation")
+// Fails early, before a live session starts, if no installed model translates into
+// `target`.
+pub(crate) fn check_installed(target: &str) -> Result<(), String> {
+    let supported: Vec<_> = MODELS.iter().filter(|(_, t, _)| *t == target).collect();
+    if supported.is_empty() {
+        return Err(format!("Translation into {} is not supported", language_name(target)));
+    }
+    if supported.iter().any(|(_, _, folder)| installed_dir(folder).is_some()) {
+        Ok(())
+    } else {
+        Err(format!("The {} translation model is not installed", language_name(target)))
+    }
+}
+
+// Whether a model translating `source` speech into `target` is supported and installed.
+pub(crate) fn is_available(source: &str, target: &str) -> bool {
+    model_dir(source, target).is_ok()
 }
 
 pub(crate) struct CueTranslator {
-    pub lang: String,
+    pub source: String,
+    pub target: String,
     translator: Translator<Tokenizer>,
 }
 
 impl CueTranslator {
-    pub fn load(lang: &str, threads: usize) -> Result<Self, String> {
-        let dir = model_dir(lang)?;
+    pub fn load(source: &str, target: &str, threads: usize) -> Result<Self, String> {
+        let dir = model_dir(source, target)?;
         let tokenizer = Tokenizer::new(&dir).map_err(|e| format!("Failed to load the translation tokenizer: {}", e))?;
         let config = Config {
             compute_type: ComputeType::INT8,
@@ -61,12 +113,14 @@ impl CueTranslator {
         let translator = Translator::with_tokenizer(&dir, tokenizer, &config)
             .map_err(|e| format!("Failed to load the translation model: {}", e))?;
         Ok(Self {
-            lang: lang.to_string(),
+            source: source.to_string(),
+            target: target.to_string(),
             translator,
         })
     }
 
-    // Translates English cues and reshapes the result into cues for the target language.
+    // Translates cues in the source language and reshapes the result into cues for the
+    // target language.
     // `limit` is the latest time a cue may extend to, as for `build_cues`.
     pub fn translate_cues(&self, cues: &[Cue], limit: f64) -> Result<Vec<Cue>, String> {
         if cues.is_empty() {
@@ -103,7 +157,8 @@ fn group_text(group: &[Cue]) -> String {
 fn ends_sentence(text: &str) -> bool {
     text.trim_end()
         .trim_end_matches(['"', '\'', ')', ']'])
-        .ends_with(['.', '?', '!'])
+        // U+0964 is the Devanagari danda, Hindi's full stop.
+        .ends_with(['.', '?', '!', '\u{0964}'])
 }
 
 // Splits cues into runs that each end with a finished sentence, so the model sees whole
@@ -212,7 +267,7 @@ mod tests {
     #[test]
     #[ignore]
     fn translates_real_cues_with_installed_model() {
-        let translator = CueTranslator::load("de", 4).expect("German model installed");
+        let translator = CueTranslator::load("en", "de", 4).expect("German model installed");
         let cues = vec![
             cue(46.4, 49.1, "Teaching a machine to do that exact\nsame thing is without a doubt one"),
             cue(49.2, 51.0, "of the greatest technological challenges."),
@@ -226,6 +281,26 @@ mod tests {
         let v = subtitle_format::check(&out);
         assert_eq!((v.over_two_lines, v.line_too_long, v.too_long), (0, 0, 0), "{:?}", v);
         assert!(out.iter().all(|c| c.start >= 46.4 - 1e-9 && c.end <= 62.0 + 1e-9));
+    }
+
+    // Needs the Hindi model installed; run with `cargo test --lib -- --ignored`.
+    #[test]
+    #[ignore]
+    fn translates_hindi_cues_into_english() {
+        let translator = CueTranslator::load("hi", "en", 4).expect("Hindi model installed");
+        let cues = vec![
+            cue(0.0, 2.0, "इस वीडियो में आपका स्वागत है।"),
+            cue(2.5, 4.0, "आज हम एक बहुत दिलचस्प"),
+            cue(4.1, 6.0, "विषय के बारे में बात करेंगे।"),
+        ];
+        // The danda ends the first sentence; the second spans two cues.
+        assert_eq!(sentence_groups(&cues).len(), 2);
+        let out = translator.translate_cues(&cues, 8.0).unwrap();
+        for c in &out {
+            println!("{:>6.2} {:>6.2} {:?}", c.start, c.end, c.text);
+        }
+        assert!(!out.is_empty());
+        assert!(out.iter().all(|c| c.text.is_ascii()), "expected English output: {:?}", out);
     }
 
     #[test]

@@ -36,13 +36,24 @@ export function getLiveSubtitleWait(raw?: string | null): LiveSubtitleWait {
   return raw === "pause" ? "pause" : "play";
 }
 
-// Language live subtitles translate English speech into; null shows the original.
-export type LiveTranslate = "de" | "fr";
+// Language live subtitles are translated into; null shows the original. Every target
+// except English translates English speech; English translates German, French, Spanish
+// or Hindi speech. Must match the models in src-tauri/src/translate.rs.
+export type LiveTranslate = "de" | "fr" | "es" | "ru" | "tr" | "it" | "nl" | "en";
 export const LIVE_TRANSLATE_KEY = "glucose_live_translate";
-export const LIVE_TRANSLATE_NAMES: Record<LiveTranslate, string> = { de: "German", fr: "French" };
+export const LIVE_TRANSLATE_NAMES: Record<LiveTranslate, string> = {
+  de: "German",
+  fr: "French",
+  es: "Spanish",
+  ru: "Russian",
+  tr: "Turkish",
+  it: "Italian",
+  nl: "Dutch",
+  en: "English",
+};
 
 export function getLiveTranslate(raw?: string | null): LiveTranslate | null {
-  return raw === "de" || raw === "fr" ? raw : null;
+  return raw && raw in LIVE_TRANSLATE_NAMES ? (raw as LiveTranslate) : null;
 }
 
 export function getFadeDurationMs(raw?: string | null): number {

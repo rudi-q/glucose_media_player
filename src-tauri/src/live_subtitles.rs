@@ -61,8 +61,8 @@ struct LiveState {
     session: Option<Session>,
     // Kept across sessions so seeking does not reload the model; dropped on unload.
     model: Option<(String, Arc<WhisperContext>)>,
-    // Same for the translation model, when live subtitles are translated.
-    translator: Option<Arc<CueTranslator>>,
+    // Same for translation models, one per source/target pair used so far.
+    translators: Vec<Arc<CueTranslator>>,
 }
 
 fn state() -> &'static Mutex<LiveState> {
@@ -128,7 +128,8 @@ pub fn start_live_subtitles(
     start_secs: f64,
     audio_stream_index: Option<i64>,
     language: String,
-    // Target language code ("de", "fr") to translate English speech into, if any.
+    // Language code to translate speech into, if any: "de", "fr", "es", "ru", "tr", "it",
+    // "nl" for English speech, or "en" for German, French, Spanish or Hindi speech.
     translate_to: Option<String>,
 ) -> Result<LiveSessionInfo, String> {
     if let Some(lang) = &translate_to {
@@ -161,11 +162,12 @@ pub fn start_live_subtitles(
         .as_ref()
         .filter(|(path, _)| *path == model_path)
         .map(|(_, ctx)| ctx.clone());
-    let cached_translator = st
-        .translator
-        .as_ref()
-        .filter(|t| Some(&t.lang) == translate_to.as_ref())
-        .cloned();
+    let cached_translators: Vec<_> = st
+        .translators
+        .iter()
+        .filter(|t| Some(&t.target) == translate_to.as_ref())
+        .cloned()
+        .collect();
     drop(st);
 
     PLAYHEAD.store(start_secs.max(0.0).to_bits(), Ordering::Relaxed);
@@ -180,7 +182,7 @@ pub fn start_live_subtitles(
         translate_to,
         model_path,
         cached,
-        cached_translator,
+        translators: Mutex::new(cached_translators),
         cancel,
         ffmpeg,
     };
@@ -207,7 +209,7 @@ pub fn stop_live_subtitles(unload: bool) {
     }
     if unload {
         st.model = None;
-        st.translator = None;
+        st.translators.clear();
     }
 }
 
@@ -226,7 +228,8 @@ struct Job {
     translate_to: Option<String>,
     model_path: String,
     cached: Option<Arc<WhisperContext>>,
-    cached_translator: Option<Arc<CueTranslator>>,
+    // Translators this session has loaded or reused, at most one per source language.
+    translators: Mutex<Vec<Arc<CueTranslator>>>,
     cancel: Arc<AtomicBool>,
     ffmpeg: Arc<Mutex<Option<Child>>>,
 }
@@ -264,23 +267,40 @@ impl Job {
         Ok(ctx)
     }
 
-    fn load_translator(&self, threads: usize) -> Result<Option<Arc<CueTranslator>>, String> {
-        let Some(lang) = &self.translate_to else {
+    // Returns the translator from `source` speech into the session's target language,
+    // loading it on first use. None when not translating, when the speech is already in
+    // the target language, or when no model covers this language pair; the original text
+    // is shown then. `during_run` restores the "running" status after a mid-session load.
+    fn translator_for(
+        &self,
+        source: &str,
+        threads: usize,
+        during_run: bool,
+    ) -> Result<Option<Arc<CueTranslator>>, String> {
+        let Some(target) = &self.translate_to else {
             return Ok(None);
         };
-        if let Some(t) = &self.cached_translator {
+        if source == target || !translate::is_available(source, target) {
+            return Ok(None);
+        }
+        if let Some(t) = self.translators.lock().unwrap().iter().find(|t| t.source == source) {
             return Ok(Some(t.clone()));
         }
         emit_status(
             &self.app,
             self.session_id,
             "loading",
-            format!("Loading {} translation model...", translate::language_name(lang)),
+            format!("Loading {} translation model...", translate::language_name(target)),
         );
-        let translator = Arc::new(CueTranslator::load(lang, threads)?);
+        let translator = Arc::new(CueTranslator::load(source, target, threads)?);
+        self.translators.lock().unwrap().push(translator.clone());
         let mut st = state().lock().unwrap();
         if st.session.as_ref().map(|s| s.id) == Some(self.session_id) {
-            st.translator = Some(translator.clone());
+            st.translators.push(translator.clone());
+        }
+        drop(st);
+        if during_run {
+            emit_status(&self.app, self.session_id, "running", "");
         }
         Ok(Some(translator))
     }
@@ -308,8 +328,16 @@ impl Job {
             .unwrap_or(4) as i32;
         let ctx = self.load_model()?;
         // Translation runs on this thread right after Whisper, so it can use the same
-        // thread budget without competing with it.
-        let translator = self.load_translator(threads as usize)?;
+        // thread budget without competing with it. Load the model up front when the
+        // speech language is known: English for translating out of English, or the
+        // language chosen in settings for translating into English. Otherwise it loads
+        // when Whisper first detects a language it covers.
+        if let Some(target) = &self.translate_to {
+            let source = if target != "en" { "en" } else { self.language.as_str() };
+            if source != "auto" {
+                self.translator_for(source, threads as usize, false)?;
+            }
+        }
         if self.cancelled() {
             return Ok(());
         }
@@ -362,7 +390,7 @@ impl Job {
             }
 
             let (cues, resume) =
-                self.transcribe(&ctx, translator.as_deref(), &buffer[..cut], buffer_start, threads, is_last)?;
+                self.transcribe(&ctx, &buffer[..cut], buffer_start, threads, is_last)?;
             if self.cancelled() {
                 return Ok(());
             }
@@ -419,7 +447,6 @@ impl Job {
     fn transcribe(
         &self,
         ctx: &WhisperContext,
-        translator: Option<&CueTranslator>,
         samples: &[f32],
         offset: f64,
         threads: i32,
@@ -467,16 +494,25 @@ impl Job {
         if let Some(time) = resume {
             cues.retain(|c| c.start < time);
         }
-        // The translation models only translate English; other speech is shown as is.
-        let english = self.language == "en"
-            || whisper_rs::get_lang_str(state.full_lang_id_from_state()) == Some("en");
-        if let (Some(translator), true) = (translator, english) {
-            let limit = resume.map(|t| t - subtitle_format::MIN_GAP).unwrap_or(limit);
-            match translator.translate_cues(&cues, limit) {
-                Ok(translated) => cues = translated,
-                // Showing the original text beats showing nothing for this chunk.
-                Err(e) => eprintln!("[live subtitles] {}", e),
+        // Translate when a model covers this chunk's speech language; otherwise, and if
+        // translation fails, the original text is shown, which beats showing nothing.
+        let source = if self.language != "auto" {
+            self.language.clone()
+        } else {
+            whisper_rs::get_lang_str(state.full_lang_id_from_state())
+                .unwrap_or_default()
+                .to_string()
+        };
+        match self.translator_for(&source, threads as usize, true) {
+            Ok(Some(translator)) => {
+                let limit = resume.map(|t| t - subtitle_format::MIN_GAP).unwrap_or(limit);
+                match translator.translate_cues(&cues, limit) {
+                    Ok(translated) => cues = translated,
+                    Err(e) => eprintln!("[live subtitles] {}", e),
+                }
             }
+            Ok(None) => {}
+            Err(e) => eprintln!("[live subtitles] {}", e),
         }
         let cues = cues
             .into_iter()

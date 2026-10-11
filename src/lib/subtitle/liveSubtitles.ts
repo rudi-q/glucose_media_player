@@ -27,7 +27,7 @@ export interface LiveCacheKey {
   videoPath: string;
   audioStreamIndex: number | null;
   language: string;
-  // Target language code ("de", "fr") when English speech is translated, else null.
+  // Language code subtitles are translated into (see LiveTranslate), else null.
   translateTo: string | null;
 }
 

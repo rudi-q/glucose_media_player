@@ -75,6 +75,7 @@
     getEndBehavior,
     getLiveSubtitleWait,
     getLiveTranslate,
+    type LiveTranslate,
     LIVE_SUBTITLE_WAIT_KEY,
     LIVE_TRANSLATE_KEY,
     LIVE_TRANSLATE_NAMES,
@@ -196,7 +197,7 @@
     if (liveError) return `Live subtitles: ${liveError}`;
     if (findRange(liveRanges, currentTime) || liveState === "done") return null;
     const lang = liveKey?.translateTo;
-    const what = lang ? `${LIVE_TRANSLATE_NAMES[lang as "de" | "fr"]} subtitles` : "subtitles";
+    const what = lang ? `${LIVE_TRANSLATE_NAMES[lang as LiveTranslate]} subtitles` : "subtitles";
     if (liveWaiting) return `Waiting for ${what}...`;
     if (liveState === "loading") return liveLoadingMessage || "Loading speech model...";
     return `Generating ${what}...`;
@@ -2489,7 +2490,7 @@
                   >
                     <span class="model-name"
                       >Live subtitles{liveModel ? ` · ${liveModel}` : ""}{liveKey?.translateTo
-                        ? ` · ${LIVE_TRANSLATE_NAMES[liveKey.translateTo as "de" | "fr"]}`
+                        ? ` · ${LIVE_TRANSLATE_NAMES[liveKey.translateTo as LiveTranslate]}`
                         : ""}</span
                     >
                     <span class="model-desc">Turn off live subtitles</span>
