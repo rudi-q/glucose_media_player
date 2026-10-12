@@ -114,11 +114,15 @@ fn emit_status(app: &tauri::AppHandle, session_id: u64, state: &str, message: im
     );
 }
 
+// Called from commands, which run on the window thread: FFmpeg is killed and reaped on
+// a separate thread so a slow exit under heavy load cannot freeze the window.
 fn stop_session(session: Session) {
     session.cancel.store(true, Ordering::Relaxed);
     if let Some(mut child) = session.ffmpeg.lock().unwrap().take() {
-        let _ = child.kill();
-        let _ = child.wait();
+        std::thread::spawn(move || {
+            let _ = child.kill();
+            let _ = child.wait();
+        });
     }
 }
 

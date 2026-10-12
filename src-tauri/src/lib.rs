@@ -2,6 +2,7 @@ mod ffmpeg;
 mod live_cache;
 mod live_log;
 mod live_subtitles;
+mod media_protocol;
 mod subtitle_format;
 mod translate;
 mod pip_window;
@@ -1803,7 +1804,7 @@ fn acquire_watch_progress_file_lock_shared(progress_file: &std::path::Path) -> R
 }
 
 #[tauri::command]
-fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> Result<(), String> {
+async fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> Result<(), String> {
     let progress_file = watch_progress_path()?;
     let _guard = watch_progress_lock()
         .lock()
@@ -1832,7 +1833,7 @@ fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> 
 
 // Get watch progress for a video
 #[tauri::command]
-fn get_watch_progress(video_path: String) -> Result<Option<WatchProgress>, String> {
+async fn get_watch_progress(video_path: String) -> Result<Option<WatchProgress>, String> {
     let progress_file = watch_progress_path()?;
     let _guard = watch_progress_lock()
         .lock()
@@ -2035,7 +2036,7 @@ fn convert_video_with_ffmpeg(
 
 // Get all watch progress data
 #[tauri::command]
-fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchProgress>, String> {
+async fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchProgress>, String> {
     let progress_file = watch_progress_path()?;
     let _guard = watch_progress_lock()
         .lock()
@@ -2045,7 +2046,7 @@ fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchPro
 }
 
 #[tauri::command]
-fn delete_watch_progress(video_path: String) -> Result<(), String> {
+async fn delete_watch_progress(video_path: String) -> Result<(), String> {
     let progress_file = watch_progress_path()?;
     let _guard = watch_progress_lock()
         .lock()
@@ -2058,7 +2059,7 @@ fn delete_watch_progress(video_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn clear_watch_history_since(cutoff_timestamp: u64) -> Result<(), String> {
+async fn clear_watch_history_since(cutoff_timestamp: u64) -> Result<(), String> {
     let progress_file = watch_progress_path()?;
     let _guard = watch_progress_lock()
         .lock()
@@ -2320,7 +2321,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        // Replaces the built-in asset protocol so media files are read off the window
+        // thread; see media_protocol.rs.
+        .register_asynchronous_uri_scheme_protocol("asset", |_ctx, request, responder| {
+            media_protocol::handle(request, responder)
+        });
 
     // Add updater plugin only on Windows
     #[cfg(target_os = "windows")]

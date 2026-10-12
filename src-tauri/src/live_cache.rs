@@ -96,7 +96,7 @@ fn cache_path(key: &CacheKey) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn load_live_cache(
+pub async fn load_live_cache(
     video_path: String,
     audio_stream_index: Option<i64>,
     language: String,
@@ -131,7 +131,7 @@ pub fn load_live_cache(
 }
 
 #[tauri::command]
-pub fn save_live_cache(
+pub async fn save_live_cache(
     video_path: String,
     audio_stream_index: Option<i64>,
     language: String,
@@ -143,6 +143,9 @@ pub fn save_live_cache(
     if ranges.is_empty() {
         return Ok(());
     }
+    // Saves can now overlap; one at a time, so they never share the temporary file.
+    static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
     let key = make_key(&video_path, audio_stream_index, &language, translate_to)?;
     let path = cache_path(&key)?;
     let dir = cache_dir()?;
