@@ -1,5 +1,6 @@
 mod ffmpeg;
 mod live_cache;
+mod live_log;
 mod live_subtitles;
 mod subtitle_format;
 mod translate;
@@ -2329,6 +2330,7 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            live_log::watch_ui_thread(app.handle().clone());
             // Handle command line arguments for file associations
             let args: Vec<String> = std::env::args().collect();
 
@@ -2375,7 +2377,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(live_log::with_command_log(tauri::generate_handler![
             open_file_dialog,
             open_folder_dialog,
             open_subtitle_dialog,
@@ -2421,7 +2423,7 @@ pub fn run() {
             ffmpeg::get_ffmpeg_path,
             ffmpeg::pick_ffmpeg_executable,
             ffmpeg::save_ffmpeg_custom_path
-        ])
+        ]))
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
