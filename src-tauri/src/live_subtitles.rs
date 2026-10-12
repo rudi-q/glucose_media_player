@@ -87,6 +87,9 @@ struct LiveChunk {
     covered_start: f64,
     covered_end: f64,
     cues: Vec<LiveCue>,
+    // The untranslated cues when `cues` are a translation, else empty. Shown under the
+    // translation when dual subtitles are on.
+    original_cues: Vec<LiveCue>,
 }
 
 #[derive(Clone, Serialize)]
@@ -472,7 +475,7 @@ impl Job {
                 return Ok(());
             }
 
-            let (cues, resume, stats) =
+            let (cues, original_cues, resume, stats) =
                 self.transcribe(&ctx, &buffer[..cut], buffer_start, threads, is_last)?;
             if self.cancelled() {
                 return Ok(());
@@ -520,6 +523,7 @@ impl Job {
                     covered_start: buffer_start,
                     covered_end: chunk_end,
                     cues,
+                    original_cues,
                 },
             );
 
@@ -562,7 +566,7 @@ impl Job {
         offset: f64,
         threads: i32,
         is_last: bool,
-    ) -> Result<(Vec<LiveCue>, Option<f64>, ChunkStats), String> {
+    ) -> Result<(Vec<LiveCue>, Vec<LiveCue>, Option<f64>, ChunkStats), String> {
         let mut stats = ChunkStats::default();
         let whisper_started = std::time::Instant::now();
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
@@ -588,7 +592,7 @@ impl Job {
             .map_err(|e| format!("Failed to create Whisper state: {}", e))?;
         if let Err(e) = state.full(params, samples) {
             if self.cancelled() {
-                return Ok((Vec::new(), None, stats));
+                return Ok((Vec::new(), Vec::new(), None, stats));
             }
             return Err(format!("Transcription failed: {}", e));
         }
@@ -611,7 +615,7 @@ impl Job {
         // A session cancelled during transcription (for example by a seek) should not
         // spend CPU on translation while its replacement starts.
         if self.cancelled() {
-            return Ok((Vec::new(), None, stats));
+            return Ok((Vec::new(), Vec::new(), None, stats));
         }
         // Translate when a model covers this chunk's speech language; otherwise, and if
         // translation fails, the original text is shown, which beats showing nothing.
@@ -623,13 +627,14 @@ impl Job {
                 .to_string()
         };
         stats.speech_lang = source.clone();
+        let mut originals = Vec::new();
         match self.translator_for(&source, threads as usize, true) {
             Ok(Some(translator)) => {
                 let limit = resume.map(|t| t - subtitle_format::MIN_GAP).unwrap_or(limit);
                 let translate_started = std::time::Instant::now();
                 match translator.translate_cues(&cues, limit) {
                     Ok(translated) => {
-                        cues = translated;
+                        originals = std::mem::replace(&mut cues, translated);
                         stats.translated = true;
                     }
                     Err(e) => {
@@ -645,15 +650,16 @@ impl Job {
                 stats.translate_error = Some(e);
             }
         }
-        let cues = cues
-            .into_iter()
-            .map(|c| LiveCue {
-                start: c.start,
-                end: c.end,
-                text: c.text,
-            })
-            .collect();
-        Ok((cues, resume, stats))
+        let to_live = |cues: Vec<subtitle_format::Cue>| -> Vec<LiveCue> {
+            cues.into_iter()
+                .map(|c| LiveCue {
+                    start: c.start,
+                    end: c.end,
+                    text: c.text,
+                })
+                .collect()
+        };
+        Ok((to_live(cues), to_live(originals), resume, stats))
     }
 }
 

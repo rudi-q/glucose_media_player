@@ -42,6 +42,10 @@ struct CacheFile {
     model: String,
     ranges: Vec<[f64; 2]>,
     cues: Vec<CachedCue>,
+    // Untranslated cues of a translated cache, for dual subtitles. Missing in files
+    // written before dual subtitles existed; those parts then show the translation only.
+    #[serde(default)]
+    original_cues: Vec<CachedCue>,
 }
 
 #[derive(Serialize)]
@@ -49,6 +53,7 @@ pub struct LiveCacheData {
     model: String,
     ranges: Vec<[f64; 2]>,
     cues: Vec<CachedCue>,
+    original_cues: Vec<CachedCue>,
 }
 
 fn cache_dir() -> Result<PathBuf, String> {
@@ -127,6 +132,7 @@ pub async fn load_live_cache(
         model: file.model,
         ranges: file.ranges,
         cues: file.cues,
+        original_cues: file.original_cues,
     }))
 }
 
@@ -139,6 +145,7 @@ pub async fn save_live_cache(
     model: String,
     ranges: Vec<[f64; 2]>,
     cues: Vec<CachedCue>,
+    original_cues: Vec<CachedCue>,
 ) -> Result<(), String> {
     if ranges.is_empty() {
         return Ok(());
@@ -157,6 +164,7 @@ pub async fn save_live_cache(
         model,
         ranges,
         cues,
+        original_cues,
     })
     .map_err(|e| e.to_string())?;
 

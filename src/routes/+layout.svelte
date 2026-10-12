@@ -95,6 +95,9 @@
     getLiveSubtitleWait,
     LIVE_TRANSLATE_KEY,
     getLiveTranslate,
+    LIVE_DUAL_SUBTITLES_KEY,
+    LIVE_DUAL_SUBTITLES_EVENT,
+    getLiveDualSubtitles,
     type LiveSubtitleWait,
     type DefaultPlayMode,
     type EndBehavior,
@@ -250,6 +253,18 @@
     liveTranslate = lang ?? "off";
     if (lang) localStorage.setItem(LIVE_TRANSLATE_KEY, lang);
     else localStorage.removeItem(LIVE_TRANSLATE_KEY);
+  }
+
+  let liveDualSubtitles = $state(
+    getLiveDualSubtitles(
+      typeof localStorage !== "undefined" ? localStorage.getItem(LIVE_DUAL_SUBTITLES_KEY) : null,
+    ),
+  );
+
+  function toggleLiveDualSubtitles() {
+    liveDualSubtitles = !liveDualSubtitles;
+    localStorage.setItem(LIVE_DUAL_SUBTITLES_KEY, String(liveDualSubtitles));
+    window.dispatchEvent(new Event(LIVE_DUAL_SUBTITLES_EVENT));
   }
 
   // Set while a screen has crashed and its error boundary shows the error screen;
@@ -1068,6 +1083,28 @@
                     </select>
                   </div>
                 </div>
+                {#if liveTranslate !== "off"}
+                  <div class="settings-item">
+                    <div class="settings-item-label">
+                      <div class="settings-item-title">Show original subtitles too</div>
+                      <div class="settings-item-desc">
+                        Show the original line, smaller, under the translation.
+                      </div>
+                    </div>
+                    <div class="settings-item-action">
+                      <button
+                        class="toggle-switch"
+                        class:on={liveDualSubtitles}
+                        role="switch"
+                        aria-checked={liveDualSubtitles}
+                        aria-label="Show original subtitles under the translation"
+                        onclick={toggleLiveDualSubtitles}
+                      >
+                        <span class="toggle-knob"></span>
+                      </button>
+                    </div>
+                  </div>
+                {/if}
               </div>
             </div>
           {:else if selectedTab === "updates"}

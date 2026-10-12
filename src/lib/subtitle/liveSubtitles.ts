@@ -6,6 +6,8 @@ export interface LiveSubtitleChunk {
   covered_start: number;
   covered_end: number;
   cues: VttCue[];
+  // The untranslated cues when `cues` are a translation, else empty.
+  original_cues: VttCue[];
 }
 
 export interface LiveSubtitleStatus {
@@ -36,6 +38,7 @@ export interface LiveCacheData {
   model: string;
   ranges: CoveredRange[];
   cues: VttCue[];
+  original_cues: VttCue[];
 }
 
 // Gaps up to this size between ranges are treated as contiguous, so float rounding

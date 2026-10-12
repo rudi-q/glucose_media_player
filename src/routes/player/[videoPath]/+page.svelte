@@ -79,6 +79,9 @@
     LIVE_SUBTITLE_WAIT_KEY,
     LIVE_TRANSLATE_KEY,
     LIVE_TRANSLATE_NAMES,
+    LIVE_DUAL_SUBTITLES_KEY,
+    LIVE_DUAL_SUBTITLES_EVENT,
+    getLiveDualSubtitles,
     getFadeDurationMs,
   } from "$lib/utils/playerPreferences";
   import { generateThumbnail } from "$lib/utils/thumbnail";
@@ -171,7 +174,20 @@
   let liveActive = $state(false);
   let liveModel = $state("");
   let liveCues = $state<VttCue[]>([]);
+  // Untranslated cues while translating, shown under the translation when dual
+  // subtitles are on.
+  let liveOriginalCues = $state<VttCue[]>([]);
+  let liveDualSubtitles = $state(false);
   let liveRanges = $state<CoveredRange[]>([]);
+
+  $effect(() => {
+    const read = () => {
+      liveDualSubtitles = getLiveDualSubtitles(localStorage.getItem(LIVE_DUAL_SUBTITLES_KEY));
+    };
+    read();
+    window.addEventListener(LIVE_DUAL_SUBTITLES_EVENT, read);
+    return () => window.removeEventListener(LIVE_DUAL_SUBTITLES_EVENT, read);
+  });
   let liveState = $state<LiveSubtitleStatus["state"] | null>(null);
   let liveError = $state<string | null>(null);
   // Session ids only increase; events from sessions below this are stale.
@@ -1984,6 +2000,7 @@
     invoke("stop_live_subtitles", { unload: false }).catch(() => {});
     liveKey = key;
     liveCues = [];
+    liveOriginalCues = [];
     liveRanges = [];
     liveModel = "";
     liveDirty = false;
@@ -1992,6 +2009,7 @@
       if (!liveActive || liveKey !== key) return;
       if (cached) {
         liveCues = cached.cues;
+        liveOriginalCues = cached.original_cues;
         liveRanges = cached.ranges;
         liveModel = cached.model;
       }
@@ -2032,6 +2050,7 @@
       model: liveModel,
       ranges: $state.snapshot(liveRanges),
       cues: $state.snapshot(liveCues),
+      originalCues: $state.snapshot(liveOriginalCues),
     }).catch((err) => console.warn("Failed to save live subtitle cache:", err));
   }
 
@@ -2045,6 +2064,7 @@
     if (resume) endLiveWait();
     else liveWaiting = false;
     liveCues = [];
+    liveOriginalCues = [];
     liveRanges = [];
     liveState = null;
     liveError = null;
@@ -2054,6 +2074,12 @@
   function handleLiveChunk(chunk: LiveSubtitleChunk) {
     if (!liveActive || chunk.session_id < liveMinSession) return;
     liveCues = mergeCues(liveCues, chunk.cues, chunk.covered_start, chunk.covered_end);
+    liveOriginalCues = mergeCues(
+      liveOriginalCues,
+      chunk.original_cues,
+      chunk.covered_start,
+      chunk.covered_end,
+    );
     liveRanges = addRange(liveRanges, chunk.covered_start, chunk.covered_end);
     liveWorkerPos = chunk.covered_end;
     scheduleLiveSave();
@@ -2233,6 +2259,7 @@
       enabled={subtitlesEnabled}
       {videoElement}
       liveCues={liveActive ? liveCues : null}
+      secondaryCues={liveActive && liveDualSubtitles ? liveOriginalCues : null}
       placeholder={livePlaceholder}
     />
   </div>

@@ -2,20 +2,25 @@
   import { activeSubtitleStyle } from '$lib/subtitle/subtitleStyleStore';
   import { parseVtt, type VttCue } from '$lib/subtitle/vttParser';
 
-  let { vttContent, currentTime, enabled, videoElement, liveCues = null, placeholder = null }: {
+  let { vttContent, currentTime, enabled, videoElement, liveCues = null, secondaryCues = null, placeholder = null }: {
     vttContent: string | null;
     currentTime: number;
     enabled: boolean;
     videoElement: HTMLVideoElement | undefined;
     // Live subtitles replace the loaded track while active.
     liveCues?: VttCue[] | null;
+    // Shown smaller under the main cues, e.g. the original lines of translated subtitles.
+    secondaryCues?: VttCue[] | null;
     // Shown when no cue is active, e.g. while live subtitles are still being generated.
     placeholder?: string | null;
   } = $props();
 
   let cues = $derived(liveCues ?? (vttContent ? parseVtt(vttContent) : []));
   let activeCues = $derived(cues.filter(c => currentTime >= c.start && currentTime < c.end));
-  let showPlaceholder = $derived(activeCues.length === 0 && !!placeholder);
+  let activeSecondary = $derived(
+    (secondaryCues ?? []).filter(c => currentTime >= c.start && currentTime < c.end)
+  );
+  let showPlaceholder = $derived(activeCues.length === 0 && activeSecondary.length === 0 && !!placeholder);
   let style = $derived($activeSubtitleStyle);
 
   // Track the exact displayed video content rect within .video-container.
@@ -130,8 +135,11 @@
     return Array.from(template.content.childNodes).map(serializeCueNode).join('');
   }
 
-  function cueTextStyle(s: typeof style): string {
-    let css = `font-family: ${s.fontFamily}; font-size: ${s.fontSize}px; font-weight: ${s.fontWeight}; color: ${s.color}; line-height: ${s.lineHeight}; letter-spacing: ${s.letterSpacing};`;
+  // Secondary lines are this much smaller than the main ones.
+  const SECONDARY_SCALE = 0.72;
+
+  function cueTextStyle(s: typeof style, scale = 1): string {
+    let css = `font-family: ${s.fontFamily}; font-size: ${s.fontSize * scale}px; font-weight: ${s.fontWeight}; color: ${s.color}; line-height: ${s.lineHeight}; letter-spacing: ${s.letterSpacing};`;
     if (s.textShadow !== 'none') css += ` text-shadow: ${s.textShadow};`;
     if (s.textStroke !== 'none') css += ` -webkit-text-stroke: ${s.textStroke};`;
     return css;
@@ -146,7 +154,7 @@
   }
 </script>
 
-{#if enabled && (activeCues.length > 0 || showPlaceholder)}
+{#if enabled && (activeCues.length > 0 || activeSecondary.length > 0 || showPlaceholder)}
   <div
     class="subtitle-overlay"
     style={overlayPositionStyle}
@@ -164,6 +172,20 @@
           style={cueWrapperStyle(style)}
         >
           <span class="cue-text" style={cueTextStyle(style)}>
+            {@html sanitize(cue.text)}
+          </span>
+        </div>
+      {/each}
+      {#each activeSecondary as cue, i (`s-${i}-${cue.start}-${cue.end}-${cue.text}`)}
+        <div
+          class="cue-wrapper secondary"
+          class:pill={style.backgroundType === 'pill'}
+          class:box={style.backgroundType === 'box'}
+          class:stripe={style.backgroundType === 'stripe'}
+          class:frosted={style.backgroundType === 'frosted'}
+          style={cueWrapperStyle(style)}
+        >
+          <span class="cue-text" style={cueTextStyle(style, SECONDARY_SCALE)}>
             {@html sanitize(cue.text)}
           </span>
         </div>
@@ -208,6 +230,7 @@
   .cue-wrapper.stripe { padding: 0.3em 1em; max-width: 100%; width: 100%; border-radius: 0; justify-content: center; }
   .cue-wrapper.frosted { border-radius: 8px; padding: 0.25em 0.7em; border: 1px solid rgba(255,255,255,0.15); }
   .cue-text { display: block; text-align: center; }
+  .cue-wrapper.secondary { opacity: 0.85; }
   .cue-wrapper.placeholder {
     border-radius: 6px;
     padding: 0.2em 0.6em;

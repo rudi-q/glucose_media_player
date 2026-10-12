@@ -56,6 +56,15 @@ export function getLiveTranslate(raw?: string | null): LiveTranslate | null {
   return raw && raw in LIVE_TRANSLATE_NAMES ? (raw as LiveTranslate) : null;
 }
 
+// Dual subtitles: with translation on, also show the original line, smaller, under the
+// translation. Settings dispatches the event on window so an open player updates at once.
+export const LIVE_DUAL_SUBTITLES_KEY = "glucose_live_dual_subtitles";
+export const LIVE_DUAL_SUBTITLES_EVENT = "glucose-live-dual-subtitles-changed";
+
+export function getLiveDualSubtitles(raw?: string | null): boolean {
+  return raw === "true";
+}
+
 export function getFadeDurationMs(raw?: string | null): number {
   return FADE_MODE_MS[getFadeMode(raw)];
 }
