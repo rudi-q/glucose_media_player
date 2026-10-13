@@ -385,6 +385,7 @@ impl Job {
     }
 
     fn run(self) -> Result<(), String> {
+        let session_started = std::time::Instant::now();
         let threads = std::thread::available_parallelism()
             .map(|n| n.get().min(MAX_THREADS))
             .unwrap_or(4) as i32;
@@ -432,6 +433,7 @@ impl Job {
         let mut buffer: Vec<f32> = Vec::with_capacity(window);
         // Absolute time of buffer[0].
         let mut buffer_start = self.start_secs;
+        let mut first_chunk = true;
         let mut eof = false;
         let mut bytes = vec![0u8; 64 * 1024];
         let mut pending = Vec::<u8>::new();
@@ -514,8 +516,17 @@ impl Job {
                     // The playhead had passed the chunk start before its subtitles were
                     // ready, so the viewer saw a gap (or waited, with "pause until ready").
                     "late": playhead > buffer_start,
+                    // Time from the session starting to this chunk's subtitles; for the
+                    // first chunk, how long the viewer waited for any subtitles.
+                    "since_start_ms": live_log::ms(session_started),
+                    "first": first_chunk,
+                    // Reading speed and line length of the subtitles shown, and of the
+                    // untranslated ones when translating (null otherwise).
+                    "reading": reading_stats(&cues),
+                    "original_reading": reading_stats(&original_cues),
                 }),
             );
+            first_chunk = false;
             let _ = self.app.emit(
                 "live-subtitle-chunk",
                 LiveChunk {
@@ -661,6 +672,37 @@ impl Job {
         };
         Ok((to_live(cues), to_live(originals), resume, stats))
     }
+}
+
+// Reading speed (CPS) and line length (CPL) of a chunk's cues, for the performance log.
+// CPS counts every character except line breaks; 21 CPS is the limit Papi et al. (2023)
+// use, a little above the formatter's own 20 CPS target.
+fn reading_stats(cues: &[LiveCue]) -> serde_json::Value {
+    const CPS_LIMIT: f64 = 21.0;
+    if cues.is_empty() {
+        return serde_json::Value::Null;
+    }
+    let (mut cps_sum, mut cps_max, mut over_cps) = (0.0, 0.0_f64, 0);
+    let (mut cpl_max, mut long_lines) = (0, 0);
+    for cue in cues {
+        let chars = cue.text.chars().filter(|c| *c != '\n').count();
+        let cps = chars as f64 / (cue.end - cue.start).max(1e-3);
+        cps_sum += cps;
+        cps_max = cps_max.max(cps);
+        over_cps += usize::from(cps > CPS_LIMIT);
+        for line in cue.text.split('\n') {
+            let len = line.chars().count();
+            cpl_max = cpl_max.max(len);
+            long_lines += usize::from(len > subtitle_format::MAX_LINE_CHARS);
+        }
+    }
+    serde_json::json!({
+        "cps_avg": cps_sum / cues.len() as f64,
+        "cps_max": cps_max,
+        "over_21_cps": over_cps,
+        "cpl_max": cpl_max,
+        "lines_over_42": long_lines,
+    })
 }
 
 // What happened to one chunk, for the performance log.

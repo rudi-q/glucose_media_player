@@ -2433,8 +2433,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
-            // Log events for debugging
-            if cfg!(debug_assertions) {
+            // Log app lifecycle events for debugging. The event-loop tick and window events
+            // (focus, move, resize) fire constantly and bury everything else in the terminal.
+            if cfg!(debug_assertions)
+                && !matches!(
+                    event,
+                    tauri::RunEvent::MainEventsCleared | tauri::RunEvent::WindowEvent { .. }
+                )
+            {
                 println!("Received event: {:?}", event);
             }
 
