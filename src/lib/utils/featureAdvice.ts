@@ -31,15 +31,17 @@ export const VERDICT_LABELS: Record<Verdict, string> = {
   unknown: "Not tested",
 };
 
-// Live subtitles need Whisper to stay ahead of playback. At 3x it keeps a comfortable
-// lead; between 1.5x and 3x it can fall behind in dense dialogue; below 1.5x it cannot
-// keep up once the start-up lead is used.
-const LIVE_GOOD_X = 3;
-const LIVE_SLOW_X = 1.5;
+// Live subtitles keep up as long as Whisper is faster than playback (above 1x); anything
+// beyond that builds a lead. Just above 1x they keep up but take long to catch up after a
+// seek (20 s of audio per chunk, so about 16 s at 1.2x). These limits are deliberately
+// generous: the test runs whatever else the PC is doing at the time, and a 1.2x result
+// from a busy machine was perfectly usable in practice, translation included.
+const LIVE_GOOD_X = 1.5;
+const LIVE_SLOW_X = 1.0;
 // Smart placement holds a new subtitle back while the frame is checked, for at most
-// 200 ms (SubtitleOverlay.svelte).
-const FACE_GOOD_MS = 60;
-const FACE_SLOW_MS = 150;
+// 200 ms (SubtitleOverlay.svelte); under about 100 ms the delay is not noticeable.
+const FACE_GOOD_MS = 100;
+const FACE_SLOW_MS = 200;
 // The large model needs about 2 GB of memory on top of the app and the video.
 const GENERATION_GOOD_GB = 8;
 const GENERATION_SLOW_GB = 4;
@@ -63,20 +65,20 @@ export function adviseFeatures(r: HardwareReport): FeatureAdvice[] {
             id: "live",
             name: "Live subtitles",
             verdict: "good",
-            reason: `Speech recognition runs ${speed(x)} faster than playback, enough to stay well ahead.`,
+            reason: `Speech recognition runs ${speed(x)} faster than playback, enough to stay ahead.`,
           }
         : x >= LIVE_SLOW_X
           ? {
               id: "live",
               name: "Live subtitles",
               verdict: "slow",
-              reason: `Speech recognition runs ${speed(x)} faster than playback, so subtitles can fall behind in busy scenes. "Pause until ready" helps.`,
+              reason: `Speech recognition runs ${speed(x)} faster than playback: it keeps up, but after a seek the first subtitles take a while. "Pause until ready" helps.`,
             }
           : {
               id: "live",
               name: "Live subtitles",
               verdict: "poor",
-              reason: `Speech recognition runs at ${speed(x)} playback speed, too slow to keep up with the video.`,
+              reason: `Speech recognition runs at ${speed(x)} playback speed, slower than the video, so subtitles would keep falling behind.`,
             };
 
   // Translation itself is tiny (about 0.1 s per 20 s of audio); it lives or dies with
@@ -90,7 +92,7 @@ export function adviseFeatures(r: HardwareReport): FeatureAdvice[] {
         ? "Depends on live subtitles, which have not been tested yet."
         : live.verdict === "good"
           ? "Translating adds only a fraction of a second per minute of video."
-          : "Translating is quick, but it needs live subtitles, which may struggle here.",
+          : "Translating is quick; how well it works depends on live subtitles above.",
   };
 
   const ms = r.face_ms;
@@ -120,10 +122,10 @@ export function adviseFeatures(r: HardwareReport): FeatureAdvice[] {
               id: "smart",
               name: "Smart subtitle position",
               verdict: "poor",
-              reason: `Checking a frame for faces takes ${Math.round(ms)} ms, often too long to wait for, so faces would mostly be missed.`,
+              reason: `Checking a frame for faces takes ${Math.round(ms)} ms, longer than subtitles wait, so faces would often be missed.`,
             };
 
-  // Generating a whole subtitle file is not real-time, so slowness only means waiting
+  // Generating a whole subtitle file is not real-time, so a slower PC only means waiting
   // longer; memory is what can make the large model fail.
   const gb = r.ram_gb;
   const generation: FeatureAdvice =
@@ -134,7 +136,7 @@ export function adviseFeatures(r: HardwareReport): FeatureAdvice[] {
           verdict: "unknown",
           reason: "The amount of memory could not be read.",
         }
-      : gb >= GENERATION_GOOD_GB && (x === null || x >= LIVE_GOOD_X)
+      : gb >= GENERATION_GOOD_GB
         ? {
             id: "generation",
             name: "AI subtitles (Large model)",
@@ -146,7 +148,7 @@ export function adviseFeatures(r: HardwareReport): FeatureAdvice[] {
               id: "generation",
               name: "AI subtitles (Large model)",
               verdict: "slow",
-              reason: "It will work, but generating a film's subtitles can take a long time. Tiny or Small are faster.",
+              reason: `With ${Math.round(gb)} GB of memory the large model fits, but leaves little room for other programs. Tiny or Small are lighter.`,
             }
           : {
               id: "generation",
@@ -156,6 +158,19 @@ export function adviseFeatures(r: HardwareReport): FeatureAdvice[] {
             };
 
   return [live, translation, smart, generation];
+}
+
+// A short warning to show next to a feature's own setting, or null when it runs fine
+// (or was not tested).
+export function featureWarning(verdict: Verdict | undefined): string | null {
+  if (verdict === "poor") return "Not recommended on this PC. See Settings > Features.";
+  if (verdict === "slow") return "May be slow on this PC. See Settings > Features.";
+  return null;
+}
+
+// Verdict per feature from a stored check; empty when the PC was not checked yet.
+export function featureVerdicts(check: StoredHardwareCheck | null): Partial<Record<FeatureId, Verdict>> {
+  return check ? Object.fromEntries(adviseFeatures(check.report).map((a) => [a.id, a.verdict])) : {};
 }
 
 // What the last check found, kept between launches.

@@ -88,7 +88,7 @@
     getFadeDurationMs,
   } from "$lib/utils/playerPreferences";
   import {
-    adviseFeatures,
+    featureVerdicts as verdictsFromCheck,
     HARDWARE_CHECK_KEY,
     loadHardwareCheck,
     type FeatureId,
@@ -223,10 +223,7 @@
 
   $effect(() => {
     const read = () => {
-      const check = loadHardwareCheck(localStorage.getItem(HARDWARE_CHECK_KEY));
-      featureVerdicts = check
-        ? Object.fromEntries(adviseFeatures(check.report).map((a) => [a.id, a.verdict]))
-        : {};
+      featureVerdicts = verdictsFromCheck(loadHardwareCheck(localStorage.getItem(HARDWARE_CHECK_KEY)));
     };
     read();
     window.addEventListener(HARDWARE_CHECK_KEY, read);

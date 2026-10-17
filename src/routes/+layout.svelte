@@ -112,6 +112,8 @@
   } from "$lib/utils/playerPreferences";
   import {
     adviseFeatures,
+    featureVerdicts,
+    featureWarning,
     HARDWARE_CHECK_KEY,
     HARDWARE_CHECK_VERSION,
     loadHardwareCheck,
@@ -315,6 +317,15 @@
   let hardwareChecking = $state(false);
   let hardwareCheckError = $state<string | null>(null);
   let featureAdvice = $derived(hardwareCheck ? adviseFeatures(hardwareCheck.report) : []);
+  // Warnings shown next to the features' own settings.
+  let featureWarnings = $derived.by(() => {
+    const verdicts = featureVerdicts(hardwareCheck);
+    return {
+      live: featureWarning(verdicts.live),
+      translation: featureWarning(verdicts.translation),
+      smart: featureWarning(verdicts.smart),
+    };
+  });
   const FEATURE_TURNED_OFF_NAMES: Record<FeatureId, string> = {
     live: "auto-start for live subtitles",
     translation: "live translation",
@@ -741,6 +752,8 @@
 
       await invoke("mark_setup_completed");
       await checkSetupStatus();
+      // The last hardware check had no speech model to test; now it can.
+      if (hardwareCheck && hardwareCheck.report.live_model === null) runHardwareCheck(false);
 
       isDownloading = false;
       downloadProgress = 100;
@@ -1160,6 +1173,9 @@
                     <div class="settings-item-desc">
                       If a video has no subtitle file or embedded track, generate subtitles live as it plays.
                     </div>
+                    {#if featureWarnings.live}
+                      <div class="hw-warning">{featureWarnings.live}</div>
+                    {/if}
                   </div>
                   <div class="settings-item-action">
                     <button
@@ -1198,6 +1214,9 @@
                     <div class="settings-item-desc">
                       English speech into the language you pick, or German, French and Spanish speech into English. Runs on your device and applies the next time live subtitles start.
                     </div>
+                    {#if featureWarnings.translation}
+                      <div class="hw-warning">{featureWarnings.translation}</div>
+                    {/if}
                   </div>
                   <div class="settings-item-action">
                     <select
@@ -1433,6 +1452,9 @@
               bind:value={subtitlePosition}
               options={subtitlePositionOptions}
             />
+            {#if featureWarnings.smart}
+              <p class="hw-warning subtitle-position-warning">Smart: {featureWarnings.smart}</p>
+            {/if}
             <div class="reset-prefs-row">
               <button class="reset-prefs-btn" onclick={resetPlayerPreferences}>
                 <RotateCcw size={13} />
@@ -3018,6 +3040,16 @@
     font-size: 0.75rem;
     color: rgba(255, 255, 255, 0.45);
     margin: 0 0 0.75rem 0;
+  }
+
+  .hw-warning {
+    font-size: 0.75rem;
+    color: #f2c46d;
+    margin-top: 0.375rem;
+  }
+
+  .subtitle-position-warning {
+    margin: -0.5rem 0 1rem 0;
   }
 
   .hw-error {

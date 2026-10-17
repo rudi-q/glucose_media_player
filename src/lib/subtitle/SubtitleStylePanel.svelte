@@ -8,11 +8,22 @@
     getSubtitlePosition,
     type SubtitlePosition,
   } from '$lib/utils/playerPreferences';
+  import {
+    featureVerdicts,
+    featureWarning,
+    HARDWARE_CHECK_KEY,
+    loadHardwareCheck,
+  } from '$lib/utils/featureAdvice';
 
   let { onClose }: { onClose: () => void } = $props();
 
   // Same setting as Settings > Player > Subtitle Position; the event keeps both in step.
   let placement = $state<SubtitlePosition>(getSubtitlePosition(localStorage.getItem(SUBTITLE_POSITION_KEY)));
+
+  // Shown under Smart when the hardware check found face detection slow on this PC.
+  const smartWarning = featureWarning(
+    featureVerdicts(loadHardwareCheck(localStorage.getItem(HARDWARE_CHECK_KEY))).smart,
+  );
 
   function setPlacement(value: SubtitlePosition) {
     placement = value;
@@ -132,6 +143,10 @@
         >Smart</button>
       </div>
     </div>
+
+    {#if placement === 'smart' && smartWarning}
+      <div class="placement-warning">{smartWarning}</div>
+    {/if}
 
     <div class="control-row" class:disabled={placement === 'smart'}>
       <span class="control-label">Position</span>
@@ -375,6 +390,12 @@
     border-radius: 50%;
     cursor: pointer;
     border: none;
+  }
+
+  .placement-warning {
+    font-size: 0.68rem;
+    color: #f2c46d;
+    margin-top: -0.25rem;
   }
 
   .control-row.disabled {
