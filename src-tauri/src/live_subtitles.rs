@@ -145,7 +145,7 @@ pub fn start_live_subtitles(
     audio_stream_index: Option<i64>,
     language: String,
     // Language code to translate speech into, if any: "de", "fr", "es", "ru", "tr", "it",
-    // "nl" for English speech, or "en" for German, French, Spanish or Hindi speech.
+    // "nl" for English speech, or "en" for speech in the languages translate.rs covers.
     translate_to: Option<String>,
 ) -> Result<LiveSessionInfo, String> {
     if let Some(target) = &translate_to {
