@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { AlertTriangle, Check, ChevronDown, Copy, Minus, X } from "lucide-svelte";
@@ -40,6 +41,28 @@
     [`Status: ${status}`, `Error: ${message}`, `Screen: ${screen}`, `Time: ${time}`].join("\n"),
   );
 
+  // The issue page is public, so the details sent there leave out local file paths: the
+  // player and audio screens carry the media path in their route, and error messages can
+  // quote paths. The details panel and "Copy details" keep everything.
+  function withoutPaths(text: string): string {
+    // A path runs to the next quote or the end of the line, since folder names often
+    // contain spaces. Also catches URL-encoded paths (C%3A%5C...). A drive letter must not
+    // end a longer word, so web addresses ("http://") are left alone.
+    return text
+      .replace(/(?<![A-Za-z])[A-Za-z](?::[\\/]|%3A%5C|%3A%2F)[^"'`\n]*/gi, "<path>")
+      .replace(/\/(?:Users|home|Volumes|mnt|media)\/[^"'`\n]*/g, "<path>")
+      .replace(/\\\\[^"'`\n]+/g, "<path>");
+  }
+
+  let publicDetails = $derived(
+    [
+      `Status: ${status}`,
+      `Error: ${withoutPaths(message)}`,
+      `Screen: /${screen.split("/").filter(Boolean)[0] ?? ""}`,
+      `Time: ${time}`,
+    ].join("\n"),
+  );
+
   async function copyDetails() {
     try {
       await navigator.clipboard.writeText(details);
@@ -52,8 +75,8 @@
 
   function reportIssue() {
     const fence = "```";
-    const body = `**What were you doing?**\n\n\n**Details**\n${fence}\n${details}\n${fence}`;
-    const url = `${ISSUES_URL}?title=${encodeURIComponent(`Error: ${message}`)}&body=${encodeURIComponent(body)}`;
+    const body = `**What were you doing?**\n\n\n**Details**\n${fence}\n${publicDetails}\n${fence}`;
+    const url = `${ISSUES_URL}?title=${encodeURIComponent(`Error: ${withoutPaths(message)}`)}&body=${encodeURIComponent(body)}`;
     openUrl(url).catch((err) => console.error("Failed to open issue page:", err));
   }
 
@@ -61,8 +84,10 @@
     await getCurrentWindow().minimize();
   }
 
+  // Quits the same way as the gallery's close button; the window itself is not allowed
+  // to close() (no core:window:allow-close permission).
   async function closeApp() {
-    await getCurrentWindow().close();
+    await invoke("exit_app");
   }
 </script>
 
