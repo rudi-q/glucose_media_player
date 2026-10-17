@@ -247,9 +247,9 @@
     font-size: 0.8125rem;
     font-family: monospace;
     color: rgba(255, 255, 255, 0.7);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    /* Show the whole path, wrapping onto more lines when needed (paths have few spaces). */
+    overflow-wrap: anywhere;
+    line-height: 1.45;
     min-width: 0;
   }
 
