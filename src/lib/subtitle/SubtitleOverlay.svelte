@@ -1,8 +1,9 @@
 <script lang="ts">
   import { activeSubtitleStyle } from '$lib/subtitle/subtitleStyleStore';
   import { parseVtt, type VttCue } from '$lib/subtitle/vttParser';
+  import { choosePlacement, scoreVideoFrame, type SubtitlePlacement } from '$lib/subtitle/smartPosition';
 
-  let { vttContent, currentTime, enabled, videoElement, liveCues = null, secondaryCues = null, placeholder = null }: {
+  let { vttContent, currentTime, enabled, videoElement, liveCues = null, secondaryCues = null, placeholder = null, smartPosition = false }: {
     vttContent: string | null;
     currentTime: number;
     enabled: boolean;
@@ -13,6 +14,8 @@
     secondaryCues?: VttCue[] | null;
     // Shown when no cue is active, e.g. while live subtitles are still being generated.
     placeholder?: string | null;
+    // Move cues to the top while the bottom of the picture is bright or busy.
+    smartPosition?: boolean;
   } = $props();
 
   let cues = $derived(liveCues ?? (vttContent ? parseVtt(vttContent) : []));
@@ -22,6 +25,49 @@
   );
   let showPlaceholder = $derived(activeCues.length === 0 && activeSecondary.length === 0 && !!placeholder);
   let style = $derived($activeSubtitleStyle);
+
+  // Smart position: decided once when a new set of cues appears, never while one is shown.
+  // Cues stay hidden for the few milliseconds the frame takes to score, so they do not
+  // appear at the bottom and then jump.
+  let placement = $state<SubtitlePlacement>('bottom');
+  let deciding = $state(false);
+  let cueKey = $derived(activeCues.map(c => `${c.start}|${c.end}`).join(','));
+  let decideToken = 0;
+  // Development only: what the last decision saw, shown in a corner of the video.
+  let smartDebug = $state<string | null>(null);
+
+  $effect(() => {
+    const key = cueKey;
+    const video = videoElement;
+    if (!smartPosition) {
+      placement = 'bottom';
+      deciding = false;
+      return;
+    }
+    if (!key || !video) return;
+    const token = ++decideToken;
+    deciding = true;
+    const started = performance.now();
+    // Never hold a cue back for long, even if the frame cannot be read.
+    const fallback = setTimeout(() => {
+      if (token === decideToken) deciding = false;
+    }, 150);
+    scoreVideoFrame(video).then(scores => {
+      if (token !== decideToken) return;
+      if (scores) {
+        const next = choosePlacement(placement, scores.bottom, scores.top);
+        if (import.meta.env.DEV) {
+          const band = (b: typeof scores.bottom) =>
+            `${b.busy.toFixed(2)} (light ${b.brightness.toFixed(2)}, detail ${b.edges.toFixed(2)}, text ${b.textRow.toFixed(2)})`;
+          smartDebug = `${next.toUpperCase()} | bottom ${band(scores.bottom)} | top ${band(scores.top)} | ${(performance.now() - started).toFixed(0)} ms`;
+        }
+        placement = next;
+      }
+      clearTimeout(fallback);
+      deciding = false;
+    });
+    return () => clearTimeout(fallback);
+  });
 
   // Track the exact displayed video content rect within .video-container.
   // Needed because cinematic mode constrains the video element (max-width/max-height)
@@ -154,6 +200,12 @@
   }
 </script>
 
+{#if import.meta.env.DEV && smartPosition && smartDebug}
+  <div class="smart-debug" style={overlayPositionStyle}>
+    <span>{smartDebug}</span>
+  </div>
+{/if}
+
 {#if enabled && (activeCues.length > 0 || activeSecondary.length > 0 || showPlaceholder)}
   <div
     class="subtitle-overlay"
@@ -161,7 +213,11 @@
     aria-live="polite"
     aria-atomic="true"
   >
-    <div class="subtitle-cues" style="bottom: {style.position}%">
+    <div
+      class="subtitle-cues"
+      class:deciding
+      style="{placement === 'top' ? 'top' : 'bottom'}: {style.position}%"
+    >
       {#each activeCues as cue, i (`${i}-${cue.start}-${cue.end}-${cue.text}`)}
         <div
           class="cue-wrapper"
@@ -216,6 +272,27 @@
     align-items: center;
     gap: 0.3rem;
     padding: 0 6%;
+  }
+
+  .smart-debug {
+    position: absolute;
+    pointer-events: none;
+    z-index: 11;
+  }
+
+  .smart-debug span {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.7);
+    color: #7fffb0;
+    font: 11px/1.4 ui-monospace, Consolas, monospace;
+  }
+
+  .subtitle-cues.deciding {
+    visibility: hidden;
   }
 
   .cue-wrapper {

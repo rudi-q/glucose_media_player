@@ -72,6 +72,8 @@
     Wind,
     RotateCcw,
     Plus,
+    ArrowDownToLine,
+    Sparkles,
   } from "lucide-svelte";
   import Button from "$lib/components/Button.svelte";
   import LibrarySettings from "$lib/components/LibrarySettings.svelte";
@@ -98,6 +100,10 @@
     LIVE_DUAL_SUBTITLES_KEY,
     LIVE_DUAL_SUBTITLES_EVENT,
     getLiveDualSubtitles,
+    SUBTITLE_POSITION_KEY,
+    SUBTITLE_POSITION_EVENT,
+    getSubtitlePosition,
+    type SubtitlePosition,
     type LiveSubtitleWait,
     type DefaultPlayMode,
     type EndBehavior,
@@ -195,6 +201,21 @@
     },
   ];
 
+  const subtitlePositionOptions: PlayerPreferenceOption<SubtitlePosition>[] = [
+    {
+      value: "bottom",
+      icon: ArrowDownToLine,
+      label: "Bottom",
+      description: "Always at the bottom of the picture",
+    },
+    {
+      value: "smart",
+      icon: Sparkles,
+      label: "Smart",
+      description: "Moves to the top when the bottom is bright or busy, like on-screen text",
+    },
+  ];
+
   const _savedDefaultMode = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_default_mode") : null;
   let defaultPlayMode = $state<DefaultPlayMode>(
     getDefaultPlayMode(_savedDefaultMode)
@@ -218,6 +239,26 @@
 
   $effect(() => {
     if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_fade", fadeMode);
+  });
+
+  const _savedSubtitlePosition =
+    typeof localStorage !== "undefined" ? localStorage.getItem(SUBTITLE_POSITION_KEY) : null;
+  let subtitlePosition = $state<SubtitlePosition>(getSubtitlePosition(_savedSubtitlePosition));
+
+  $effect(() => {
+    if (!showOnboarding && !skipPlayerPreferencePersist) {
+      localStorage.setItem(SUBTITLE_POSITION_KEY, subtitlePosition);
+      window.dispatchEvent(new Event(SUBTITLE_POSITION_EVENT));
+    }
+  });
+
+  // The player's subtitle style panel changes the same setting.
+  $effect(() => {
+    const read = () => {
+      subtitlePosition = getSubtitlePosition(localStorage.getItem(SUBTITLE_POSITION_KEY));
+    };
+    window.addEventListener(SUBTITLE_POSITION_EVENT, read);
+    return () => window.removeEventListener(SUBTITLE_POSITION_EVENT, read);
   });
 
   let autoLiveSubtitles = $state(
@@ -436,6 +477,7 @@
     defaultPlayMode = getDefaultPlayMode(null);
     endBehavior = getEndBehavior(null);
     fadeMode = getFadeMode(null);
+    subtitlePosition = getSubtitlePosition(null);
   }
 
   async function clearPlayerPreferences() {
@@ -445,6 +487,8 @@
       localStorage.removeItem("glucose_default_mode");
       localStorage.removeItem("glucose_end_behavior");
       localStorage.removeItem("glucose_fade");
+      localStorage.removeItem(SUBTITLE_POSITION_KEY);
+      window.dispatchEvent(new Event(SUBTITLE_POSITION_EVENT));
     }
     await tick();
     skipPlayerPreferencePersist = false;
@@ -1291,6 +1335,13 @@
               description="Controls how smoothly volume transitions when you play or pause."
               bind:value={fadeMode}
               options={fadeModeOptions}
+            />
+            <PlayerPreferencesPicker
+              id="subtitle-position"
+              label="Subtitle Position"
+              description="Choose where subtitles appear. Smart keeps them off bright or busy parts of the picture."
+              bind:value={subtitlePosition}
+              options={subtitlePositionOptions}
             />
             <div class="reset-prefs-row">
               <button class="reset-prefs-btn" onclick={resetPlayerPreferences}>

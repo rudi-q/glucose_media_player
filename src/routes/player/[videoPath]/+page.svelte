@@ -82,6 +82,9 @@
     LIVE_DUAL_SUBTITLES_KEY,
     LIVE_DUAL_SUBTITLES_EVENT,
     getLiveDualSubtitles,
+    SUBTITLE_POSITION_KEY,
+    SUBTITLE_POSITION_EVENT,
+    getSubtitlePosition,
     getFadeDurationMs,
   } from "$lib/utils/playerPreferences";
   import { generateThumbnail } from "$lib/utils/thumbnail";
@@ -187,6 +190,17 @@
     read();
     window.addEventListener(LIVE_DUAL_SUBTITLES_EVENT, read);
     return () => window.removeEventListener(LIVE_DUAL_SUBTITLES_EVENT, read);
+  });
+
+  let smartSubtitlePosition = $state(false);
+
+  $effect(() => {
+    const read = () => {
+      smartSubtitlePosition = getSubtitlePosition(localStorage.getItem(SUBTITLE_POSITION_KEY)) === "smart";
+    };
+    read();
+    window.addEventListener(SUBTITLE_POSITION_EVENT, read);
+    return () => window.removeEventListener(SUBTITLE_POSITION_EVENT, read);
   });
   let liveState = $state<LiveSubtitleStatus["state"] | null>(null);
   let liveError = $state<string | null>(null);
@@ -2260,6 +2274,7 @@
       {videoElement}
       liveCues={liveActive ? liveCues : null}
       secondaryCues={liveActive && liveDualSubtitles ? liveOriginalCues : null}
+      smartPosition={smartSubtitlePosition}
       placeholder={livePlaceholder}
     />
   </div>

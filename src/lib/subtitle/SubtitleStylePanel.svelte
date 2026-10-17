@@ -2,8 +2,23 @@
   import { X } from 'lucide-svelte';
   import { subtitleStyleStore, activeSubtitleStyle } from '$lib/subtitle/subtitleStyleStore';
   import { SUBTITLE_PRESETS, type SubtitleStyle } from '$lib/subtitle/subtitlePresets';
+  import {
+    SUBTITLE_POSITION_KEY,
+    SUBTITLE_POSITION_EVENT,
+    getSubtitlePosition,
+    type SubtitlePosition,
+  } from '$lib/utils/playerPreferences';
 
   let { onClose }: { onClose: () => void } = $props();
+
+  // Same setting as Settings > Player > Subtitle Position; the event keeps both in step.
+  let placement = $state<SubtitlePosition>(getSubtitlePosition(localStorage.getItem(SUBTITLE_POSITION_KEY)));
+
+  function setPlacement(value: SubtitlePosition) {
+    placement = value;
+    localStorage.setItem(SUBTITLE_POSITION_KEY, value);
+    window.dispatchEvent(new Event(SUBTITLE_POSITION_EVENT));
+  }
 
   $effect(() => {
     function handleKeydown(e: KeyboardEvent) {
@@ -112,6 +127,24 @@
           oninput={(e) => subtitleStyleStore.customize({ position: +e.currentTarget.value })}
         />
         <span class="slider-value">{$activeSubtitleStyle.position}%</span>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <span class="control-label">Placement</span>
+      <div class="font-buttons">
+        <button
+          class="font-btn"
+          class:active={placement === 'bottom'}
+          title="Always at the bottom of the picture"
+          onclick={() => setPlacement('bottom')}
+        >Bottom</button>
+        <button
+          class="font-btn"
+          class:active={placement === 'smart'}
+          title="Moves to the top when the bottom of the picture is bright or busy, like on-screen text"
+          onclick={() => setPlacement('smart')}
+        >Smart</button>
       </div>
     </div>
 
