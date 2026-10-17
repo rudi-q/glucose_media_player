@@ -1,3 +1,4 @@
+mod face_detect;
 mod ffmpeg;
 mod live_cache;
 mod live_log;
@@ -2401,6 +2402,8 @@ pub fn run() {
         })
         .invoke_handler(live_log::with_command_log(tauri::generate_handler![
             subtitle_match::find_nearby_subtitles,
+            face_detect::detect_faces,
+            face_detect::preload_face_detection,
             open_file_dialog,
             open_folder_dialog,
             open_subtitle_dialog,

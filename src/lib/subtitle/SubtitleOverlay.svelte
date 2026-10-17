@@ -1,7 +1,12 @@
 <script lang="ts">
   import { activeSubtitleStyle } from '$lib/subtitle/subtitleStyleStore';
   import { parseVtt, type VttCue } from '$lib/subtitle/vttParser';
-  import { choosePlacement, scoreVideoFrame, type SubtitlePlacement } from '$lib/subtitle/smartPosition';
+  import {
+    choosePlacement,
+    preloadFaceDetection,
+    scoreVideoFrame,
+    type SubtitlePlacement,
+  } from '$lib/subtitle/smartPosition';
 
   let { vttContent, currentTime, enabled, videoElement, liveCues = null, secondaryCues = null, placeholder = null, smartPosition = false }: {
     vttContent: string | null;
@@ -27,14 +32,23 @@
   let style = $derived($activeSubtitleStyle);
 
   // Smart position: decided once when a new set of cues appears, never while one is shown.
-  // Cues stay hidden for the few milliseconds the frame takes to score, so they do not
-  // appear at the bottom and then jump.
+  // Cues stay hidden while the frame is scored (usually 20-50 ms with face detection), so
+  // they do not appear at the bottom and then jump.
   let placement = $state<SubtitlePlacement>('bottom');
   let deciding = $state(false);
   let cueKey = $derived(activeCues.map(c => `${c.start}|${c.end}`).join(','));
   let decideToken = 0;
   // Development only: what the last decision saw, shown in a corner of the video.
   let smartDebug = $state<string | null>(null);
+
+  $effect(() => {
+    const video = videoElement;
+    if (!smartPosition || !video) return;
+    const preload = () => preloadFaceDetection(video);
+    preload();
+    video.addEventListener('loadedmetadata', preload);
+    return () => video.removeEventListener('loadedmetadata', preload);
+  });
 
   $effect(() => {
     const key = cueKey;
@@ -51,14 +65,14 @@
     // Never hold a cue back for long, even if the frame cannot be read.
     const fallback = setTimeout(() => {
       if (token === decideToken) deciding = false;
-    }, 150);
+    }, 200);
     scoreVideoFrame(video).then(scores => {
       if (token !== decideToken) return;
       if (scores) {
         const next = choosePlacement(placement, scores.bottom, scores.top);
         if (import.meta.env.DEV) {
           const band = (b: typeof scores.bottom) =>
-            `${b.busy.toFixed(2)} (light ${b.brightness.toFixed(2)}, detail ${b.edges.toFixed(2)}, text ${b.textRow.toFixed(2)})`;
+            `${b.busy.toFixed(2)} (light ${b.brightness.toFixed(2)}, detail ${b.edges.toFixed(2)}, text ${b.textRow.toFixed(2)}, faces ${b.faces})`;
           smartDebug = `${next.toUpperCase()} | bottom ${band(scores.bottom)} | top ${band(scores.top)} | ${(performance.now() - started).toFixed(0)} ms`;
         }
         placement = next;
