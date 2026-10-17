@@ -65,14 +65,15 @@ export function getLiveDualSubtitles(raw?: string | null): boolean {
   return raw === "true";
 }
 
-// Where subtitles sit: always at the bottom, or moved to the top while the bottom of the
-// picture is bright or busy. Settings dispatches the event so an open player updates.
-export type SubtitlePosition = "bottom" | "smart";
+// Where subtitles sit: fixed where the subtitle style's Position slider puts them, or
+// "smart": at the bottom, moved to the top to keep off on-screen text, faces and bright
+// areas. Settings dispatches the event so an open player updates.
+export type SubtitlePosition = "fixed" | "smart";
 export const SUBTITLE_POSITION_KEY = "glucose_subtitle_position";
 export const SUBTITLE_POSITION_EVENT = "glucose-subtitle-position-changed";
 
 export function getSubtitlePosition(raw?: string | null): SubtitlePosition {
-  return raw === "smart" ? "smart" : "bottom";
+  return raw === "smart" ? "smart" : "fixed";
 }
 
 export function getFadeDurationMs(raw?: string | null): number {

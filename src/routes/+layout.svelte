@@ -72,7 +72,7 @@
     Wind,
     RotateCcw,
     Plus,
-    ArrowDownToLine,
+    Pin,
     Sparkles,
   } from "lucide-svelte";
   import Button from "$lib/components/Button.svelte";
@@ -203,16 +203,16 @@
 
   const subtitlePositionOptions: PlayerPreferenceOption<SubtitlePosition>[] = [
     {
-      value: "bottom",
-      icon: ArrowDownToLine,
-      label: "Bottom",
-      description: "Always at the bottom of the picture",
+      value: "fixed",
+      icon: Pin,
+      label: "Fixed",
+      description: "Always where the Position slider in the subtitle style puts them",
     },
     {
       value: "smart",
       icon: Sparkles,
       label: "Smart",
-      description: "Moves to the top when the bottom is bright or busy, like on-screen text",
+      description: "At the bottom, moving to the top to keep off on-screen text, faces and bright areas",
     },
   ];
 
@@ -1339,7 +1339,7 @@
             <PlayerPreferencesPicker
               id="subtitle-position"
               label="Subtitle Position"
-              description="Choose where subtitles appear. Smart keeps them off bright or busy parts of the picture."
+              description="Choose where subtitles appear. Smart keeps them off on-screen text, faces and bright parts of the picture."
               bind:value={subtitlePosition}
               options={subtitlePositionOptions}
             />

@@ -116,35 +116,36 @@
     </div>
 
     <div class="control-row">
+      <span class="control-label">Placement</span>
+      <div class="font-buttons">
+        <button
+          class="font-btn"
+          class:active={placement === 'fixed'}
+          title="Always where the Position slider puts them"
+          onclick={() => setPlacement('fixed')}
+        >Fixed</button>
+        <button
+          class="font-btn"
+          class:active={placement === 'smart'}
+          title="At the bottom, moving to the top to keep off on-screen text, faces and bright areas"
+          onclick={() => setPlacement('smart')}
+        >Smart</button>
+      </div>
+    </div>
+
+    <div class="control-row" class:disabled={placement === 'smart'}>
       <span class="control-label">Position</span>
-      <div class="slider-row">
+      <div class="slider-row" title={placement === 'smart' ? 'Smart placement chooses the position' : undefined}>
         <input
           type="range"
           min="4"
           max="90"
           step="1"
+          disabled={placement === 'smart'}
           value={$activeSubtitleStyle.position}
           oninput={(e) => subtitleStyleStore.customize({ position: +e.currentTarget.value })}
         />
-        <span class="slider-value">{$activeSubtitleStyle.position}%</span>
-      </div>
-    </div>
-
-    <div class="control-row">
-      <span class="control-label">Placement</span>
-      <div class="font-buttons">
-        <button
-          class="font-btn"
-          class:active={placement === 'bottom'}
-          title="Always at the bottom of the picture"
-          onclick={() => setPlacement('bottom')}
-        >Bottom</button>
-        <button
-          class="font-btn"
-          class:active={placement === 'smart'}
-          title="Moves to the top when the bottom of the picture is bright or busy, like on-screen text"
-          onclick={() => setPlacement('smart')}
-        >Smart</button>
+        <span class="slider-value">{placement === 'smart' ? 'Auto' : `${$activeSubtitleStyle.position}%`}</span>
       </div>
     </div>
 
@@ -374,6 +375,14 @@
     border-radius: 50%;
     cursor: pointer;
     border: none;
+  }
+
+  .control-row.disabled {
+    opacity: 0.4;
+  }
+
+  .slider-row input[type='range']:disabled::-webkit-slider-thumb {
+    cursor: not-allowed;
   }
 
   .slider-value {

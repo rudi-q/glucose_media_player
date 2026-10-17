@@ -35,6 +35,9 @@
   // Cues stay hidden while the frame is scored (usually 20-50 ms with face detection), so
   // they do not appear at the bottom and then jump.
   let placement = $state<SubtitlePlacement>('bottom');
+  // Distance from the edge in smart mode, as a percentage: the presets' standard position.
+  // The Position slider only applies to fixed placement.
+  const SMART_EDGE_OFFSET = 8;
   let deciding = $state(false);
   let cueKey = $derived(activeCues.map(c => `${c.start}|${c.end}`).join(','));
   let decideToken = 0;
@@ -230,7 +233,7 @@
     <div
       class="subtitle-cues"
       class:deciding
-      style="{placement === 'top' ? 'top' : 'bottom'}: {style.position}%"
+      style="{placement === 'top' ? 'top' : 'bottom'}: {smartPosition ? SMART_EDGE_OFFSET : style.position}%"
     >
       {#each activeCues as cue, i (`${i}-${cue.start}-${cue.end}-${cue.text}`)}
         <div
