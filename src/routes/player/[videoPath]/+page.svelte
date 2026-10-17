@@ -87,6 +87,13 @@
     getSubtitlePosition,
     getFadeDurationMs,
   } from "$lib/utils/playerPreferences";
+  import {
+    adviseFeatures,
+    HARDWARE_CHECK_KEY,
+    loadHardwareCheck,
+    type FeatureId,
+    type Verdict,
+  } from "$lib/utils/featureAdvice";
   import { generateThumbnail } from "$lib/utils/thumbnail";
   import { setWindowTitle } from "$lib/utils/windowTitle";
 
@@ -210,6 +217,28 @@
   });
 
   let smartSubtitlePosition = $state(false);
+
+  // Verdicts from the hardware check (Features tab), for warnings in the AI model menu.
+  let featureVerdicts = $state<Partial<Record<FeatureId, Verdict>>>({});
+
+  $effect(() => {
+    const read = () => {
+      const check = loadHardwareCheck(localStorage.getItem(HARDWARE_CHECK_KEY));
+      featureVerdicts = check
+        ? Object.fromEntries(adviseFeatures(check.report).map((a) => [a.id, a.verdict]))
+        : {};
+    };
+    read();
+    window.addEventListener(HARDWARE_CHECK_KEY, read);
+    return () => window.removeEventListener(HARDWARE_CHECK_KEY, read);
+  });
+
+  function hardwareWarning(id: FeatureId): string {
+    const verdict = featureVerdicts[id];
+    if (verdict === "poor") return " • Not recommended on this PC";
+    if (verdict === "slow") return " • May be slow on this PC";
+    return "";
+  }
 
   $effect(() => {
     const read = () => {
@@ -2680,7 +2709,7 @@
                 {#if !liveActive && liveModelAvailable}
                   <button class="model-option" onclick={() => enableLiveSubtitles()}>
                     <span class="model-name">Live (real-time)</span>
-                    <span class="model-desc">Subtitles appear as you watch</span>
+                    <span class="model-desc">Subtitles appear as you watch{hardwareWarning("live")}</span>
                   </button>
                 {/if}
                 {#each setupStatus?.models_installed ?? [] as model}
@@ -2712,7 +2741,7 @@
                       <span class="model-name">Large V3 Turbo</span>
                       <span class="model-desc"
                         >{getEstimatedTranscriptionTime("large-v3-turbo")} • Most
-                        Accurate</span
+                        Accurate{hardwareWarning("generation")}</span
                       >
                     </button>
                   {/if}

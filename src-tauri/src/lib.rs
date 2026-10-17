@@ -1,5 +1,6 @@
 mod face_detect;
 mod ffmpeg;
+mod hardware_check;
 mod live_cache;
 mod live_log;
 mod live_subtitles;
@@ -2427,6 +2428,7 @@ pub fn run() {
             cancel_subtitle_generation,
             live_subtitles::start_live_subtitles,
             live_subtitles::live_subtitle_model,
+            hardware_check::run_hardware_check,
             live_subtitles::stop_live_subtitles,
             live_subtitles::update_live_subtitles_playhead,
             live_cache::load_live_cache,

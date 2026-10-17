@@ -74,6 +74,7 @@
     Plus,
     Pin,
     Sparkles,
+    Activity,
   } from "lucide-svelte";
   import Button from "$lib/components/Button.svelte";
   import LibrarySettings from "$lib/components/LibrarySettings.svelte";
@@ -109,6 +110,16 @@
     type EndBehavior,
     type FadeMode,
   } from "$lib/utils/playerPreferences";
+  import {
+    adviseFeatures,
+    HARDWARE_CHECK_KEY,
+    HARDWARE_CHECK_VERSION,
+    loadHardwareCheck,
+    VERDICT_LABELS,
+    type FeatureId,
+    type HardwareReport,
+    type StoredHardwareCheck,
+  } from "$lib/utils/featureAdvice";
   import {
     appSettings,
     setupStore,
@@ -295,6 +306,77 @@
     if (lang) localStorage.setItem(LIVE_TRANSLATE_KEY, lang);
     else localStorage.removeItem(LIVE_TRANSLATE_KEY);
   }
+
+  // Hardware check (Features tab): measures what this PC can run and advises per feature.
+  // It runs once by itself after onboarding, then again only from "Check again".
+  let hardwareCheck = $state<StoredHardwareCheck | null>(
+    loadHardwareCheck(typeof localStorage !== "undefined" ? localStorage.getItem(HARDWARE_CHECK_KEY) : null),
+  );
+  let hardwareChecking = $state(false);
+  let hardwareCheckError = $state<string | null>(null);
+  let featureAdvice = $derived(hardwareCheck ? adviseFeatures(hardwareCheck.report) : []);
+  const FEATURE_TURNED_OFF_NAMES: Record<FeatureId, string> = {
+    live: "auto-start for live subtitles",
+    translation: "live translation",
+    smart: "smart subtitle position",
+    generation: "AI subtitles",
+  };
+
+  // `first` is the automatic check: features it rates "Not recommended" are switched off
+  // (the user can switch them back on). "Check again" never changes settings.
+  async function runHardwareCheck(first = false) {
+    if (hardwareChecking) return;
+    hardwareChecking = true;
+    hardwareCheckError = null;
+    try {
+      const report = await invoke<HardwareReport>("run_hardware_check");
+      const turnedOff: FeatureId[] = [];
+      if (first) {
+        for (const advice of adviseFeatures(report)) {
+          if (advice.verdict !== "poor") continue;
+          if (advice.id === "live" && autoLiveSubtitles) {
+            toggleAutoLiveSubtitles();
+            turnedOff.push("live");
+          } else if (advice.id === "translation" && liveTranslate !== "off") {
+            setLiveTranslate("off");
+            turnedOff.push("translation");
+          } else if (advice.id === "smart" && subtitlePosition === "smart") {
+            subtitlePosition = "fixed";
+            turnedOff.push("smart");
+          }
+        }
+      }
+      hardwareCheck = {
+        version: HARDWARE_CHECK_VERSION,
+        checkedAt: new Date().toISOString(),
+        report,
+        turnedOff: first ? turnedOff : (hardwareCheck?.turnedOff ?? []),
+      };
+      localStorage.setItem(HARDWARE_CHECK_KEY, JSON.stringify(hardwareCheck));
+      window.dispatchEvent(new Event(HARDWARE_CHECK_KEY));
+    } catch (err) {
+      hardwareCheckError = String(err);
+    } finally {
+      hardwareChecking = false;
+    }
+  }
+
+  // The first check waits until onboarding is done and the library is showing, since the
+  // speech test keeps the processor busy for a few seconds and would make a playing video
+  // stutter (Glucose can open straight into the player from a file).
+  let firstHardwareCheckTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    const ready = !showOnboarding && !hardwareCheck && isOnGallery;
+    if (ready && !firstHardwareCheckTimer) {
+      firstHardwareCheckTimer = setTimeout(() => {
+        firstHardwareCheckTimer = null;
+        if (isOnGallery && !hardwareCheck) runHardwareCheck(true);
+      }, 5000);
+    } else if (!ready && firstHardwareCheckTimer) {
+      clearTimeout(firstHardwareCheckTimer);
+      firstHardwareCheckTimer = null;
+    }
+  });
 
   let liveDualSubtitles = $state(
     getLiveDualSubtitles(
@@ -798,6 +880,14 @@
           >
             <Play size={18} />
             <span>Player</span>
+          </button>
+          <button
+            class="sidebar-tab"
+            class:active={selectedTab === "features"}
+            onclick={() => (selectedTab = "features")}
+          >
+            <Activity size={18} />
+            <span>Features</span>
           </button>
           <button
             class="sidebar-tab"
@@ -1351,6 +1441,78 @@
               <button class="reset-prefs-btn reset-prefs-btn--clear" onclick={clearPlayerPreferences}>
                 Clear preferences
               </button>
+            </div>
+          {:else if selectedTab === "features"}
+            <div class="settings-section">
+              <h3>Features on this PC</h3>
+              <p class="settings-description">
+                Glucose tested how well the heavier features run on this computer. Features
+                marked "Not recommended" were turned off the first time; you can still turn them
+                on in their settings.
+              </p>
+
+              {#if hardwareCheck}
+                {@const r = hardwareCheck.report}
+                <div class="hw-summary">
+                  {[
+                    r.cpu_name,
+                    `${r.threads} threads`,
+                    r.ram_gb !== null ? `${Math.round(r.ram_gb)} GB memory` : null,
+                    r.gpu_name,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </div>
+
+                <div class="settings-group">
+                  {#each featureAdvice as advice (advice.id)}
+                    <div class="settings-item">
+                      <div class="settings-item-label">
+                        <div class="settings-item-title">{advice.name}</div>
+                        <div class="settings-item-desc">{advice.reason}</div>
+                      </div>
+                      <div class="settings-item-action">
+                        <span class="verdict-chip verdict-{advice.verdict}">{VERDICT_LABELS[advice.verdict]}</span>
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+
+                {#if hardwareCheck.turnedOff.length > 0}
+                  <p class="hw-note">
+                    Turned off after the first check: {hardwareCheck.turnedOff
+                      .map((id) => FEATURE_TURNED_OFF_NAMES[id])
+                      .join(", ")}.
+                  </p>
+                {/if}
+                <p class="hw-note">
+                  Results are lower while other programs keep the PC busy. Close heavy apps and
+                  check again for the best result.
+                </p>
+              {:else if !hardwareChecking}
+                <p class="hw-note">This PC has not been checked yet.</p>
+              {/if}
+
+              {#if hardwareCheckError}
+                <p class="hw-error">The check failed: {hardwareCheckError}</p>
+              {/if}
+
+              <div class="hw-actions">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={hardwareChecking}
+                  disabled={hardwareChecking}
+                  onclick={() => runHardwareCheck(false)}
+                >
+                  {hardwareChecking ? "Checking..." : hardwareCheck ? "Check again" : "Check now"}
+                </Button>
+                {#if hardwareChecking}
+                  <span class="hw-note">This takes a few seconds, up to a minute on slower PCs.</span>
+                {:else if hardwareCheck}
+                  <span class="hw-note">Last checked {new Date(hardwareCheck.checkedAt).toLocaleString()}</span>
+                {/if}
+              </div>
             </div>
           {:else if selectedTab === "shortcuts"}
             <div class="settings-section">
@@ -2809,6 +2971,69 @@
   .setup-warning a {
     color: var(--color-accent);
     text-decoration: underline;
+  }
+
+  /* Features tab */
+  .hw-summary {
+    font-size: 0.8125rem;
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 1rem;
+    overflow-wrap: anywhere;
+  }
+
+  .verdict-chip {
+    white-space: nowrap;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.625rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+  }
+
+  .verdict-good {
+    color: #7ee2a8;
+    background: rgba(126, 226, 168, 0.1);
+    border-color: rgba(126, 226, 168, 0.3);
+  }
+
+  .verdict-slow {
+    color: #f2c46d;
+    background: rgba(242, 196, 109, 0.1);
+    border-color: rgba(242, 196, 109, 0.3);
+  }
+
+  .verdict-poor {
+    color: #f08a8a;
+    background: rgba(240, 138, 138, 0.1);
+    border-color: rgba(240, 138, 138, 0.3);
+  }
+
+  .verdict-unknown {
+    color: rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .hw-note {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.45);
+    margin: 0 0 0.75rem 0;
+  }
+
+  .hw-error {
+    font-size: 0.8125rem;
+    color: rgba(239, 68, 68, 0.9);
+    margin: 0 0 0.75rem 0;
+  }
+
+  .hw-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .hw-actions .hw-note {
+    margin: 0;
   }
 
   /* Reset preferences */
