@@ -46,12 +46,16 @@
   // quote paths. The details panel and "Copy details" keep everything.
   function withoutPaths(text: string): string {
     // A path runs to the next quote or the end of the line, since folder names often
-    // contain spaces. Also catches URL-encoded paths (C%3A%5C...). A drive letter must not
-    // end a longer word, so web addresses ("http://") are left alone.
+    // contain spaces. Web addresses are left alone: their scheme has two slashes
+    // ("https://") where a drive path has one ("C:/"), and the slashes inside an address
+    // follow its host name, never a space or the start of the text.
     return text
-      .replace(/(?<![A-Za-z])[A-Za-z](?::[\\/]|%3A%5C|%3A%2F)[^"'`\n]*/gi, "<path>")
-      .replace(/\/(?:Users|home|Volumes|mnt|media)\/[^"'`\n]*/g, "<path>")
-      .replace(/\\\\[^"'`\n]+/g, "<path>");
+      // Drive paths, also URL-encoded (C%3A%5C...).
+      .replace(/[A-Za-z](?::\\|:\/(?!\/)|%3A%5C|%3A%2F(?!%2F))[^"'`\n]*/gi, "<path>")
+      // Network paths (\\server\share).
+      .replace(/\\\\[^"'`\n]+/g, "<path>")
+      // Absolute macOS and Linux paths with at least two parts (/home/me/...).
+      .replace(/(?<![\w/:.%-])\/[^\s/"'`]+\/[^"'`\n]*/g, "<path>");
   }
 
   let publicDetails = $derived(

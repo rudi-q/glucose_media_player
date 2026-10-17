@@ -1874,13 +1874,18 @@
     }
   }
 
+  // Checks run when a video opens and whenever the model menu opens; only the latest one
+  // may set the result, so a slower, older check cannot overwrite a newer answer.
+  let liveModelCheckId = 0;
   async function refreshLiveModelAvailable() {
+    const checkId = ++liveModelCheckId;
+    let available = false;
     try {
-      liveModelAvailable = (await invoke<string | null>("live_subtitle_model")) !== null;
+      available = (await invoke<string | null>("live_subtitle_model")) !== null;
     } catch (err) {
       console.log("Live model check failed:", err);
-      liveModelAvailable = false;
     }
+    if (checkId === liveModelCheckId) liveModelAvailable = available;
   }
 
   function openAIFromUnifiedMenu() {
@@ -2611,14 +2616,14 @@
           {#if showModelSelector && !isGeneratingSubtitles}
             <div class="model-selector">
               <div class="model-header">Select AI Model</div>
-              {#if setupStatus && setupStatus.models_installed.length > 0}
+              {#if (setupStatus?.models_installed.length ?? 0) > 0 || liveModelAvailable}
                 {#if !liveActive && liveModelAvailable}
                   <button class="model-option" onclick={() => enableLiveSubtitles()}>
                     <span class="model-name">Live (real-time)</span>
                     <span class="model-desc">Subtitles appear as you watch</span>
                   </button>
                 {/if}
-                {#each setupStatus.models_installed as model}
+                {#each setupStatus?.models_installed ?? [] as model}
                   {#if model === "tiny"}
                     <button
                       class="model-option"
