@@ -170,6 +170,9 @@
     is_default: boolean;
   }
   let embeddedAudioTracks = $state<EmbeddedAudioTrack[]>([]);
+  // Whether a Whisper model live mode can use is installed. Live mode has its own model
+  // list, so the batch models in setupStatus cannot tell.
+  let liveModelAvailable = $state(false);
   let selectedAudioTrackIndex = $state<number | null>(null);
   let audioRemuxPath = $state<string | null>(null);
   let pendingRemuxCleanupPaths = $state<string[]>([]);
@@ -533,14 +536,18 @@
       console.log("Embedded audio track detection failed:", err);
     }
 
+    await refreshLiveModelAvailable();
+    if (isVideoSetupStale(setupId)) return;
+
     // Optional: start live subtitles when the video came with none. Only when a
-    // model is installed and there is audio, so it never surfaces an error by itself.
+    // live-capable model is installed and there is audio, so it never surfaces an error
+    // by itself.
     if (
       !subtitleSrc &&
       embeddedSubtitleTracks.length === 0 &&
       embeddedAudioTracks.length > 0 &&
       getAutoLiveSubtitles(localStorage.getItem(AUTO_LIVE_SUBTITLES_KEY)) &&
-      ((setupStatus || getSetupStatus())?.models_installed.length ?? 0) > 0
+      liveModelAvailable
     ) {
       enableLiveSubtitles(true);
     }
@@ -1909,8 +1916,24 @@
     }
   }
 
+  // Checks run when a video opens and whenever the model menu opens; only the latest one
+  // may set the result, so a slower, older check cannot overwrite a newer answer.
+  let liveModelCheckId = 0;
+  async function refreshLiveModelAvailable() {
+    const checkId = ++liveModelCheckId;
+    let available = false;
+    try {
+      available = (await invoke<string | null>("live_subtitle_model")) !== null;
+    } catch (err) {
+      console.log("Live model check failed:", err);
+    }
+    if (checkId === liveModelCheckId) liveModelAvailable = available;
+  }
+
   function openAIFromUnifiedMenu() {
     showSubtitleMenu = false;
+    // A model may have been downloaded since the video opened.
+    refreshLiveModelAvailable();
     setTimeout(() => {
       showModelSelector = true;
     }, 0);
@@ -1987,7 +2010,13 @@
         startSecs: time,
       });
       liveLastSession = Math.max(liveLastSession, info.session_id);
-      if (!liveActive || liveKey !== key) return;
+      if (!liveActive || liveKey !== key) {
+        // The key changed (e.g. an audio-track switch) while this session was starting.
+        // Its id was not known when the switch raised liveMinSession, so drop its events
+        // explicitly; the replacement session gets a higher id.
+        liveMinSession = Math.max(liveMinSession, info.session_id + 1);
+        return;
+      }
       liveMinSession = Math.max(liveMinSession, info.session_id);
       liveModel = info.model;
       invoke("update_live_subtitles_playhead", {
@@ -2647,14 +2676,14 @@
           {#if showModelSelector && !isGeneratingSubtitles}
             <div class="model-selector">
               <div class="model-header">Select AI Model</div>
-              {#if setupStatus && setupStatus.models_installed.length > 0}
-                {#if !liveActive}
+              {#if (setupStatus?.models_installed.length ?? 0) > 0 || liveModelAvailable}
+                {#if !liveActive && liveModelAvailable}
                   <button class="model-option" onclick={() => enableLiveSubtitles()}>
                     <span class="model-name">Live (real-time)</span>
                     <span class="model-desc">Subtitles appear as you watch</span>
                   </button>
                 {/if}
-                {#each setupStatus.models_installed as model}
+                {#each setupStatus?.models_installed ?? [] as model}
                   {#if model === "tiny"}
                     <button
                       class="model-option"
