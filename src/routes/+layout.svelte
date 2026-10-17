@@ -75,6 +75,9 @@
     Pin,
     Sparkles,
     Activity,
+    Layers,
+    MemoryStick,
+    Gpu,
   } from "lucide-svelte";
   import Button from "$lib/components/Button.svelte";
   import LibrarySettings from "$lib/components/LibrarySettings.svelte";
@@ -112,6 +115,7 @@
   } from "$lib/utils/playerPreferences";
   import {
     adviseFeatures,
+    displayHardwareName,
     featureVerdicts,
     featureWarning,
     HARDWARE_CHECK_KEY,
@@ -1475,15 +1479,35 @@
 
               {#if hardwareCheck}
                 {@const r = hardwareCheck.report}
-                <div class="hw-summary">
-                  {[
-                    r.cpu_name,
-                    `${r.threads} threads`,
-                    r.ram_gb !== null ? `${Math.round(r.ram_gb)} GB memory` : null,
-                    r.gpu_name,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
+                <div class="hw-tiles">
+                  <div class="hw-tile">
+                    <Cpu size={18} />
+                    <div>
+                      <div class="hw-tile-label">Processor</div>
+                      <div class="hw-tile-value">{r.cpu_name ? displayHardwareName(r.cpu_name) : "Unknown"}</div>
+                    </div>
+                  </div>
+                  <div class="hw-tile">
+                    <Layers size={18} />
+                    <div>
+                      <div class="hw-tile-label">Threads</div>
+                      <div class="hw-tile-value">{r.threads}</div>
+                    </div>
+                  </div>
+                  <div class="hw-tile">
+                    <MemoryStick size={18} />
+                    <div>
+                      <div class="hw-tile-label">Memory</div>
+                      <div class="hw-tile-value">{r.ram_gb !== null ? `${Math.round(r.ram_gb)} GB` : "Unknown"}</div>
+                    </div>
+                  </div>
+                  <div class="hw-tile">
+                    <Gpu size={18} />
+                    <div>
+                      <div class="hw-tile-label">Graphics</div>
+                      <div class="hw-tile-value">{r.gpu_name ? displayHardwareName(r.gpu_name) : "Unknown"}</div>
+                    </div>
+                  </div>
                 </div>
 
                 <div class="settings-group">
@@ -2996,10 +3020,47 @@
   }
 
   /* Features tab */
-  .hw-summary {
-    font-size: 0.8125rem;
-    color: rgba(255, 255, 255, 0.7);
-    margin-bottom: 1rem;
+  .hw-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .hw-tile {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.875rem 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    color: rgba(255, 255, 255, 0.55);
+    min-width: 0;
+  }
+
+  .hw-tile > div {
+    min-width: 0;
+  }
+
+  .hw-tile :global(svg) {
+    flex-shrink: 0;
+    margin-top: 0.125rem;
+  }
+
+  .hw-tile-label {
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.45);
+    margin-bottom: 0.2rem;
+  }
+
+  .hw-tile-value {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #fff;
+    line-height: 1.35;
     overflow-wrap: anywhere;
   }
 

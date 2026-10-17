@@ -160,6 +160,17 @@ export function adviseFeatures(r: HardwareReport): FeatureAdvice[] {
   return [live, translation, smart, generation];
 }
 
+// Hardware names without trademark marks and clock speeds, for display:
+// "13th Gen Intel(R) Core(TM) i9-13900H" becomes "13th Gen Intel Core i9-13900H".
+export function displayHardwareName(name: string): string {
+  return name
+    .replace(/\((?:R|TM|C)\)/gi, "")
+    .replace(/\s+CPU\b/i, "")
+    .replace(/\s*@\s*[\d.]+\s*GHz/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // A short warning to show next to a feature's own setting, or null when it runs fine
 // (or was not tested).
 export function featureWarning(verdict: Verdict | undefined): string | null {
