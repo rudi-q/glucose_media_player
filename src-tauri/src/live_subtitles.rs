@@ -45,6 +45,14 @@ pub(crate) fn preferred_model() -> Option<&'static str> {
         .map(|(_, label)| *label)
 }
 
+/// The model live mode would use, or None when no live-capable model is installed. Live
+/// mode has its own model list, so the batch models' "installed" list cannot answer this.
+/// Async so the file checks do not run on the window thread.
+#[tauri::command]
+pub async fn live_subtitle_model() -> Option<String> {
+    preferred_model().map(str::to_string)
+}
+
 // Position in the preference order; lower is better. None for unknown labels.
 pub(crate) fn model_rank(label: &str) -> Option<usize> {
     LIVE_MODELS.iter().position(|(_, l)| *l == label)
@@ -435,6 +443,9 @@ impl Job {
         let mut buffer_start = self.start_secs;
         let mut first_chunk = true;
         let mut eof = false;
+        // Set when FFmpeg stopped with an error rather than at the end of the audio; the
+        // audio read so far is still transcribed, then the session ends with this error.
+        let mut ffmpeg_error: Option<String> = None;
         let mut bytes = vec![0u8; 64 * 1024];
         let mut pending = Vec::<u8>::new();
 
@@ -442,7 +453,10 @@ impl Job {
             // Fill the window from the FFmpeg pipe.
             while !eof && buffer.len() < window {
                 match stdout.read(&mut bytes) {
-                    Ok(0) => eof = true,
+                    Ok(0) => {
+                        eof = true;
+                        ffmpeg_error = self.ffmpeg_exit_error();
+                    }
                     Ok(n) => {
                         pending.extend_from_slice(&bytes[..n]);
                         let whole = pending.len() / 4 * 4;
@@ -453,7 +467,11 @@ impl Job {
                         );
                         pending.drain(..whole);
                     }
-                    Err(_) => eof = true,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(e) => {
+                        eof = true;
+                        ffmpeg_error = Some(format!("Could not read audio from FFmpeg: {e}"));
+                    }
                 }
                 if self.cancelled() {
                     return Ok(());
@@ -545,10 +563,28 @@ impl Job {
             }
         }
 
-        if !self.cancelled() {
-            emit_status(&self.app, self.session_id, "done", "");
+        if self.cancelled() {
+            return Ok(());
         }
+        if let Some(e) = ffmpeg_error {
+            return Err(e);
+        }
+        emit_status(&self.app, self.session_id, "done", "");
         Ok(())
+    }
+
+    // Waits for FFmpeg after its output ended and describes how it failed, or None when it
+    // finished normally (or was stopped on purpose).
+    fn ffmpeg_exit_error(&self) -> Option<String> {
+        let mut child = self.ffmpeg.lock().unwrap().take()?;
+        match child.wait() {
+            Ok(status) if status.success() || self.cancelled() => None,
+            Ok(status) => Some(match status.code() {
+                Some(code) => format!("FFmpeg stopped with an error (exit code {code})"),
+                None => "FFmpeg stopped unexpectedly".to_string(),
+            }),
+            Err(e) => Some(format!("Could not check how FFmpeg finished: {e}")),
+        }
     }
 
     // Blocks while the transcription is far enough ahead of the playhead.

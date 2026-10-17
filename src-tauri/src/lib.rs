@@ -2406,6 +2406,7 @@ pub fn run() {
             generate_subtitles,
             cancel_subtitle_generation,
             live_subtitles::start_live_subtitles,
+            live_subtitles::live_subtitle_model,
             live_subtitles::stop_live_subtitles,
             live_subtitles::update_live_subtitles_playhead,
             live_cache::load_live_cache,
