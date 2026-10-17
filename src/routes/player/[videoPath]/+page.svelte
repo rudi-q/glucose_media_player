@@ -74,7 +74,14 @@
     getAutoLiveSubtitles,
     getEndBehavior,
     getLiveSubtitleWait,
+    getLiveTranslate,
+    type LiveTranslate,
     LIVE_SUBTITLE_WAIT_KEY,
+    LIVE_TRANSLATE_KEY,
+    LIVE_TRANSLATE_NAMES,
+    LIVE_DUAL_SUBTITLES_KEY,
+    LIVE_DUAL_SUBTITLES_EVENT,
+    getLiveDualSubtitles,
     getFadeDurationMs,
   } from "$lib/utils/playerPreferences";
   import { generateThumbnail } from "$lib/utils/thumbnail";
@@ -167,7 +174,20 @@
   let liveActive = $state(false);
   let liveModel = $state("");
   let liveCues = $state<VttCue[]>([]);
+  // Untranslated cues while translating, shown under the translation when dual
+  // subtitles are on.
+  let liveOriginalCues = $state<VttCue[]>([]);
+  let liveDualSubtitles = $state(false);
   let liveRanges = $state<CoveredRange[]>([]);
+
+  $effect(() => {
+    const read = () => {
+      liveDualSubtitles = getLiveDualSubtitles(localStorage.getItem(LIVE_DUAL_SUBTITLES_KEY));
+    };
+    read();
+    window.addEventListener(LIVE_DUAL_SUBTITLES_EVENT, read);
+    return () => window.removeEventListener(LIVE_DUAL_SUBTITLES_EVENT, read);
+  });
   let liveState = $state<LiveSubtitleStatus["state"] | null>(null);
   let liveError = $state<string | null>(null);
   // Session ids only increase; events from sessions below this are stale.
@@ -177,20 +197,28 @@
   let liveWorkerPos = 0;
   let livePlayheadSentAt = 0;
   // The video, track and language the current live cues belong to; used as the cache key.
-  let liveKey: LiveCacheKey | null = null;
+  // Raw (not proxied) so the identity checks against a captured key keep working.
+  let liveKey = $state.raw<LiveCacheKey | null>(null);
   let liveDirty = false;
+  // Whether the current live session was started by auto-start (see enableLiveSubtitles).
+  let liveAutoStarted = false;
   let liveSaveTimer: ReturnType<typeof setTimeout> | null = null;
   // "Pause until ready": true while the player has paused itself to wait for subtitles.
   let liveWaiting = $state(false);
   // Set when the user presses play during a wait; playback then continues through
   // the current gap without pausing again.
   let liveWaitOverride = false;
+  // What the worker is loading, as reported by the backend (speech or translation model).
+  let liveLoadingMessage = $state("");
   let livePlaceholder = $derived.by(() => {
     if (!liveActive) return null;
     if (liveError) return `Live subtitles: ${liveError}`;
     if (findRange(liveRanges, currentTime) || liveState === "done") return null;
-    if (liveWaiting) return "Waiting for subtitles...";
-    return liveState === "loading" ? "Loading speech model..." : "Generating subtitles...";
+    const lang = liveKey?.translateTo;
+    const what = lang ? `${LIVE_TRANSLATE_NAMES[lang as LiveTranslate]} subtitles` : "subtitles";
+    if (liveWaiting) return `Waiting for ${what}...`;
+    if (liveState === "loading") return liveLoadingMessage || "Loading speech model...";
+    return `Generating ${what}...`;
   });
   let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
 
@@ -477,7 +505,7 @@
       getAutoLiveSubtitles(localStorage.getItem(AUTO_LIVE_SUBTITLES_KEY)) &&
       ((setupStatus || getSetupStatus())?.models_installed.length ?? 0) > 0
     ) {
-      enableLiveSubtitles();
+      enableLiveSubtitles(true);
     }
 
     try {
@@ -586,6 +614,7 @@
           const status = event.payload;
           if (!liveActive || status.session_id < liveMinSession) return;
           liveState = status.state;
+          if (status.state === "loading") liveLoadingMessage = status.message;
           if (status.state === "error") liveError = status.message;
           checkLiveWait();
         }),
@@ -1923,18 +1952,32 @@
         time: videoElement?.currentTime ?? time,
       }).catch(() => {});
     } catch (err) {
-      if (!liveActive) return;
+      if (!liveActive || liveKey !== key) return;
+      if (liveAutoStarted) {
+        // Auto-start never shows an error: without the translation model it falls back
+        // to the original language, and if it still cannot start it stays off.
+        if (key.translateTo) {
+          loadLiveSession({ ...key, translateTo: null }, time);
+        } else {
+          disableLiveSubtitles();
+        }
+        return;
+      }
       liveError = String(err);
       liveState = "error";
     }
   }
 
-  function enableLiveSubtitles() {
+  // `auto` is true when the player starts live subtitles by itself (the "Auto-start when
+  // no subtitles are found" setting) rather than from the menu.
+  function enableLiveSubtitles(auto = false) {
     if (!currentVideoPath) return;
+    liveAutoStarted = auto;
     showModelSelector = false;
     showSubtitleMenu = false;
     liveActive = true;
     liveState = "loading";
+    liveLoadingMessage = "";
     liveError = null;
     subtitlesEnabled = true;
     loadLiveSession(
@@ -1942,6 +1985,7 @@
         videoPath: currentVideoPath,
         audioStreamIndex: selectedAudioTrackIndex,
         language: $appSettings.subtitleLanguage,
+        translateTo: getLiveTranslate(localStorage.getItem(LIVE_TRANSLATE_KEY)),
       },
       videoElement?.currentTime ?? 0,
     );
@@ -1956,6 +2000,7 @@
     invoke("stop_live_subtitles", { unload: false }).catch(() => {});
     liveKey = key;
     liveCues = [];
+    liveOriginalCues = [];
     liveRanges = [];
     liveModel = "";
     liveDirty = false;
@@ -1964,6 +2009,7 @@
       if (!liveActive || liveKey !== key) return;
       if (cached) {
         liveCues = cached.cues;
+        liveOriginalCues = cached.original_cues;
         liveRanges = cached.ranges;
         liveModel = cached.model;
       }
@@ -2004,6 +2050,7 @@
       model: liveModel,
       ranges: $state.snapshot(liveRanges),
       cues: $state.snapshot(liveCues),
+      originalCues: $state.snapshot(liveOriginalCues),
     }).catch((err) => console.warn("Failed to save live subtitle cache:", err));
   }
 
@@ -2017,6 +2064,7 @@
     if (resume) endLiveWait();
     else liveWaiting = false;
     liveCues = [];
+    liveOriginalCues = [];
     liveRanges = [];
     liveState = null;
     liveError = null;
@@ -2026,6 +2074,12 @@
   function handleLiveChunk(chunk: LiveSubtitleChunk) {
     if (!liveActive || chunk.session_id < liveMinSession) return;
     liveCues = mergeCues(liveCues, chunk.cues, chunk.covered_start, chunk.covered_end);
+    liveOriginalCues = mergeCues(
+      liveOriginalCues,
+      chunk.original_cues,
+      chunk.covered_start,
+      chunk.covered_end,
+    );
     liveRanges = addRange(liveRanges, chunk.covered_start, chunk.covered_end);
     liveWorkerPos = chunk.covered_end;
     scheduleLiveSave();
@@ -2205,6 +2259,7 @@
       enabled={subtitlesEnabled}
       {videoElement}
       liveCues={liveActive ? liveCues : null}
+      secondaryCues={liveActive && liveDualSubtitles ? liveOriginalCues : null}
       placeholder={livePlaceholder}
     />
   </div>
@@ -2475,7 +2530,11 @@
                       disableLiveSubtitles();
                     }}
                   >
-                    <span class="model-name">Live subtitles{liveModel ? ` · ${liveModel}` : ""}</span>
+                    <span class="model-name"
+                      >Live subtitles{liveModel ? ` · ${liveModel}` : ""}{liveKey?.translateTo
+                        ? ` · ${LIVE_TRANSLATE_NAMES[liveKey.translateTo as LiveTranslate]}`
+                        : ""}</span
+                    >
                     <span class="model-desc">Turn off live subtitles</span>
                   </button>
                 {/if}
@@ -2530,7 +2589,7 @@
               <div class="model-header">Select AI Model</div>
               {#if setupStatus && setupStatus.models_installed.length > 0}
                 {#if !liveActive}
-                  <button class="model-option" onclick={enableLiveSubtitles}>
+                  <button class="model-option" onclick={() => enableLiveSubtitles()}>
                     <span class="model-name">Live (real-time)</span>
                     <span class="model-desc">Subtitles appear as you watch</span>
                   </button>

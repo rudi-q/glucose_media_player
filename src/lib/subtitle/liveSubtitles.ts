@@ -6,6 +6,8 @@ export interface LiveSubtitleChunk {
   covered_start: number;
   covered_end: number;
   cues: VttCue[];
+  // The untranslated cues when `cues` are a translation, else empty.
+  original_cues: VttCue[];
 }
 
 export interface LiveSubtitleStatus {
@@ -22,11 +24,13 @@ export interface LiveSessionInfo {
 // A processed span of the timeline, [start, end) in seconds.
 export type CoveredRange = [number, number];
 
-// Identifies a live cache file: one per video, audio track and language.
+// Identifies a live cache file: one per video, audio track, language and translation.
 export interface LiveCacheKey {
   videoPath: string;
   audioStreamIndex: number | null;
   language: string;
+  // Language code subtitles are translated into (see LiveTranslate), else null.
+  translateTo: string | null;
 }
 
 // Returned by load_live_cache in src-tauri/src/live_cache.rs.
@@ -34,6 +38,7 @@ export interface LiveCacheData {
   model: string;
   ranges: CoveredRange[];
   cues: VttCue[];
+  original_cues: VttCue[];
 }
 
 // Gaps up to this size between ranges are treated as contiguous, so float rounding

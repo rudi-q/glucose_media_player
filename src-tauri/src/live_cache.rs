@@ -29,6 +29,10 @@ struct CacheKey {
     modified: u64,
     audio_stream_index: Option<i64>,
     language: String,
+    // Target language of translated cues. Left out of the file (and the hash) when not
+    // translating, so caches written before translation existed still match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    translate_to: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -38,6 +42,10 @@ struct CacheFile {
     model: String,
     ranges: Vec<[f64; 2]>,
     cues: Vec<CachedCue>,
+    // Untranslated cues of a translated cache, for dual subtitles. Missing in files
+    // written before dual subtitles existed; those parts then show the translation only.
+    #[serde(default)]
+    original_cues: Vec<CachedCue>,
 }
 
 #[derive(Serialize)]
@@ -45,6 +53,7 @@ pub struct LiveCacheData {
     model: String,
     ranges: Vec<[f64; 2]>,
     cues: Vec<CachedCue>,
+    original_cues: Vec<CachedCue>,
 }
 
 fn cache_dir() -> Result<PathBuf, String> {
@@ -56,6 +65,7 @@ fn make_key(
     video_path: &str,
     audio_stream_index: Option<i64>,
     language: &str,
+    translate_to: Option<String>,
 ) -> Result<CacheKey, String> {
     let meta = fs::metadata(video_path).map_err(|e| format!("Failed to read video file: {}", e))?;
     let modified = meta
@@ -70,6 +80,7 @@ fn make_key(
         modified,
         audio_stream_index,
         language: language.to_string(),
+        translate_to,
     })
 }
 
@@ -90,12 +101,13 @@ fn cache_path(key: &CacheKey) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn load_live_cache(
+pub async fn load_live_cache(
     video_path: String,
     audio_stream_index: Option<i64>,
     language: String,
+    translate_to: Option<String>,
 ) -> Result<Option<LiveCacheData>, String> {
-    let key = make_key(&video_path, audio_stream_index, &language)?;
+    let key = make_key(&video_path, audio_stream_index, &language, translate_to)?;
     let Ok(raw) = fs::read(cache_path(&key)?) else {
         return Ok(None);
     };
@@ -120,22 +132,28 @@ pub fn load_live_cache(
         model: file.model,
         ranges: file.ranges,
         cues: file.cues,
+        original_cues: file.original_cues,
     }))
 }
 
 #[tauri::command]
-pub fn save_live_cache(
+pub async fn save_live_cache(
     video_path: String,
     audio_stream_index: Option<i64>,
     language: String,
+    translate_to: Option<String>,
     model: String,
     ranges: Vec<[f64; 2]>,
     cues: Vec<CachedCue>,
+    original_cues: Vec<CachedCue>,
 ) -> Result<(), String> {
     if ranges.is_empty() {
         return Ok(());
     }
-    let key = make_key(&video_path, audio_stream_index, &language)?;
+    // Saves can now overlap; one at a time, so they never share the temporary file.
+    static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+    let key = make_key(&video_path, audio_stream_index, &language, translate_to)?;
     let path = cache_path(&key)?;
     let dir = cache_dir()?;
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create cache folder: {}", e))?;
@@ -146,6 +164,7 @@ pub fn save_live_cache(
         model,
         ranges,
         cues,
+        original_cues,
     })
     .map_err(|e| e.to_string())?;
 

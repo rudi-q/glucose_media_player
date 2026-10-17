@@ -130,7 +130,8 @@ fn join(words: &[Word]) -> String {
 fn ends_sentence(word: &Word) -> bool {
     word.text
         .trim_end_matches(['"', '\'', ')', ']'])
-        .ends_with(['.', '?', '!'])
+        // U+0964 is the Devanagari danda, Hindi's full stop.
+        .ends_with(['.', '?', '!', '\u{0964}'])
 }
 
 fn ends_clause(word: &Word) -> bool {

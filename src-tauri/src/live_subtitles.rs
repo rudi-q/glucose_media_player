@@ -2,7 +2,9 @@
 // resulting cues to the frontend, so subtitles appear while the video plays instead of
 // after a full batch run. See docs/spikes/live-subtitles.md.
 
+use crate::live_log;
 use crate::subtitle_format;
+use crate::translate::{self, CueTranslator};
 use serde::Serialize;
 use std::ffi::c_void;
 use std::io::Read;
@@ -60,6 +62,8 @@ struct LiveState {
     session: Option<Session>,
     // Kept across sessions so seeking does not reload the model; dropped on unload.
     model: Option<(String, Arc<WhisperContext>)>,
+    // Same for translation models, one per source/target pair used so far.
+    translators: Vec<Arc<CueTranslator>>,
 }
 
 fn state() -> &'static Mutex<LiveState> {
@@ -83,6 +87,9 @@ struct LiveChunk {
     covered_start: f64,
     covered_end: f64,
     cues: Vec<LiveCue>,
+    // The untranslated cues when `cues` are a translation, else empty. Shown under the
+    // translation when dual subtitles are on.
+    original_cues: Vec<LiveCue>,
 }
 
 #[derive(Clone, Serialize)]
@@ -110,11 +117,15 @@ fn emit_status(app: &tauri::AppHandle, session_id: u64, state: &str, message: im
     );
 }
 
+// Called from commands, which run on the window thread: FFmpeg is killed and reaped on
+// a separate thread so a slow exit under heavy load cannot freeze the window.
 fn stop_session(session: Session) {
     session.cancel.store(true, Ordering::Relaxed);
     if let Some(mut child) = session.ffmpeg.lock().unwrap().take() {
-        let _ = child.kill();
-        let _ = child.wait();
+        std::thread::spawn(move || {
+            let _ = child.kill();
+            let _ = child.wait();
+        });
     }
 }
 
@@ -125,7 +136,23 @@ pub fn start_live_subtitles(
     start_secs: f64,
     audio_stream_index: Option<i64>,
     language: String,
+    // Language code to translate speech into, if any: "de", "fr", "es", "ru", "tr", "it",
+    // "nl" for English speech, or "en" for German, French, Spanish or Hindi speech.
+    translate_to: Option<String>,
 ) -> Result<LiveSessionInfo, String> {
+    if let Some(target) = &translate_to {
+        // Every model either translates from English or into English, so the speech
+        // language is English unless English is the target; then it is the language set
+        // in Settings, or unknown when that is "auto".
+        let source = if target != "en" {
+            Some("en")
+        } else if language != "auto" {
+            Some(language.as_str())
+        } else {
+            None
+        };
+        translate::check_installed(source, target)?;
+    }
     let (model_file, model_label) = LIVE_MODELS
         .iter()
         .find(|(file, _)| super::find_model_path(file).is_some())
@@ -153,6 +180,12 @@ pub fn start_live_subtitles(
         .as_ref()
         .filter(|(path, _)| *path == model_path)
         .map(|(_, ctx)| ctx.clone());
+    let cached_translators: Vec<_> = st
+        .translators
+        .iter()
+        .filter(|t| Some(&t.target) == translate_to.as_ref())
+        .cloned()
+        .collect();
     drop(st);
 
     PLAYHEAD.store(start_secs.max(0.0).to_bits(), Ordering::Relaxed);
@@ -164,14 +197,29 @@ pub fn start_live_subtitles(
         start_secs: start_secs.max(0.0),
         audio_stream_index,
         language,
+        translate_to,
         model_path,
+        model_label: model_label.to_string(),
         cached,
+        translators: Mutex::new(cached_translators),
+        failed_translations: Mutex::new(Vec::new()),
         cancel,
         ffmpeg,
     };
     std::thread::spawn(move || {
         let app = job.app.clone();
-        if let Err(e) = job.run() {
+        let cancel = job.cancel.clone();
+        let result = job.run();
+        let reason = match &result {
+            Err(_) => "error",
+            Ok(()) if cancel.load(Ordering::Relaxed) => "cancelled",
+            Ok(()) => "done",
+        };
+        live_log::log(
+            "session_end",
+            serde_json::json!({ "session": session_id, "reason": reason, "error": result.as_ref().err() }),
+        );
+        if let Err(e) = result {
             emit_status(&app, session_id, "error", e);
         }
     });
@@ -192,6 +240,7 @@ pub fn stop_live_subtitles(unload: bool) {
     }
     if unload {
         st.model = None;
+        st.translators.clear();
     }
 }
 
@@ -207,8 +256,15 @@ struct Job {
     start_secs: f64,
     audio_stream_index: Option<i64>,
     language: String,
+    translate_to: Option<String>,
     model_path: String,
+    // Short model name ("small-q5_1"), for the performance log.
+    model_label: String,
     cached: Option<Arc<WhisperContext>>,
+    // Translators this session has loaded or reused, at most one per source language.
+    translators: Mutex<Vec<Arc<CueTranslator>>>,
+    // Source languages whose translator failed to load, so it is not retried every chunk.
+    failed_translations: Mutex<Vec<String>>,
     cancel: Arc<AtomicBool>,
     ffmpeg: Arc<Mutex<Option<Child>>>,
 }
@@ -232,7 +288,7 @@ impl Job {
         if let Some(ctx) = &self.cached {
             return Ok(ctx.clone());
         }
-        emit_status(&self.app, self.session_id, "loading", "Loading Whisper model...");
+        emit_status(&self.app, self.session_id, "loading", "Loading speech model...");
         let ctx = Arc::new(
             WhisperContext::new_with_params(&self.model_path, WhisperContextParameters::default())
                 .map_err(|e| format!("Failed to load Whisper model: {}", e))?,
@@ -244,6 +300,71 @@ impl Job {
             st.model = Some((self.model_path.clone(), ctx.clone()));
         }
         Ok(ctx)
+    }
+
+    // Returns the translator from `source` speech into the session's target language,
+    // loading it on first use. None when not translating, when the speech is already in
+    // the target language, or when no model covers this language pair; the original text
+    // is shown then. `during_run` restores the "running" status after a mid-session load.
+    fn translator_for(
+        &self,
+        source: &str,
+        threads: usize,
+        during_run: bool,
+    ) -> Result<Option<Arc<CueTranslator>>, String> {
+        let Some(target) = &self.translate_to else {
+            return Ok(None);
+        };
+        if source == target
+            || !translate::is_available(source, target)
+            || self.failed_translations.lock().unwrap().iter().any(|s| s == source)
+        {
+            return Ok(None);
+        }
+        if let Some(t) = self.translators.lock().unwrap().iter().find(|t| t.source == source) {
+            return Ok(Some(t.clone()));
+        }
+        emit_status(
+            &self.app,
+            self.session_id,
+            "loading",
+            format!("Loading {} translation model...", translate::language_name(target)),
+        );
+        let load_started = std::time::Instant::now();
+        let loaded = CueTranslator::load(source, target, threads);
+        live_log::log(
+            "translator_load",
+            serde_json::json!({
+                "session": self.session_id,
+                "source": source,
+                "target": target,
+                "ms": live_log::ms(load_started),
+                "during_run": during_run,
+                "error": loaded.as_ref().err(),
+            }),
+        );
+        let translator = match loaded {
+            Ok(t) => Arc::new(t),
+            Err(e) => {
+                // Remember the failure and clear the loading status; the caller shows the
+                // original text instead.
+                self.failed_translations.lock().unwrap().push(source.to_string());
+                if during_run {
+                    emit_status(&self.app, self.session_id, "running", "");
+                }
+                return Err(e);
+            }
+        };
+        self.translators.lock().unwrap().push(translator.clone());
+        let mut st = state().lock().unwrap();
+        if st.session.as_ref().map(|s| s.id) == Some(self.session_id) {
+            st.translators.push(translator.clone());
+        }
+        drop(st);
+        if during_run {
+            emit_status(&self.app, self.session_id, "running", "");
+        }
+        Ok(Some(translator))
     }
 
     fn spawn_ffmpeg(&self) -> Result<std::process::ChildStdout, String> {
@@ -264,20 +385,55 @@ impl Job {
     }
 
     fn run(self) -> Result<(), String> {
+        let session_started = std::time::Instant::now();
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get().min(MAX_THREADS))
+            .unwrap_or(4) as i32;
+        let model_started = std::time::Instant::now();
+        let whisper_cached = self.cached.is_some();
         let ctx = self.load_model()?;
+        let model_load_ms = live_log::ms(model_started);
+        // Translation runs on this thread right after Whisper, so it can use the same
+        // thread budget without competing with it. Load the model up front when the
+        // speech language is known: English for translating out of English, or the
+        // language chosen in settings for translating into English. Otherwise it loads
+        // when Whisper first detects a language it covers.
+        if let Some(target) = &self.translate_to {
+            let source = if target != "en" { "en" } else { self.language.as_str() };
+            if source != "auto" {
+                // A model that fails to load must not stop the session: chunks then show
+                // the original text.
+                if let Err(e) = self.translator_for(source, threads as usize, false) {
+                    eprintln!("[live subtitles] {}", e);
+                }
+            }
+        }
+        live_log::log(
+            "session_start",
+            serde_json::json!({
+                "session": self.session_id,
+                "video": live_log::file_name(&self.video_path),
+                "start_secs": self.start_secs,
+                "audio_stream": self.audio_stream_index,
+                "model": self.model_label,
+                "whisper_cached": whisper_cached,
+                "model_load_ms": model_load_ms,
+                "language": self.language,
+                "translate_to": self.translate_to,
+                "threads": threads,
+            }),
+        );
         if self.cancelled() {
             return Ok(());
         }
         let mut stdout = self.spawn_ffmpeg()?;
         emit_status(&self.app, self.session_id, "running", "");
 
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get().min(MAX_THREADS))
-            .unwrap_or(4) as i32;
         let window = WINDOW_SECS * SAMPLE_RATE;
         let mut buffer: Vec<f32> = Vec::with_capacity(window);
         // Absolute time of buffer[0].
         let mut buffer_start = self.start_secs;
+        let mut first_chunk = true;
         let mut eof = false;
         let mut bytes = vec![0u8; 64 * 1024];
         let mut pending = Vec::<u8>::new();
@@ -314,12 +470,14 @@ impl Job {
             };
             let is_last = eof && cut == buffer.len();
 
+            let wait_started = std::time::Instant::now();
             self.wait_for_playhead(buffer_start);
+            let wait_ms = live_log::ms(wait_started);
             if self.cancelled() {
                 return Ok(());
             }
 
-            let (cues, resume) =
+            let (cues, original_cues, resume, stats) =
                 self.transcribe(&ctx, &buffer[..cut], buffer_start, threads, is_last)?;
             if self.cancelled() {
                 return Ok(());
@@ -332,6 +490,43 @@ impl Job {
             }
             .min(cut);
             let chunk_end = buffer_start + cut as f64 / SAMPLE_RATE as f64;
+            let audio_secs = chunk_end - buffer_start;
+            let playhead = f64::from_bits(PLAYHEAD.load(Ordering::Relaxed));
+            let work_ms = stats.whisper_ms + stats.translate_ms.unwrap_or(0);
+            live_log::log(
+                "chunk",
+                serde_json::json!({
+                    "session": self.session_id,
+                    "start": buffer_start,
+                    "end": chunk_end,
+                    "audio_secs": audio_secs,
+                    "wait_ms": wait_ms,
+                    "whisper_ms": stats.whisper_ms,
+                    "translate_ms": stats.translate_ms,
+                    "speed_x": if work_ms > 0 { audio_secs * 1000.0 / work_ms as f64 } else { 0.0 },
+                    "speech_lang": stats.speech_lang,
+                    "translated": stats.translated,
+                    "translate_error": stats.translate_error,
+                    "cues": cues.len(),
+                    "rewound": resume.is_some(),
+                    "playhead": playhead,
+                    // How far the subtitles now reach past the playhead; negative means
+                    // the viewer is already past the end of this chunk.
+                    "lead_secs": chunk_end - playhead,
+                    // The playhead had passed the chunk start before its subtitles were
+                    // ready, so the viewer saw a gap (or waited, with "pause until ready").
+                    "late": playhead > buffer_start,
+                    // Time from the session starting to this chunk's subtitles; for the
+                    // first chunk, how long the viewer waited for any subtitles.
+                    "since_start_ms": live_log::ms(session_started),
+                    "first": first_chunk,
+                    // Reading speed and line length of the subtitles shown, and of the
+                    // untranslated ones when translating (null otherwise).
+                    "reading": reading_stats(&cues),
+                    "original_reading": reading_stats(&original_cues),
+                }),
+            );
+            first_chunk = false;
             let _ = self.app.emit(
                 "live-subtitle-chunk",
                 LiveChunk {
@@ -339,6 +534,7 @@ impl Job {
                     covered_start: buffer_start,
                     covered_end: chunk_end,
                     cues,
+                    original_cues,
                 },
             );
 
@@ -381,7 +577,9 @@ impl Job {
         offset: f64,
         threads: i32,
         is_last: bool,
-    ) -> Result<(Vec<LiveCue>, Option<f64>), String> {
+    ) -> Result<(Vec<LiveCue>, Vec<LiveCue>, Option<f64>, ChunkStats), String> {
+        let mut stats = ChunkStats::default();
+        let whisper_started = std::time::Instant::now();
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_print_special(false);
         params.set_print_progress(false);
@@ -405,10 +603,11 @@ impl Job {
             .map_err(|e| format!("Failed to create Whisper state: {}", e))?;
         if let Err(e) = state.full(params, samples) {
             if self.cancelled() {
-                return Ok((Vec::new(), None));
+                return Ok((Vec::new(), Vec::new(), None, stats));
             }
             return Err(format!("Transcription failed: {}", e));
         }
+        stats.whisper_ms = live_log::ms(whisper_started);
 
         let chunk_secs = samples.len() as f64 / SAMPLE_RATE as f64;
         let words = subtitle_format::words_from_state(&state, offset, chunk_secs);
@@ -424,16 +623,98 @@ impl Job {
         if let Some(time) = resume {
             cues.retain(|c| c.start < time);
         }
-        let cues = cues
-            .into_iter()
-            .map(|c| LiveCue {
-                start: c.start,
-                end: c.end,
-                text: c.text,
-            })
-            .collect();
-        Ok((cues, resume))
+        // A session cancelled during transcription (for example by a seek) should not
+        // spend CPU on translation while its replacement starts.
+        if self.cancelled() {
+            return Ok((Vec::new(), Vec::new(), None, stats));
+        }
+        // Translate when a model covers this chunk's speech language; otherwise, and if
+        // translation fails, the original text is shown, which beats showing nothing.
+        let source = if self.language != "auto" {
+            self.language.clone()
+        } else {
+            whisper_rs::get_lang_str(state.full_lang_id_from_state())
+                .unwrap_or_default()
+                .to_string()
+        };
+        stats.speech_lang = source.clone();
+        let mut originals = Vec::new();
+        match self.translator_for(&source, threads as usize, true) {
+            Ok(Some(translator)) => {
+                let limit = resume.map(|t| t - subtitle_format::MIN_GAP).unwrap_or(limit);
+                let translate_started = std::time::Instant::now();
+                match translator.translate_cues(&cues, limit) {
+                    Ok(translated) => {
+                        originals = std::mem::replace(&mut cues, translated);
+                        stats.translated = true;
+                    }
+                    Err(e) => {
+                        eprintln!("[live subtitles] {}", e);
+                        stats.translate_error = Some(e);
+                    }
+                }
+                stats.translate_ms = Some(live_log::ms(translate_started));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("[live subtitles] {}", e);
+                stats.translate_error = Some(e);
+            }
+        }
+        let to_live = |cues: Vec<subtitle_format::Cue>| -> Vec<LiveCue> {
+            cues.into_iter()
+                .map(|c| LiveCue {
+                    start: c.start,
+                    end: c.end,
+                    text: c.text,
+                })
+                .collect()
+        };
+        Ok((to_live(cues), to_live(originals), resume, stats))
     }
+}
+
+// Reading speed (CPS) and line length (CPL) of a chunk's cues, for the performance log.
+// CPS counts every character except line breaks; 21 CPS is the limit Papi et al. (2023)
+// use, a little above the formatter's own 20 CPS target.
+fn reading_stats(cues: &[LiveCue]) -> serde_json::Value {
+    const CPS_LIMIT: f64 = 21.0;
+    if cues.is_empty() {
+        return serde_json::Value::Null;
+    }
+    let (mut cps_sum, mut cps_max, mut over_cps) = (0.0, 0.0_f64, 0);
+    let (mut cpl_max, mut long_lines) = (0, 0);
+    for cue in cues {
+        let chars = cue.text.chars().filter(|c| *c != '\n').count();
+        let cps = chars as f64 / (cue.end - cue.start).max(1e-3);
+        cps_sum += cps;
+        cps_max = cps_max.max(cps);
+        over_cps += usize::from(cps > CPS_LIMIT);
+        for line in cue.text.split('\n') {
+            let len = line.chars().count();
+            cpl_max = cpl_max.max(len);
+            long_lines += usize::from(len > subtitle_format::MAX_LINE_CHARS);
+        }
+    }
+    serde_json::json!({
+        "cps_avg": cps_sum / cues.len() as f64,
+        "cps_max": cps_max,
+        "over_21_cps": over_cps,
+        "cpl_max": cpl_max,
+        "lines_over_42": long_lines,
+    })
+}
+
+// What happened to one chunk, for the performance log.
+#[derive(Default)]
+struct ChunkStats {
+    whisper_ms: u64,
+    // None when the chunk was not sent for translation.
+    translate_ms: Option<u64>,
+    // The language used for the chunk: the one set in Settings, or Whisper's detection.
+    speech_lang: String,
+    translated: bool,
+    translate_error: Option<String>,
 }
 
 // whisper-rs 0.16's `set_abort_callback_safe` casts its boxed closure back to the closure's

@@ -1,0 +1,64 @@
+{
+ "Helsinki-NLP/opus-mt_tiny_eng-deu": {
+  "model": "Helsinki-NLP/opus-mt_tiny_eng-deu",
+  "lang": "de",
+  "size_mb_int8": 18.2,
+  "load_s": 0.8,
+  "rss_mb": 44.9,
+  "cue_ms_mean": 18.1,
+  "cue_ms_p95": 30.4,
+  "sentences": 73,
+  "sentences_total_s": 0.97,
+  "words_per_s": 1066
+ },
+ "Helsinki-NLP/opus-mt-en-de": {
+  "model": "Helsinki-NLP/opus-mt-en-de",
+  "lang": "de",
+  "size_mb_int8": 77.0,
+  "load_s": 1.16,
+  "rss_mb": 103.4,
+  "cue_ms_mean": 86.7,
+  "cue_ms_p95": 147.0,
+  "sentences": 73,
+  "sentences_total_s": 3.61,
+  "words_per_s": 287
+ },
+ "Helsinki-NLP/opus-mt_tiny_eng-fra": {
+  "model": "Helsinki-NLP/opus-mt_tiny_eng-fra",
+  "lang": "fr",
+  "size_mb_int8": 18.2,
+  "load_s": 0.65,
+  "rss_mb": 45.1,
+  "cue_ms_mean": 16.5,
+  "cue_ms_p95": 29.3,
+  "sentences": 73,
+  "sentences_total_s": 0.83,
+  "words_per_s": 1252,
+  "chrf_vs_reference": 83.9
+ },
+ "Helsinki-NLP/opus-mt-en-fr": {
+  "model": "Helsinki-NLP/opus-mt-en-fr",
+  "lang": "fr",
+  "size_mb_int8": 77.8,
+  "load_s": 0.83,
+  "rss_mb": 103.8,
+  "cue_ms_mean": 84.5,
+  "cue_ms_p95": 135.0,
+  "sentences": 73,
+  "sentences_total_s": 3.27,
+  "words_per_s": 316,
+  "chrf_vs_reference": 83.7
+ },
+ "Helsinki-NLP/opus-mt-tc-big-en-fr": {
+  "model": "Helsinki-NLP/opus-mt-tc-big-en-fr",
+  "lang": "fr",
+  "size_mb_int8": 234.8,
+  "load_s": 1.58,
+  "rss_mb": 280.8,
+  "cue_ms_mean": 144.0,
+  "cue_ms_p95": 305.1,
+  "sentences": 73,
+  "sentences_total_s": 4.56,
+  "words_per_s": 227
+ }
+}
