@@ -60,29 +60,28 @@ fn is_year(w: &str) -> bool {
     w.len() == 4 && (w.starts_with("19") || w.starts_with("20")) && w.chars().all(|c| c.is_ascii_digit())
 }
 
-// "s01e02", "1x02" style episode markers.
+// "s01e02", "1x02" style episode markers. The limits keep sizes such as "1920x1080" out.
 fn episode(w: &str) -> Option<(u32, u32)> {
     let w = w.trim_start_matches('s');
     let (season, ep) = w.split_once('e').or_else(|| w.split_once('x'))?;
-    Some((season.parse().ok()?, ep.parse().ok()?))
+    let (season, ep): (u32, u32) = (season.parse().ok()?, ep.parse().ok()?);
+    (season < 100 && ep < 1000).then_some((season, ep))
 }
 
 /// The title (plus episode, for TV) a file name is about: everything before the first
 /// year or release detail. None when there is no usable title.
 pub fn title_key(stem: &str) -> Option<String> {
+    let words = words(stem);
     let mut title = Vec::new();
-    let mut ep = None;
-    for w in words(stem) {
-        if let Some(e) = episode(&w) {
-            ep = Some(e);
-            break;
-        }
+    for w in &words {
         // A year right at the start is the title (e.g. "1917").
-        if (is_year(&w) && !title.is_empty()) || RELEASE_WORDS.contains(&w.as_str()) {
+        if episode(w).is_some() || (is_year(w) && !title.is_empty()) || RELEASE_WORDS.contains(&w.as_str()) {
             break;
         }
-        title.push(w);
+        title.push(w.clone());
     }
+    // The episode can come after the year ("Show.2021.S01E02"), so look at every word.
+    let ep = words.iter().find_map(|w| episode(w));
     while title.len() > 1 && title.last().is_some_and(|w| TAG_WORDS.contains(&w.as_str())) {
         title.pop();
     }
@@ -197,6 +196,14 @@ mod tests {
     fn language_tags_are_dropped_only_at_the_end() {
         assert_eq!(title_key("Some.Movie.English.SDH").as_deref(), Some("some movie"));
         assert_eq!(title_key("The.English.Patient.eng").as_deref(), Some("the english patient"));
+    }
+
+    #[test]
+    fn episodes_after_a_year_stay_apart() {
+        let e2 = title_key("Some.Show.2021.S01E02.1080p.WEB");
+        assert_eq!(e2.as_deref(), Some("some show s01e02"));
+        assert_ne!(e2, title_key("Some.Show.2021.S01E03.1080p.WEB"));
+        assert_eq!(title_key("Some.Movie.2021.1920x1080").as_deref(), Some("some movie"));
     }
 
     #[test]

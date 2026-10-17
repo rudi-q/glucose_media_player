@@ -39,7 +39,8 @@
   // The Position slider only applies to fixed placement.
   const SMART_EDGE_OFFSET = 8;
   let deciding = $state(false);
-  let cueKey = $derived(activeCues.map(c => `${c.start}|${c.end}`).join(','));
+  // Includes the secondary (original) lines, which can start without a main line.
+  let cueKey = $derived([...activeCues, ...activeSecondary].map(c => `${c.start}|${c.end}`).join(','));
   let decideToken = 0;
   // Development only: what the last decision saw, shown in a corner of the video.
   let smartDebug = $state<string | null>(null);
@@ -61,13 +62,19 @@
       deciding = false;
       return;
     }
-    if (!key || !video) return;
+    if (!key || !video) {
+      deciding = false;
+      return;
+    }
     const token = ++decideToken;
     deciding = true;
     const started = performance.now();
-    // Never hold a cue back for long, even if the frame cannot be read.
+    // Never hold a cue back for long, even if the frame cannot be read. A result that
+    // arrives after this is dropped, so it cannot move the cue while it is shown.
     const fallback = setTimeout(() => {
-      if (token === decideToken) deciding = false;
+      if (token !== decideToken) return;
+      decideToken++;
+      deciding = false;
     }, 200);
     scoreVideoFrame(video).then(scores => {
       if (token !== decideToken) return;
@@ -83,7 +90,11 @@
       clearTimeout(fallback);
       deciding = false;
     });
-    return () => clearTimeout(fallback);
+    // A new cue, a switch to Fixed or a new video makes this result stale.
+    return () => {
+      clearTimeout(fallback);
+      if (token === decideToken) decideToken++;
+    };
   });
 
   // Track the exact displayed video content rect within .video-container.

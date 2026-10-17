@@ -23,8 +23,11 @@ const NMS_IOU: f32 = 0.3;
 type Model = TypedRunnableModel<TypedModel>;
 
 // The parsed model, and one optimised copy per input size (usually one per video shape).
+// Each size has its own once-cell, so concurrent first calls for a size wait for a single
+// preparation instead of each optimising the model.
+type ModelCell = Arc<OnceLock<Result<Arc<Model>, String>>>;
 static PARSED: OnceLock<Result<InferenceModel, String>> = OnceLock::new();
-static MODELS: OnceLock<Mutex<HashMap<(usize, usize), Arc<Model>>>> = OnceLock::new();
+static MODELS: OnceLock<Mutex<HashMap<(usize, usize), ModelCell>>> = OnceLock::new();
 
 fn parsed() -> Result<&'static InferenceModel, String> {
     PARSED
@@ -45,20 +48,23 @@ fn parse() -> TractResult<InferenceModel> {
 }
 
 fn model(width: usize, height: usize) -> Result<Arc<Model>, String> {
-    let models = MODELS.get_or_init(Default::default);
-    if let Some(m) = models.lock().map_err(|e| e.to_string())?.get(&(width, height)) {
-        return Ok(m.clone());
-    }
-    let m = Arc::new(
+    let cell = MODELS
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|e| e.to_string())?
+        .entry((width, height))
+        .or_default()
+        .clone();
+    cell.get_or_init(|| {
         parsed()?
             .clone()
             .with_input_fact(0, f32::fact([1, 3, height, width]).into())
             .and_then(|m| m.into_optimized())
             .and_then(|m| m.into_runnable())
-            .map_err(|e| format!("Could not prepare face detection: {e}"))?,
-    );
-    models.lock().map_err(|e| e.to_string())?.insert((width, height), m.clone());
-    Ok(m)
+            .map(Arc::new)
+            .map_err(|e| format!("Could not prepare face detection: {e}"))
+    })
+    .clone()
 }
 
 // Input size for a frame: longest side SIZE, both sides rounded up to a multiple of STRIDE.

@@ -926,6 +926,9 @@
       subtitleFileName = result.fileName;
       selectedEmbeddedLanguage = '';
       subtitlesEnabled = true;
+      // Live cues take priority over a loaded track, so the chosen file only shows once
+      // live subtitles are off.
+      disableLiveSubtitles();
     }
   }
 
@@ -980,6 +983,8 @@
       subtitleFileName = formatEmbeddedTrackLabel(track);
       selectedEmbeddedLanguage = track.language ?? 'en';
       subtitlesEnabled = true;
+      // As for subtitle files: the chosen track replaces live subtitles.
+      disableLiveSubtitles();
     } catch (err) {
       console.error("Failed to extract embedded subtitle:", err);
       alert("Failed to load embedded subtitle: " + err);
