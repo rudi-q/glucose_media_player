@@ -1,4 +1,10 @@
 mod ffmpeg;
+mod live_cache;
+mod live_log;
+mod live_subtitles;
+mod media_protocol;
+mod subtitle_format;
+mod translate;
 mod pip_window;
 
 use pip_window::{enter_pip_mode, exit_pip_mode, save_pip_window_layout, settle_pip_window};
@@ -1615,8 +1621,7 @@ fn transcribe_audio_with_whisper(
     params.set_print_timestamps(true);
     params.set_translate(false); // Don't translate, keep original language
     params.set_language(Some(language)); // Use selected language
-    params.set_max_len(0); // Disable max length limit per segment
-    params.set_split_on_word(true); // Split on word boundaries
+    subtitle_format::request_word_timestamps(&mut params);
 
     // Emit real-time progress during state.full() via whisper's native progress callback.
     // Whisper reports 0-100; we map that to the 50-90% band in our UI.
@@ -1648,31 +1653,17 @@ fn transcribe_audio_with_whisper(
     #[cfg(debug_assertions)]
     println!("Transcription complete, extracting segments...");
 
-    // Extract segments — progress was already reported live via the callback above.
-    let num_segments = state.full_n_segments();
+    // Whisper returned one segment per word; group them into subtitle cues.
+    let audio_secs = audio_data.len() as f64 / 16_000.0;
+    let words = subtitle_format::words_from_state(&state, 0.0, audio_secs);
 
     #[cfg(debug_assertions)]
-    println!("Found {} segments", num_segments);
+    println!("Found {} words", words.len());
 
-    let mut segments = Vec::new();
-
-    for i in 0..num_segments {
-        let segment = state
-            .get_segment(i)
-            .ok_or_else(|| format!("Failed to get segment {}", i))?;
-
-        let start_seconds = segment.start_timestamp() as f64 / 100.0;
-        let end_seconds = segment.end_timestamp() as f64 / 100.0;
-
-        let text = segment
-            .to_str()
-            .map_err(|e| format!("Failed to parse segment text: {}", e))?
-            .to_string();
-
-        if !text.trim().is_empty() {
-            segments.push((start_seconds, end_seconds, text));
-        }
-    }
+    let segments: Vec<(f64, f64, String)> = subtitle_format::build_cues(&words, audio_secs)
+        .into_iter()
+        .map(|c| (c.start, c.end, c.text))
+        .collect();
 
     #[cfg(debug_assertions)]
     println!("Generating SRT file with {} segments...", segments.len());
@@ -1813,7 +1804,7 @@ fn acquire_watch_progress_file_lock_shared(progress_file: &std::path::Path) -> R
 }
 
 #[tauri::command]
-fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> Result<(), String> {
+async fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> Result<(), String> {
     let progress_file = watch_progress_path()?;
     let _guard = watch_progress_lock()
         .lock()
@@ -1842,7 +1833,7 @@ fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> 
 
 // Get watch progress for a video
 #[tauri::command]
-fn get_watch_progress(video_path: String) -> Result<Option<WatchProgress>, String> {
+async fn get_watch_progress(video_path: String) -> Result<Option<WatchProgress>, String> {
     let progress_file = watch_progress_path()?;
     let _guard = watch_progress_lock()
         .lock()
@@ -2045,7 +2036,7 @@ fn convert_video_with_ffmpeg(
 
 // Get all watch progress data
 #[tauri::command]
-fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchProgress>, String> {
+async fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchProgress>, String> {
     let progress_file = watch_progress_path()?;
     let _guard = watch_progress_lock()
         .lock()
@@ -2055,7 +2046,7 @@ fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchPro
 }
 
 #[tauri::command]
-fn delete_watch_progress(video_path: String) -> Result<(), String> {
+async fn delete_watch_progress(video_path: String) -> Result<(), String> {
     let progress_file = watch_progress_path()?;
     let _guard = watch_progress_lock()
         .lock()
@@ -2068,7 +2059,7 @@ fn delete_watch_progress(video_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn clear_watch_history_since(cutoff_timestamp: u64) -> Result<(), String> {
+async fn clear_watch_history_since(cutoff_timestamp: u64) -> Result<(), String> {
     let progress_file = watch_progress_path()?;
     let _guard = watch_progress_lock()
         .lock()
@@ -2330,7 +2321,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        // Replaces the built-in asset protocol so media files are read off the window
+        // thread; see media_protocol.rs.
+        .register_asynchronous_uri_scheme_protocol("asset", |_ctx, request, responder| {
+            media_protocol::handle(request, responder)
+        });
 
     // Add updater plugin only on Windows
     #[cfg(target_os = "windows")]
@@ -2340,6 +2336,7 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            live_log::watch_ui_thread(app.handle().clone());
             // Handle command line arguments for file associations
             let args: Vec<String> = std::env::args().collect();
 
@@ -2386,7 +2383,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(live_log::with_command_log(tauri::generate_handler![
             open_file_dialog,
             open_folder_dialog,
             open_subtitle_dialog,
@@ -2408,6 +2405,11 @@ pub fn run() {
             delete_temp_file,
             generate_subtitles,
             cancel_subtitle_generation,
+            live_subtitles::start_live_subtitles,
+            live_subtitles::stop_live_subtitles,
+            live_subtitles::update_live_subtitles_playhead,
+            live_cache::load_live_cache,
+            live_cache::save_live_cache,
             check_ffmpeg_installed,
             check_installed_models,
             get_setup_status,
@@ -2427,12 +2429,18 @@ pub fn run() {
             ffmpeg::get_ffmpeg_path,
             ffmpeg::pick_ffmpeg_executable,
             ffmpeg::save_ffmpeg_custom_path
-        ])
+        ]))
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
-            // Log events for debugging
-            if cfg!(debug_assertions) {
+            // Log app lifecycle events for debugging. The event-loop tick and window events
+            // (focus, move, resize) fire constantly and bury everything else in the terminal.
+            if cfg!(debug_assertions)
+                && !matches!(
+                    event,
+                    tauri::RunEvent::MainEventsCleared | tauri::RunEvent::WindowEvent { .. }
+                )
+            {
                 println!("Received event: {:?}", event);
             }
 

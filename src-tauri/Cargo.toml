@@ -27,6 +27,8 @@ serde_json = "1.0"
 dirs = "5.0.1"
 urlencoding = "2.1.3"
 whisper-rs = "0.16.0"
+# On-device subtitle translation (CTranslate2). Patched copy, see vendor/ct2rs/GLUCOSE_PATCHES.txt.
+ct2rs = { version = "0.10.1", default-features = false, features = ["ruy", "sentencepiece"] }
 tokio = { version = "1.51.0", features = ["full"] }
 reqwest = { version = "0.13.2", features = ["stream"] }
 futures-util = "0.3.32"
@@ -37,3 +39,5 @@ fs4 = "1"
 tauri-plugin-updater = "2.10.0"
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
 
+[patch.crates-io]
+ct2rs = { path = "vendor/ct2rs" }

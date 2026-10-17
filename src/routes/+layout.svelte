@@ -35,8 +35,9 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, setContext, tick } from "svelte";
   import { fade } from "svelte/transition";
-  import { goto } from "$app/navigation";
+  import { afterNavigate, goto } from "$app/navigation";
   import { page } from "$app/stores";
+  import ErrorScreen from "$lib/components/ErrorScreen.svelte";
   import {
     X,
     Settings,
@@ -88,6 +89,16 @@
     getDefaultPlayMode,
     getEndBehavior,
     getFadeMode,
+    AUTO_LIVE_SUBTITLES_KEY,
+    getAutoLiveSubtitles,
+    LIVE_SUBTITLE_WAIT_KEY,
+    getLiveSubtitleWait,
+    LIVE_TRANSLATE_KEY,
+    getLiveTranslate,
+    LIVE_DUAL_SUBTITLES_KEY,
+    LIVE_DUAL_SUBTITLES_EVENT,
+    getLiveDualSubtitles,
+    type LiveSubtitleWait,
     type DefaultPlayMode,
     type EndBehavior,
     type FadeMode,
@@ -208,6 +219,75 @@
   $effect(() => {
     if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_fade", fadeMode);
   });
+
+  let autoLiveSubtitles = $state(
+    getAutoLiveSubtitles(
+      typeof localStorage !== "undefined" ? localStorage.getItem(AUTO_LIVE_SUBTITLES_KEY) : null,
+    ),
+  );
+
+  function toggleAutoLiveSubtitles() {
+    autoLiveSubtitles = !autoLiveSubtitles;
+    localStorage.setItem(AUTO_LIVE_SUBTITLES_KEY, String(autoLiveSubtitles));
+  }
+
+  let liveSubtitleWait = $state<LiveSubtitleWait>(
+    getLiveSubtitleWait(
+      typeof localStorage !== "undefined" ? localStorage.getItem(LIVE_SUBTITLE_WAIT_KEY) : null,
+    ),
+  );
+
+  function setLiveSubtitleWait(value: string) {
+    liveSubtitleWait = getLiveSubtitleWait(value);
+    localStorage.setItem(LIVE_SUBTITLE_WAIT_KEY, liveSubtitleWait);
+  }
+
+  let liveTranslate = $state<string>(
+    getLiveTranslate(
+      typeof localStorage !== "undefined" ? localStorage.getItem(LIVE_TRANSLATE_KEY) : null,
+    ) ?? "off",
+  );
+
+  function setLiveTranslate(value: string) {
+    const lang = getLiveTranslate(value);
+    liveTranslate = lang ?? "off";
+    if (lang) localStorage.setItem(LIVE_TRANSLATE_KEY, lang);
+    else localStorage.removeItem(LIVE_TRANSLATE_KEY);
+  }
+
+  let liveDualSubtitles = $state(
+    getLiveDualSubtitles(
+      typeof localStorage !== "undefined" ? localStorage.getItem(LIVE_DUAL_SUBTITLES_KEY) : null,
+    ),
+  );
+
+  function toggleLiveDualSubtitles() {
+    liveDualSubtitles = !liveDualSubtitles;
+    localStorage.setItem(LIVE_DUAL_SUBTITLES_KEY, String(liveDualSubtitles));
+    window.dispatchEvent(new Event(LIVE_DUAL_SUBTITLES_EVENT));
+  }
+
+  // Set while a screen has crashed and its error boundary shows the error screen;
+  // navigating away resets the boundary so the next screen renders normally.
+  let resetCrashedScreen: (() => void) | null = null;
+
+  afterNavigate(() => {
+    const reset = resetCrashedScreen;
+    resetCrashedScreen = null;
+    reset?.();
+  });
+
+  function decodeURIComponentSafe(value: string): string {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+
+  function screenErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
 
   const _isFirstRun = _savedDefaultMode === null && _savedEndBehavior === null && _savedFadeMode === null;
   let showOnboarding = $state(_isFirstRun);
@@ -592,7 +672,29 @@
   </div>
 {/if}
 
-<div style="display: contents" inert={showOnboarding}>{@render children()}</div>
+<div style="display: contents" inert={showOnboarding}>
+  <svelte:boundary
+    onerror={(error, reset) => {
+      console.error("[glucose] Screen crashed:", error);
+      resetCrashedScreen = reset;
+    }}
+  >
+    {@render children()}
+
+    {#snippet failed(error, reset)}
+      <ErrorScreen
+        status={500}
+        message={screenErrorMessage(error)}
+        screen={decodeURIComponentSafe($page.url.pathname)}
+        onHome={() => goto("/", { replaceState: true })}
+        onRetry={() => {
+          resetCrashedScreen = null;
+          reset();
+        }}
+      />
+    {/snippet}
+  </svelte:boundary>
+</div>
 
 <svelte:window onkeydown={(e) => {
   if (e.key === 'Escape') {
@@ -912,6 +1014,97 @@
                     </select>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Live Subtitles</h3>
+              <div class="settings-group">
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">Auto-start when no subtitles are found</div>
+                    <div class="settings-item-desc">
+                      If a video has no subtitle file or embedded track, generate subtitles live as it plays.
+                    </div>
+                  </div>
+                  <div class="settings-item-action">
+                    <button
+                      class="toggle-switch"
+                      class:on={autoLiveSubtitles}
+                      role="switch"
+                      aria-checked={autoLiveSubtitles}
+                      aria-label="Auto-start live subtitles when no subtitles are found"
+                      onclick={toggleAutoLiveSubtitles}
+                    >
+                      <span class="toggle-knob"></span>
+                    </button>
+                  </div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">When subtitles aren't ready yet</div>
+                    <div class="settings-item-desc">
+                      Keep the video playing, or pause it until subtitles for that moment are generated.
+                    </div>
+                  </div>
+                  <div class="settings-item-action">
+                    <select
+                      class="language-select"
+                      value={liveSubtitleWait}
+                      onchange={(e) => setLiveSubtitleWait((e.target as HTMLSelectElement).value)}
+                    >
+                      <option value="play">Keep playing</option>
+                      <option value="pause">Pause until ready</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">Translate live subtitles</div>
+                    <div class="settings-item-desc">
+                      English speech into the language you pick, or German, French and Spanish speech into English. Runs on your device and applies the next time live subtitles start.
+                    </div>
+                  </div>
+                  <div class="settings-item-action">
+                    <select
+                      class="language-select"
+                      value={liveTranslate}
+                      onchange={(e) => setLiveTranslate((e.target as HTMLSelectElement).value)}
+                    >
+                      <option value="off">Off</option>
+                      <option value="de">German</option>
+                      <option value="fr">French</option>
+                      <option value="es">Spanish</option>
+                      <option value="ru">Russian</option>
+                      <option value="tr">Turkish</option>
+                      <option value="it">Italian</option>
+                      <option value="nl">Dutch</option>
+                      <option value="en">English</option>
+                    </select>
+                  </div>
+                </div>
+                {#if liveTranslate !== "off"}
+                  <div class="settings-item">
+                    <div class="settings-item-label">
+                      <div class="settings-item-title">Show original subtitles too</div>
+                      <div class="settings-item-desc">
+                        Show the original line, smaller, under the translation.
+                      </div>
+                    </div>
+                    <div class="settings-item-action">
+                      <button
+                        class="toggle-switch"
+                        class:on={liveDualSubtitles}
+                        role="switch"
+                        aria-checked={liveDualSubtitles}
+                        aria-label="Show original subtitles under the translation"
+                        onclick={toggleLiveDualSubtitles}
+                      >
+                        <span class="toggle-knob"></span>
+                      </button>
+                    </div>
+                  </div>
+                {/if}
               </div>
             </div>
           {:else if selectedTab === "updates"}
@@ -1802,6 +1995,49 @@
   .language-select:hover {
     background-color: rgba(255, 255, 255, 0.1);
     border-color: rgba(255, 255, 255, 0.3);
+  }
+
+  .toggle-switch {
+    position: relative;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+    padding: 0;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+
+  .toggle-switch:hover {
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+
+  .toggle-switch:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.6);
+    outline-offset: 2px;
+  }
+
+  .toggle-switch.on {
+    background: #fff;
+    border-color: #fff;
+  }
+
+  .toggle-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.7);
+    transition: transform 0.2s ease, background 0.2s ease;
+  }
+
+  .toggle-switch.on .toggle-knob {
+    transform: translateX(18px);
+    background: #000;
   }
 
   .language-select option {
