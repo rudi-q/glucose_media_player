@@ -186,12 +186,17 @@ fn save_gallery_paths(paths: Vec<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn open_folder_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
+async fn open_folder_dialog(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let result = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
-        .await
-        .map_err(|e| e.to_string())?;
+    let result = tokio::task::spawn_blocking(move || {
+        app.dialog().file().set_parent(&window).blocking_pick_folder()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     match result {
         Some(folder) => {
@@ -220,7 +225,10 @@ fn sanitize_path(path: &str) -> String {
 }
 
 #[tauri::command]
-async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
+async fn open_file_dialog(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let all_exts: Vec<&'static str> = VIDEO_EXTENSIONS
@@ -232,6 +240,7 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, Strin
         app.dialog()
             .file()
             .add_filter("Media Files", &all_exts)
+            .set_parent(&window)
             .blocking_pick_file()
     })
     .await
@@ -248,13 +257,19 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, Strin
 }
 
 #[tauri::command]
-async fn open_subtitle_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
+// The picker is owned by the calling window, so it opens in front of it even when the
+// player is fullscreen or in always-on-top picture-in-picture.
+async fn open_subtitle_dialog(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let result = tokio::task::spawn_blocking(move || {
         app.dialog()
             .file()
             .add_filter("Subtitle Files", &["srt", "vtt", "ass", "ssa", "sub"])
+            .set_parent(&window)
             .blocking_pick_file()
     })
     .await
