@@ -4,6 +4,7 @@ mod live_log;
 mod live_subtitles;
 mod media_protocol;
 mod subtitle_format;
+mod subtitle_match;
 mod translate;
 mod pip_window;
 
@@ -2399,6 +2400,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(live_log::with_command_log(tauri::generate_handler![
+            subtitle_match::find_nearby_subtitles,
             open_file_dialog,
             open_folder_dialog,
             open_subtitle_dialog,

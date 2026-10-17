@@ -146,6 +146,20 @@
   let embeddedSubtitleTracks = $state<EmbeddedSubtitleTrack[]>([]);
   let selectedEmbeddedLanguage = $state('en');
 
+  // Subtitle files next to the video (or in a Subs folder), including ones whose names
+  // differ from the video's but share its title. From subtitle_match.rs.
+  interface NearbySubtitle {
+    path: string;
+    name: string;
+    kind: "exact" | "title" | "other";
+  }
+  let nearbySubtitles = $state<NearbySubtitle[]>([]);
+  const NEARBY_SUBTITLE_DESC: Record<NearbySubtitle["kind"], string> = {
+    exact: "Same name as the video",
+    title: "Same title, different release",
+    other: "In this folder",
+  };
+
   // Embedded audio tracks
   interface EmbeddedAudioTrack {
     index: number;
@@ -433,6 +447,7 @@
     subtitleContent = null;
     subtitleFileName = null;
     embeddedSubtitleTracks = [];
+    nearbySubtitles = [];
     selectedEmbeddedLanguage = "en";
     subtitlesEnabled = true;
     disableLiveSubtitles(false);
@@ -476,6 +491,14 @@
     }
 
     if (isVideoSetupStale(setupId)) return;
+
+    // List subtitle files nearby for the subtitle menu; the exact match (if any) was
+    // already loaded above.
+    invoke<NearbySubtitle[]>("find_nearby_subtitles", { videoPath })
+      .then((found) => {
+        if (!isVideoSetupStale(setupId)) nearbySubtitles = found;
+      })
+      .catch((err) => console.log("Nearby subtitle lookup failed:", err));
 
     try {
       // Always detect embedded tracks so the subtitle menu can list them
@@ -2568,6 +2591,23 @@
                     </button>
                   {/each}
                 {/if}
+                {#if nearbySubtitles.length > 0}
+                  <div class="subtitle-menu-divider"></div>
+                  <div class="model-header">Subtitle files nearby</div>
+                  {#each nearbySubtitles as sub (sub.path)}
+                    <button
+                      class="model-option"
+                      title={sub.path}
+                      onclick={() => {
+                        showSubtitleMenu = false;
+                        loadSubtitle(sub.path);
+                      }}
+                    >
+                      <span class="model-name nearby-name">{sub.name}</span>
+                      <span class="model-desc">{NEARBY_SUBTITLE_DESC[sub.kind]}</span>
+                    </button>
+                  {/each}
+                {/if}
                 {#if subtitleFileName}
                   <div class="subtitle-menu-divider"></div>
                   <button class="model-option" onclick={toggleSubtitles}>
@@ -3515,6 +3555,13 @@
     min-width: 260px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
     z-index: 100;
+  }
+
+  .nearby-name {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .subtitle-menu-divider {
