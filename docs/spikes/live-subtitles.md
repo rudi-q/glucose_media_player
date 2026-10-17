@@ -4,9 +4,9 @@ Branch: `spike/live-subtitles`
 
 ## Status and how to resume
 
-_Last updated 2026-10-06._
+_Last updated 2026-10-17._
 
-**Where things stand:** live mode and the live cache have been tried in the app and work so far. Step 1 is partly done (gate passes on a high-end machine only). A first in-app version covering steps 3-5 is built and passes `pnpm check` and `pnpm tauri:check`, but has **not yet been tried in the running app**. Seek and audio-track restarts and backpressure (from step 7) are included; the seek-bar strip and status chip (step 6), the playback impact check (step 8) and "Save as SRT" (step 9b) are not. The live cache (step 9a) is built and type-checks but is also untested in the app. The `whisper-rs` abort bug that caused random -6 errors is fixed.
+**Where things stand:** live mode (steps 3-5) and the live cache (step 9a) are built and have been used in the running app, including with live translation (merged from `spike/subtitle-translation`, see `docs/spikes/subtitle-translation.md`). Step 1 is partly done (gate passes on a high-end machine only). From step 7, seek and audio-track restarts and backpressure are in. Step 6 is partial: the seek-bar strip is built, the status chip is not. Not done: the playback impact check (step 8) and "Save as SRT" (step 9b). The `whisper-rs` abort bug that caused random -6 errors is fixed.
 
 **What exists:**
 
@@ -14,7 +14,7 @@ _Last updated 2026-10-06._
 - `src-tauri/examples/live_bench.rs`, the benchmark harness (standalone Cargo example, does not touch the app).
 - `src-tauri/src/live_subtitles.rs`, the live worker. Commands `start_live_subtitles`, `stop_live_subtitles(unload)` and `update_live_subtitles_playhead`; events `live-subtitle-chunk` (cues plus covered range) and `live-subtitle-status`. Picks the first installed model from small-q5_1, small, base, tiny. 20 s windows with the cut moved to the quietest 50 ms frame in the last 3 s, 8-thread cap, `no_context` on, pauses at 180 s ahead of the playhead.
 - Seek bar (step 6, partial): while live mode is on, each covered range is drawn as a translucent white strip behind the played portion (`.live-covered` in the player page). The "Subtitles ready to 2:20" status chip is not built.
-- Settings, AI tab, "Live Subtitles": "Auto-start when no subtitles are found" (off by default, `localStorage` key `glucose_auto_live_subtitles`). When on, the player starts live mode for a video with no external subtitle file and no embedded subtitle track, but only if it has an audio track and a Whisper model is installed.
+- Settings, AI tab, "Live Subtitles": "Auto-start when no subtitles are found" (off by default, `localStorage` key `glucose_auto_live_subtitles`). When on, the player starts live mode for a video with no external subtitle file and no embedded subtitle track, but only if it has an audio track and a model live mode can use (small-q5_1, small, base or tiny) is installed.
 - Settings, AI tab, "Live Subtitles": "When subtitles aren't ready yet", either "Keep playing" (default) or "Pause until ready" (`localStorage` key `glucose_live_subtitle_wait`). With "Pause until ready", the player pauses itself when playback reaches an uncovered point (on start, after a seek, or if generation falls behind), shows "Waiting for subtitles...", and resumes once that point is covered. Pressing play during a wait keeps playing through that gap; a pause the user made is never resumed; the last second of a video counts as covered.
 - `src-tauri/src/live_cache.rs`, commands `load_live_cache` and `save_live_cache`: one JSON file per video, audio track and language, with key check, model-rank check, atomic writes and 50 MB eviction.
 - `src/lib/subtitle/liveSubtitles.ts`, event and cache types plus covered-range and cue-merge helpers.
@@ -141,11 +141,11 @@ Decision (2026-10-06): live results persist in a hidden cache, and SRT is an exp
 ### Rust (`src-tauri`)
 
 - **Model lifecycle:** `WhisperContext` held in Tauri managed state, loaded on first use and reused across chunks. Unloaded when live mode is turned off or the player window closes, so the model (about 500 MB for `small`) is not held in memory indefinitely.
-- **Commands:** `start_live_subtitles(path, start_secs, audio_track, model, language)` and `stop_live_subtitles()`.
+- **Commands:** `start_live_subtitles(video_path, start_secs, audio_stream_index, language, translate_to)`, which picks the model itself and returns the session id and model, `stop_live_subtitles(unload)`, `update_live_subtitles_playhead(time)` and `live_subtitle_model()`, which tells the player whether a live-capable model is installed.
 - **Worker thread:** FFmpeg PCM pipe, VAD chunker, Whisper per chunk.
 - **Cancellation:** a per-session cancel token for the live worker, not the global `SUBTITLE_CANCEL`, so cancel-on-seek never aborts a batch generation running at the same time.
 - **Threading:** cap Whisper's thread count (`FullParams::set_n_threads`) so decoding and rendering keep enough CPU. The cap should be configurable during the spike.
-- **Events:** `subtitle-cue` (batch of cues with global timestamps) and `subtitle-progress` (covered range, worker state, real-time factor).
+- **Events:** `live-subtitle-chunk` (session id, covered range, cues with global timestamps, and the untranslated cues when translating) and `live-subtitle-status` (session id, state, message).
 - **VAD:** evaluate whisper.cpp's built-in VAD exposed by `whisper-rs`; fall back to Silero via ONNX or a simple energy gate if unavailable.
 
 ### Frontend
@@ -214,7 +214,7 @@ Conclusions:
 
 1. **Go/no-go gate passes on this machine.** Every model clears 2x real time on 20 s windows, `small-q5_1` at 8 threads reaches 5.3x.
 2. **Short first windows do not help.** Whisper pads every input to 30 s internally, so a 5 s window costs about as much as a 20 s one. Since the file is on disk, the first 20 s of audio is available immediately, so the first cue should appear in about 4 s with a full-size first window. The short-first-window idea is dropped.
-3. **8 threads is the knee.** 4 to 8 threads gives about 1.7x on `small`; 12 threads adds nothing. Default thread cap for further work: 8 (to be revisited in the playback impact check).
+3. **8 threads is the knee.** 4 to 8 threads gives about 1.5x on `small` (1.7x on `small-q5_1`); 12 threads adds nothing. Default thread cap for further work: 8 (to be revisited in the playback impact check).
 4. **Provisional default model: `small-q5_1`.** Same speed as `small` and 190 MB on disk vs 488 MB. Its transcript looked the most plausible, but the clip's actual text is not recorded and one sentence is noise, so the quality ranking between `small` and `small-q5_1` is unsettled.
 5. **`tiny` and `base` are not good enough on quality** for this sample, and their 20 s timings varied a lot between windows (averages 2-4x higher than the minimums). Keep them only as fallbacks for slow machines.
 6. **VAD works on Windows.** Silero VAD loaded and found the single speech segment (0.96-3.77 s) in about 100 ms including model load. Open question 1 is closed.
