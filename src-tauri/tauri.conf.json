@@ -4,7 +4,7 @@
   "identifier": "one.doubl.glucose",
   "build": {
     "beforeDevCommand": "pnpm dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:2060",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../build"
   },
