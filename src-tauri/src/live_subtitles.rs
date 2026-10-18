@@ -574,16 +574,33 @@ impl Job {
     }
 
     // Waits for FFmpeg after its output ended and describes how it failed, or None when it
-    // finished normally (or was stopped on purpose).
+    // finished normally (or was stopped on purpose). Polls with the child left in the
+    // shared slot, so a stop or seek can still kill it if it hangs instead of exiting.
     fn ffmpeg_exit_error(&self) -> Option<String> {
-        let mut child = self.ffmpeg.lock().unwrap().take()?;
-        match child.wait() {
-            Ok(status) if status.success() || self.cancelled() => None,
-            Ok(status) => Some(match status.code() {
-                Some(code) => format!("FFmpeg stopped with an error (exit code {code})"),
-                None => "FFmpeg stopped unexpectedly".to_string(),
-            }),
-            Err(e) => Some(format!("Could not check how FFmpeg finished: {e}")),
+        loop {
+            let mut slot = self.ffmpeg.lock().unwrap();
+            // Taken by stop_session: the session was stopped.
+            let child = slot.as_mut()?;
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    slot.take();
+                    if status.success() || self.cancelled() {
+                        return None;
+                    }
+                    return Some(match status.code() {
+                        Some(code) => format!("FFmpeg stopped with an error (exit code {code})"),
+                        None => "FFmpeg stopped unexpectedly".to_string(),
+                    });
+                }
+                Ok(None) => {}
+                // Left in the slot for Job::drop to kill and reap.
+                Err(e) => return Some(format!("Could not check how FFmpeg finished: {e}")),
+            }
+            drop(slot);
+            if self.cancelled() {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 

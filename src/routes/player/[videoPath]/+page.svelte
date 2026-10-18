@@ -87,6 +87,13 @@
     getSubtitlePosition,
     getFadeDurationMs,
   } from "$lib/utils/playerPreferences";
+  import {
+    featureVerdicts as verdictsFromCheck,
+    HARDWARE_CHECK_KEY,
+    loadHardwareCheck,
+    type FeatureId,
+    type Verdict,
+  } from "$lib/utils/featureAdvice";
   import { generateThumbnail } from "$lib/utils/thumbnail";
   import { setWindowTitle } from "$lib/utils/windowTitle";
 
@@ -210,6 +217,25 @@
   });
 
   let smartSubtitlePosition = $state(false);
+
+  // Verdicts from the hardware check (Features tab), for warnings in the AI model menu.
+  let featureVerdicts = $state<Partial<Record<FeatureId, Verdict>>>({});
+
+  $effect(() => {
+    const read = () => {
+      featureVerdicts = verdictsFromCheck(loadHardwareCheck(localStorage.getItem(HARDWARE_CHECK_KEY)));
+    };
+    read();
+    window.addEventListener(HARDWARE_CHECK_KEY, read);
+    return () => window.removeEventListener(HARDWARE_CHECK_KEY, read);
+  });
+
+  function hardwareWarning(id: FeatureId): string {
+    const verdict = featureVerdicts[id];
+    if (verdict === "poor") return " • Not recommended on this PC";
+    if (verdict === "slow") return " • May be slow on this PC";
+    return "";
+  }
 
   $effect(() => {
     const read = () => {
@@ -2680,11 +2706,13 @@
           {#if showModelSelector && !isGeneratingSubtitles}
             <div class="model-selector">
               <div class="model-header">Select AI Model</div>
-              {#if (setupStatus?.models_installed.length ?? 0) > 0 || liveModelAvailable}
+              <!-- The Live entry is only offered while live subtitles are off, so a live
+                   model alone counts only then; otherwise the menu would open empty. -->
+              {#if (setupStatus?.models_installed.length ?? 0) > 0 || (liveModelAvailable && !liveActive)}
                 {#if !liveActive && liveModelAvailable}
                   <button class="model-option" onclick={() => enableLiveSubtitles()}>
                     <span class="model-name">Live (real-time)</span>
-                    <span class="model-desc">Subtitles appear as you watch</span>
+                    <span class="model-desc">Subtitles appear as you watch{hardwareWarning("live")}</span>
                   </button>
                 {/if}
                 {#each setupStatus?.models_installed ?? [] as model}
@@ -2716,7 +2744,7 @@
                       <span class="model-name">Large V3 Turbo</span>
                       <span class="model-desc"
                         >{getEstimatedTranscriptionTime("large-v3-turbo")} • Most
-                        Accurate</span
+                        Accurate{hardwareWarning("generation")}</span
                       >
                     </button>
                   {/if}

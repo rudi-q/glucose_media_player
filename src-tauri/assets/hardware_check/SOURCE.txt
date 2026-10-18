@@ -1,0 +1,9 @@
+speech_sample_16k_mono.pcm
+
+20 seconds of English speech, raw 16-bit little-endian PCM, 16 kHz, mono.
+Used by the hardware check (src/hardware_check.rs) to measure how fast Whisper
+runs on the user's machine.
+
+Source: chapter 1 of "The English Lakes", a LibriVox recording (archive.org
+item englishlakes_2408_librivox), seconds 60-80. LibriVox recordings are in the
+public domain (Public Domain Mark 1.0).

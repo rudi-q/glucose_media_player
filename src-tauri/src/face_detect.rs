@@ -125,6 +125,22 @@ pub async fn preload_face_detection(width: usize, height: usize) -> Result<(), S
     .map_err(|e| e.to_string())?
 }
 
+/// For the hardware check: milliseconds one detection takes on a 16:9 frame, the median
+/// of five runs after the model is prepared.
+pub(crate) fn time_detection() -> Result<f64, String> {
+    let (w, h) = (320, 180);
+    let frame = vec![40u8; w * h * 4];
+    detect(&frame, w, h)?;
+    let mut times = Vec::new();
+    for _ in 0..5 {
+        let started = std::time::Instant::now();
+        detect(&frame, w, h)?;
+        times.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    times.sort_by(f64::total_cmp);
+    Ok(times[times.len() / 2])
+}
+
 fn detect(rgba: &[u8], width: usize, height: usize) -> Result<Vec<Face>, String> {
     // Scale (nearest pixel; the page already sends a small frame) and pad.
     let (scale, sw, sh, iw, ih) = input_size(width, height);
