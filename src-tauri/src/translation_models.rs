@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn offers_only_the_compact_models() {
         let pairs: Vec<_> = downloadable().map(|(s, t, _)| format!("{s}-{t}")).collect();
-        assert_eq!(pairs.len(), 10);
+        assert_eq!(pairs.len(), 14);
         assert!(downloadable().all(|(_, _, f)| f.starts_with(DOWNLOADABLE_PREFIX)));
         assert!(folder_for("en", "de").is_ok());
         assert!(folder_for("en", "xx").is_err());

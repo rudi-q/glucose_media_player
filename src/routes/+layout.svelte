@@ -1299,7 +1299,7 @@
                   <div class="settings-item-label">
                     <div class="settings-item-title">Translate live subtitles</div>
                     <div class="settings-item-desc">
-                      English speech into the language you pick, or German, French and Spanish speech into English. Runs on your device and applies the next time live subtitles start.
+                      English speech into the language you pick, or German, French, Spanish, Italian, Dutch, Russian and Turkish speech into English. Runs on your device and applies the next time live subtitles start.
                     </div>
                     {#if featureWarnings.translation}
                       <div class="hw-warning">{featureWarnings.translation}</div>
