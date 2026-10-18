@@ -190,12 +190,34 @@ pub async fn download_translation_model(
         return Err(e);
     }
 
-    let final_dir = root.join(folder);
-    let _ = fs::remove_dir_all(&final_dir);
-    fs::rename(&partial, &final_dir).map_err(|e| {
-        let _ = fs::remove_dir_all(&partial);
-        format!("Could not finish installing the model: {e}")
-    })
+    install(&partial, &root.join(folder))
+}
+
+// Moves the downloaded folder into place. An existing copy is renamed out of the way first
+// and only deleted once the new one is in place; if that fails, the old copy is put back,
+// so a failed install (for example while Windows has the old model open) never leaves
+// the language pair without a model.
+fn install(partial: &std::path::Path, final_dir: &std::path::Path) -> Result<(), String> {
+    let backup = final_dir.with_extension("old");
+    let _ = fs::remove_dir_all(&backup);
+    let had_old = final_dir.exists();
+    if had_old {
+        if let Err(e) = fs::rename(final_dir, &backup) {
+            let _ = fs::remove_dir_all(partial);
+            return Err(format!("Could not replace the installed model (is it in use?): {e}"));
+        }
+    }
+    if let Err(e) = fs::rename(partial, final_dir) {
+        let _ = fs::remove_dir_all(partial);
+        if had_old {
+            let _ = fs::rename(&backup, final_dir);
+        }
+        return Err(format!("Could not finish installing the model: {e}"));
+    }
+    if had_old {
+        let _ = fs::remove_dir_all(&backup);
+    }
+    Ok(())
 }
 
 // Downloads a model's files into `into`, reporting (downloaded, total) bytes.
@@ -317,6 +339,28 @@ mod tests {
             }
         }
         assert_eq!(SHA256.len(), 14 * MODEL_FILES.len());
+    }
+
+    #[test]
+    fn install_replaces_an_existing_model_and_keeps_it_on_failure() {
+        let root = std::env::temp_dir().join(format!("glucose_install_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let (partial, final_dir) = (root.join("m.download"), root.join("m"));
+        fs::create_dir_all(&partial).unwrap();
+        fs::create_dir_all(&final_dir).unwrap();
+        fs::write(partial.join("model.bin"), "new").unwrap();
+        fs::write(final_dir.join("model.bin"), "old").unwrap();
+
+        // Replacing works and leaves no backup behind.
+        install(&partial, &final_dir).unwrap();
+        assert_eq!(fs::read_to_string(final_dir.join("model.bin")).unwrap(), "new");
+        assert!(!partial.exists() && !root.join("m.old").exists());
+
+        // A failed install (the download folder is missing) keeps the installed model.
+        assert!(install(&partial, &final_dir).is_err());
+        assert_eq!(fs::read_to_string(final_dir.join("model.bin")).unwrap(), "new");
+        assert!(!root.join("m.old").exists());
+        let _ = fs::remove_dir_all(&root);
     }
 
     // Downloads English -> German from the release and compares it with the installed copy;
