@@ -10,7 +10,7 @@ use std::path::PathBuf;
 // Source language, target language, model folder (inside a Whisper model folder). Each
 // folder holds a CTranslate2 int8 conversion of the Hugging Face model plus its
 // source.spm and target.spm. The `opus-mt_tiny_*` models are the compact distilled ones;
-// `opus-mt-hi-en` is standard size, since no compact Hindi model exists.
+// `opus-mt-hi-en` is standard size, since no compact model exists for that pair.
 const MODELS: &[(&str, &str, &str)] = &[
     ("en", "de", "opus-mt_tiny_eng-deu"),
     ("en", "fr", "opus-mt_tiny_eng-fra"),
@@ -165,7 +165,7 @@ fn group_text(group: &[Cue]) -> String {
 fn ends_sentence(text: &str) -> bool {
     text.trim_end()
         .trim_end_matches(['"', '\'', ')', ']'])
-        // U+0964 is the Devanagari danda, Hindi's full stop.
+        // U+0964 is the danda, the full stop of Devanagari script.
         .ends_with(['.', '?', '!', '\u{0964}'])
 }
 
@@ -291,11 +291,11 @@ mod tests {
         assert!(out.iter().all(|c| c.start >= 46.4 - 1e-9 && c.end <= 62.0 + 1e-9));
     }
 
-    // Needs the Hindi model installed; run with `cargo test --lib -- --ignored`.
+    // Needs the hi-en model installed; run with `cargo test --lib -- --ignored`.
     #[test]
     #[ignore]
-    fn translates_hindi_cues_into_english() {
-        let translator = CueTranslator::load("hi", "en", 4).expect("Hindi model installed");
+    fn translates_devanagari_cues_into_english() {
+        let translator = CueTranslator::load("hi", "en", 4).expect("hi-en model installed");
         let cues = vec![
             cue(0.0, 2.0, "इस वीडियो में आपका स्वागत है।"),
             cue(2.5, 4.0, "आज हम एक बहुत दिलचस्प"),

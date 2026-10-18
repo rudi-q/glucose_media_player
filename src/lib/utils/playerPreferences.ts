@@ -37,8 +37,8 @@ export function getLiveSubtitleWait(raw?: string | null): LiveSubtitleWait {
 }
 
 // Language live subtitles are translated into; null shows the original. Every target
-// except English translates English speech; English translates German, French, Spanish
-// or Hindi speech. Must match the models in src-tauri/src/translate.rs.
+// except English translates English speech; English translates speech in the languages
+// src-tauri/src/translate.rs has models for.
 export type LiveTranslate = "de" | "fr" | "es" | "ru" | "tr" | "it" | "nl" | "en";
 export const LIVE_TRANSLATE_KEY = "glucose_live_translate";
 export const LIVE_TRANSLATE_NAMES: Record<LiveTranslate, string> = {
