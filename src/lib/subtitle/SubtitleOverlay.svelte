@@ -39,8 +39,14 @@
   // The Position slider only applies to fixed placement.
   const SMART_EDGE_OFFSET = 8;
   let deciding = $state(false);
-  // Includes the secondary (original) lines, which can start without a main line.
-  let cueKey = $derived([...activeCues, ...activeSecondary].map(c => `${c.start}|${c.end}`).join(','));
+  // Includes the secondary (original) lines, which can start without a main line, and each
+  // line's text, since live subtitles can replace a line's text while keeping its timing.
+  let cueKey = $derived(
+    [
+      ...activeCues.map(c => `m|${c.start}|${c.end}|${c.text}`),
+      ...activeSecondary.map(c => `s|${c.start}|${c.end}|${c.text}`),
+    ].join('\n')
+  );
   let decideToken = 0;
   // Development only: what the last decision saw, shown in a corner of the video.
   let smartDebug = $state<string | null>(null);
