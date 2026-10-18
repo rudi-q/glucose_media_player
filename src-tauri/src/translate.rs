@@ -11,7 +11,7 @@ use std::path::PathBuf;
 // folder holds a CTranslate2 int8 conversion of the Hugging Face model plus its
 // source.spm and target.spm. The `opus-mt_tiny_*` models are the compact distilled ones;
 // `opus-mt-hi-en` is standard size, since no compact model exists for that pair.
-const MODELS: &[(&str, &str, &str)] = &[
+pub(crate) const MODELS: &[(&str, &str, &str)] = &[
     ("en", "de", "opus-mt_tiny_eng-deu"),
     ("en", "fr", "opus-mt_tiny_eng-fra"),
     ("en", "es", "opus-mt_tiny_eng-spa"),
@@ -53,7 +53,7 @@ pub(crate) fn language_name(code: &str) -> &'static str {
 // interrupted copy) counts as not installed.
 const MODEL_FILES: &[&str] = &["model.bin", "source.spm", "target.spm"];
 
-fn installed_dir(folder: &str) -> Option<PathBuf> {
+pub(crate) fn installed_dir(folder: &str) -> Option<PathBuf> {
     super::model_candidate_dirs()
         .into_iter()
         .map(|dir| dir.join(folder))

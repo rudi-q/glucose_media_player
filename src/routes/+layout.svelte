@@ -313,6 +313,80 @@
     else localStorage.removeItem(LIVE_TRANSLATE_KEY);
   }
 
+  // Translation models (Settings > AI > Live Subtitles): one download per language pair,
+  // from translation_models.rs.
+  interface TranslationModel {
+    source: string;
+    target: string;
+    installed: boolean;
+    size_mb: number;
+  }
+  const LANGUAGE_LABELS: Record<string, string> = {
+    en: "English",
+    de: "German",
+    fr: "French",
+    es: "Spanish",
+    ru: "Russian",
+    tr: "Turkish",
+    it: "Italian",
+    nl: "Dutch",
+  };
+  let translationModels = $state<TranslationModel[]>([]);
+  // "source-target" of the pair being downloaded, and its progress (0-100).
+  let translationDownload = $state<{ pair: string; percent: number } | null>(null);
+  let translationModelError = $state<string | null>(null);
+  const pairKey = (m: { source: string; target: string }) => `${m.source}-${m.target}`;
+  const pairLabel = (m: { source: string; target: string }) =>
+    `${LANGUAGE_LABELS[m.source] ?? m.source} → ${LANGUAGE_LABELS[m.target] ?? m.target}`;
+
+  // Pairs the chosen translation language needs that are not installed yet: English
+  // speech into it, or, for English, any of the languages translated into English.
+  let missingTranslationModels = $derived(
+    liveTranslate === "off"
+      ? []
+      : liveTranslate === "en"
+        ? translationModels.filter((m) => m.target === "en").every((m) => !m.installed)
+          ? translationModels.filter((m) => m.target === "en")
+          : []
+        : translationModels.filter((m) => m.source === "en" && m.target === liveTranslate && !m.installed),
+  );
+
+  async function loadTranslationModels() {
+    try {
+      translationModels = await invoke<TranslationModel[]>("translation_models");
+    } catch (err) {
+      console.error("Failed to list translation models:", err);
+    }
+  }
+
+  async function downloadTranslationModel(model: TranslationModel) {
+    if (translationDownload) return;
+    translationModelError = null;
+    translationDownload = { pair: pairKey(model), percent: 0 };
+    try {
+      await invoke("download_translation_model", { source: model.source, target: model.target });
+    } catch (err) {
+      translationModelError = `${pairLabel(model)}: ${err}`;
+    } finally {
+      translationDownload = null;
+      await loadTranslationModels();
+    }
+  }
+
+  async function deleteTranslationModel(model: TranslationModel) {
+    translationModelError = null;
+    try {
+      await invoke("delete_translation_model", { source: model.source, target: model.target });
+    } catch (err) {
+      translationModelError = `${pairLabel(model)}: ${err}`;
+    }
+    await loadTranslationModels();
+  }
+
+  $effect(() => {
+    if (showSettings && selectedTab === "ai") loadTranslationModels();
+  });
+
   // Hardware check (Features tab): measures what this PC can run and advises per feature.
   // It runs once by itself after onboarding, then again only from "Check again".
   let hardwareCheck = $state<StoredHardwareCheck | null>(
@@ -659,6 +733,15 @@
           downloadProgress = event.payload.percentage;
           downloadMessage = event.payload.message;
         }),
+        listen<{ source: string; target: string; downloaded: number; total: number }>(
+          "translation-model-progress",
+          (event) => {
+            const p = event.payload;
+            if (translationDownload?.pair === pairKey(p) && p.total > 0) {
+              translationDownload = { pair: pairKey(p), percent: (p.downloaded / p.total) * 100 };
+            }
+          },
+        ),
       ]);
 
       for (const r of results) {
@@ -1221,6 +1304,13 @@
                     {#if featureWarnings.translation}
                       <div class="hw-warning">{featureWarnings.translation}</div>
                     {/if}
+                    {#if missingTranslationModels.length > 0}
+                      <div class="hw-warning">
+                        {missingTranslationModels.length === 1
+                          ? `Needs the ${pairLabel(missingTranslationModels[0])} model. Download it under Translation models below.`
+                          : "Needs at least one model translating into English. Download one under Translation models below."}
+                      </div>
+                    {/if}
                   </div>
                   <div class="settings-item-action">
                     <select
@@ -1262,6 +1352,41 @@
                     </div>
                   </div>
                 {/if}
+                <div class="settings-item translation-models">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">Translation models</div>
+                    <div class="settings-item-desc">
+                      One model per language pair, about 20 MB each, stored on this PC. Download the
+                      ones you want to translate with.
+                    </div>
+                    {#if translationModelError}
+                      <div class="hw-error">{translationModelError}</div>
+                    {/if}
+                    <div class="tm-list">
+                      {#each translationModels as model (pairKey(model))}
+                        {@const busy = translationDownload?.pair === pairKey(model)}
+                        <div class="tm-row" class:tm-needed={missingTranslationModels.some((m) => pairKey(m) === pairKey(model))}>
+                          <span class="tm-name">{pairLabel(model)}</span>
+                          {#if busy}
+                            <span class="tm-progress">
+                              <span class="tm-bar"><span style="width: {translationDownload?.percent ?? 0}%"></span></span>
+                              {Math.round(translationDownload?.percent ?? 0)}%
+                            </span>
+                          {:else if model.installed}
+                            <span class="tm-installed">Installed</span>
+                            <button class="tm-btn tm-remove" onclick={() => deleteTranslationModel(model)}>Remove</button>
+                          {:else}
+                            <button
+                              class="tm-btn"
+                              disabled={translationDownload !== null}
+                              onclick={() => downloadTranslationModel(model)}
+                            >Download · {model.size_mb} MB</button>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           {:else if selectedTab === "updates"}
@@ -3017,6 +3142,92 @@
   .setup-warning a {
     color: var(--color-accent);
     text-decoration: underline;
+  }
+
+  /* Translation models */
+  .tm-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    margin-top: 0.875rem;
+  }
+
+  .tm-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid transparent;
+  }
+
+  .tm-row.tm-needed {
+    border-color: rgba(242, 196, 109, 0.35);
+  }
+
+  .tm-name {
+    flex: 1;
+    font-size: 0.8125rem;
+    color: #fff;
+  }
+
+  .tm-installed {
+    font-size: 0.75rem;
+    color: #7ee2a8;
+  }
+
+  .tm-btn {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 0.3rem 0.65rem;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.06);
+    color: #fff;
+    cursor: pointer;
+  }
+
+  .tm-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .tm-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .tm-btn.tm-remove {
+    background: none;
+    border-color: transparent;
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .tm-btn.tm-remove:hover {
+    color: #f08a8a;
+    background: none;
+  }
+
+  .tm-progress {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  .tm-bar {
+    width: 90px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+  }
+
+  .tm-bar span {
+    display: block;
+    height: 100%;
+    background: var(--color-accent, #a78bfa);
   }
 
   /* Features tab */
