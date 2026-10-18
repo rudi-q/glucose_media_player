@@ -562,7 +562,9 @@
       console.log("Embedded audio track detection failed:", err);
     }
 
-    await refreshLiveModelAvailable();
+    // Uses this check's own answer: a newer check (the model menu opening meanwhile) may
+    // still be running and has not set the shared value yet.
+    const liveModelInstalled = await refreshLiveModelAvailable();
     if (isVideoSetupStale(setupId)) return;
 
     // Optional: start live subtitles when the video came with none. Only when a
@@ -573,7 +575,7 @@
       embeddedSubtitleTracks.length === 0 &&
       embeddedAudioTracks.length > 0 &&
       getAutoLiveSubtitles(localStorage.getItem(AUTO_LIVE_SUBTITLES_KEY)) &&
-      liveModelAvailable
+      liveModelInstalled
     ) {
       enableLiveSubtitles(true);
     }
@@ -1945,7 +1947,8 @@
   // Checks run when a video opens and whenever the model menu opens; only the latest one
   // may set the result, so a slower, older check cannot overwrite a newer answer.
   let liveModelCheckId = 0;
-  async function refreshLiveModelAvailable() {
+  // Returns this check's own answer, for callers that act on it right away.
+  async function refreshLiveModelAvailable(): Promise<boolean> {
     const checkId = ++liveModelCheckId;
     let available = false;
     try {
@@ -1954,6 +1957,7 @@
       console.log("Live model check failed:", err);
     }
     if (checkId === liveModelCheckId) liveModelAvailable = available;
+    return available;
   }
 
   function openAIFromUnifiedMenu() {

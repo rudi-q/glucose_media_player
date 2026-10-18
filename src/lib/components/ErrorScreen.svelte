@@ -56,8 +56,10 @@
       .replace(/[A-Za-z](?::\\|:\/(?!\/)|%3A%5C|%3A%2F(?!%2F))[^"'`\n]*/gi, "<path>")
       // Network paths (\\server\share).
       .replace(/\\\\[^"'`\n]+/g, "<path>")
-      // Absolute macOS and Linux paths with at least two parts (/home/me/...).
-      .replace(/(?<![\w/:.%-])\/[^\s/"'`]+\/[^"'`\n]*/g, "<path>");
+      // Absolute macOS and Linux paths with at least two parts (/home/me/..., also
+      // "/My Drive/..."). The first part may contain spaces but must not start with one,
+      // so "a / b" stays.
+      .replace(/(?<![\w/:.%-])\/[^\s/"'`][^/"'`\n]*\/[^"'`\n]*/g, "<path>");
   }
 
   let publicDetails = $derived(
