@@ -34,6 +34,8 @@ tokio = { version = "1.51.0", features = ["full"] }
 tract-onnx = "0.21.19"
 reqwest = { version = "0.13.2", features = ["stream"] }
 futures-util = "0.3.32"
+# Checks downloaded translation models against their known checksums.
+sha2 = "0.10.9"
 anyhow = "1.0"
 fs4 = "1"
 

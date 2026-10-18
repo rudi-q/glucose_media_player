@@ -11,7 +11,7 @@ use std::path::PathBuf;
 // folder holds a CTranslate2 int8 conversion of the Hugging Face model plus its
 // source.spm and target.spm. The `opus-mt_tiny_*` models are the compact distilled ones;
 // `opus-mt-hi-en` is standard size, since no compact model exists for that pair.
-const MODELS: &[(&str, &str, &str)] = &[
+pub(crate) const MODELS: &[(&str, &str, &str)] = &[
     ("en", "de", "opus-mt_tiny_eng-deu"),
     ("en", "fr", "opus-mt_tiny_eng-fra"),
     ("en", "es", "opus-mt_tiny_eng-spa"),
@@ -22,6 +22,10 @@ const MODELS: &[(&str, &str, &str)] = &[
     ("de", "en", "opus-mt_tiny_deu-eng"),
     ("fr", "en", "opus-mt_tiny_fra-eng"),
     ("es", "en", "opus-mt_tiny_spa-eng"),
+    ("it", "en", "opus-mt_tiny_ita-eng"),
+    ("nl", "en", "opus-mt_tiny_nld-eng"),
+    ("ru", "en", "opus-mt_tiny_rus-eng"),
+    ("tr", "en", "opus-mt_tiny_tur-eng"),
     ("hi", "en", "opus-mt-hi-en"),
 ];
 
@@ -53,7 +57,7 @@ pub(crate) fn language_name(code: &str) -> &'static str {
 // interrupted copy) counts as not installed.
 const MODEL_FILES: &[&str] = &["model.bin", "source.spm", "target.spm"];
 
-fn installed_dir(folder: &str) -> Option<PathBuf> {
+pub(crate) fn installed_dir(folder: &str) -> Option<PathBuf> {
     super::model_candidate_dirs()
         .into_iter()
         .map(|dir| dir.join(folder))
@@ -289,6 +293,25 @@ mod tests {
         let v = subtitle_format::check(&out);
         assert_eq!((v.over_two_lines, v.line_too_long, v.too_long), (0, 0, 0), "{:?}", v);
         assert!(out.iter().all(|c| c.start >= 46.4 - 1e-9 && c.end <= 62.0 + 1e-9));
+    }
+
+    // Needs the it/nl/ru/tr -> en models installed; run with
+    // `cargo test --lib translates_more_languages -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn translates_more_languages_into_english() {
+        for (source, text) in [
+            ("it", "Non sapevo che avesse venduto il suo appartamento a Berlino."),
+            ("nl", "Ik wist niet dat ze haar appartement in Berlijn had verkocht."),
+            ("ru", "Я не знал, что она продала свою квартиру в Берлине."),
+            ("tr", "Berlin'deki dairesini sattığını bilmiyordum."),
+        ] {
+            let translator = CueTranslator::load(source, "en", 4).expect("model installed");
+            let out = translator.translate_cues(&[cue(1.0, 4.0, text)], 5.0).unwrap();
+            let english: String = out.iter().map(|c| c.text.replace('\n', " ")).collect::<Vec<_>>().join(" ");
+            println!("{source}: {english}");
+            assert!(english.to_lowercase().contains("berlin"), "{source}: {english}");
+        }
     }
 
     // Needs the hi-en model installed; run with `cargo test --lib -- --ignored`.

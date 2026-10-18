@@ -8,6 +8,7 @@ mod media_protocol;
 mod subtitle_format;
 mod subtitle_match;
 mod translate;
+mod translation_models;
 mod pip_window;
 
 use pip_window::{enter_pip_mode, exit_pip_mode, save_pip_window_layout, settle_pip_window};
@@ -2429,6 +2430,9 @@ pub fn run() {
             live_subtitles::start_live_subtitles,
             live_subtitles::live_subtitle_model,
             hardware_check::run_hardware_check,
+            translation_models::translation_models,
+            translation_models::download_translation_model,
+            translation_models::delete_translation_model,
             live_subtitles::stop_live_subtitles,
             live_subtitles::update_live_subtitles_playhead,
             live_cache::load_live_cache,
