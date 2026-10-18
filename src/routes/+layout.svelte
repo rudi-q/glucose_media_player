@@ -82,6 +82,15 @@
   import Button from "$lib/components/Button.svelte";
   import LibrarySettings from "$lib/components/LibrarySettings.svelte";
   import FFmpegSettings from "$lib/components/FFmpegSettings.svelte";
+  import WhatsNew from "$lib/components/WhatsNew.svelte";
+  import { trapFocus } from "$lib/utils/trapFocus";
+  import { getAppVersion } from "$lib/utils/version";
+  import {
+    LAST_SEEN_VERSION_KEY,
+    shouldShowWhatsNew,
+    whatsNewHighlights,
+    type WhatsNewAction,
+  } from "$lib/utils/whatsNew";
   import PlayerPreferencesPicker, {
     type PlayerPreferenceOption,
   } from "$lib/components/PlayerPreferencesPicker.svelte";
@@ -503,6 +512,55 @@
 
   const _isFirstRun = _savedDefaultMode === null && _savedEndBehavior === null && _savedFadeMode === null;
   let showOnboarding = $state(_isFirstRun);
+
+  // "What's new" after an update to a new feature version (see whatsNew.ts): shown once,
+  // only in the library and never over onboarding or Settings. Fresh installs and patch
+  // updates just record the version.
+  const appVersion = getAppVersion();
+  const whatsNewPending = shouldShowWhatsNew(
+    appVersion,
+    typeof localStorage !== "undefined" ? localStorage.getItem(LAST_SEEN_VERSION_KEY) : null,
+    !_isFirstRun,
+  );
+  const whatsNewItems = whatsNewHighlights(appVersion) ?? [];
+  if (!whatsNewPending && typeof localStorage !== "undefined") {
+    localStorage.setItem(LAST_SEEN_VERSION_KEY, appVersion);
+  }
+  let showWhatsNew = $state(false);
+  let whatsNewSeen = $state(false);
+  let whatsNewTimer: ReturnType<typeof setTimeout> | null = null;
+
+  $effect(() => {
+    const ready = whatsNewPending && !whatsNewSeen && !showWhatsNew && isOnGallery && !showOnboarding && !showSettings;
+    if (ready && !whatsNewTimer) {
+      whatsNewTimer = setTimeout(() => {
+        whatsNewTimer = null;
+        if (isOnGallery && !showOnboarding && !showSettings) showWhatsNew = true;
+      }, 1200);
+    } else if (!ready && whatsNewTimer) {
+      clearTimeout(whatsNewTimer);
+      whatsNewTimer = null;
+    }
+  });
+
+  function closeWhatsNew() {
+    showWhatsNew = false;
+    whatsNewSeen = true;
+    localStorage.setItem(LAST_SEEN_VERSION_KEY, appVersion);
+  }
+
+  // Returns true when the action happened in place; the others close the screen and open
+  // the right Settings tab.
+  function whatsNewAction(action: WhatsNewAction): boolean {
+    if (action === "smart") {
+      subtitlePosition = "smart";
+      return true;
+    }
+    closeWhatsNew();
+    selectedTab = action === "features" ? "features" : "ai";
+    showSettings = true;
+    return false;
+  }
   let onboardingModalEl = $state<HTMLDivElement | undefined>(undefined);
   let onboardingError = $state<string | null>(null);
   let onboardingPathsRequestId = 0;
@@ -525,68 +583,6 @@
   });
 
   let onboardingPaths = $state<string[]>([]);
-
-  function trapFocus(node: HTMLElement) {
-    const previous = document.activeElement as HTMLElement | null;
-    const focusableSelector = [
-      "a[href]",
-      "button:not([disabled])",
-      "input:not([disabled])",
-      "select:not([disabled])",
-      "textarea:not([disabled])",
-      "[tabindex]:not([tabindex='-1'])",
-    ].join(",");
-
-    function getFocusable() {
-      return Array.from(node.querySelectorAll<HTMLElement>(focusableSelector))
-        .filter((el) => !el.hasAttribute("disabled") && el.offsetParent !== null);
-    }
-
-    function focusModal() {
-      node.focus();
-    }
-
-    function handleKeydown(event: KeyboardEvent) {
-      if (event.key !== "Tab") return;
-
-      const focusable = getFocusable();
-      if (focusable.length === 0) {
-        event.preventDefault();
-        focusModal();
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-
-      if (event.shiftKey && (active === first || active === node)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-
-    function handleFocusIn(event: FocusEvent) {
-      if (event.target instanceof Node && !node.contains(event.target)) {
-        focusModal();
-      }
-    }
-
-    node.addEventListener("keydown", handleKeydown);
-    document.addEventListener("focusin", handleFocusIn);
-    queueMicrotask(focusModal);
-
-    return {
-      destroy() {
-        node.removeEventListener("keydown", handleKeydown);
-        document.removeEventListener("focusin", handleFocusIn);
-        previous?.focus();
-      },
-    };
-  }
 
   function _obNormPath(p: string): string {
     return p.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '');
@@ -2027,6 +2023,10 @@
       {/if}
     </div>
   </div>
+{/if}
+
+{#if appReady && showWhatsNew}
+  <WhatsNew version={appVersion} highlights={whatsNewItems} onAction={whatsNewAction} onClose={closeWhatsNew} />
 {/if}
 
 <!-- First-Run Onboarding -->
