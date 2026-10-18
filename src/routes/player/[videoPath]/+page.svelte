@@ -2702,7 +2702,9 @@
           {#if showModelSelector && !isGeneratingSubtitles}
             <div class="model-selector">
               <div class="model-header">Select AI Model</div>
-              {#if (setupStatus?.models_installed.length ?? 0) > 0 || liveModelAvailable}
+              <!-- The Live entry is only offered while live subtitles are off, so a live
+                   model alone counts only then; otherwise the menu would open empty. -->
+              {#if (setupStatus?.models_installed.length ?? 0) > 0 || (liveModelAvailable && !liveActive)}
                 {#if !liveActive && liveModelAvailable}
                   <button class="model-option" onclick={() => enableLiveSubtitles()}>
                     <span class="model-name">Live (real-time)</span>

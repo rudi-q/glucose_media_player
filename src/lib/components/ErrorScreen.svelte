@@ -50,6 +50,8 @@
     // ("https://") where a drive path has one ("C:/"), and the slashes inside an address
     // follow its host name, never a space or the start of the text.
     return text
+      // file:// addresses point at local files, whatever follows (file:///home/..., file:///C:/...).
+      .replace(/file:\/\/[^"'`\n]*/gi, "<path>")
       // Drive paths, also URL-encoded (C%3A%5C...).
       .replace(/[A-Za-z](?::\\|:\/(?!\/)|%3A%5C|%3A%2F(?!%2F))[^"'`\n]*/gi, "<path>")
       // Network paths (\\server\share).
