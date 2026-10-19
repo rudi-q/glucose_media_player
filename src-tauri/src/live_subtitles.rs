@@ -72,7 +72,15 @@ struct LiveState {
     model: Option<(String, Arc<WhisperContext>)>,
     // Same for translation models, one per source/target pair used so far.
     translators: Vec<Arc<CueTranslator>>,
+    // Counts unloads (live mode turned off), so a model that finishes loading after an
+    // unload is not cached again.
+    unloads: u64,
 }
+
+// Only one Whisper model load runs at a time. A session that starts while another is
+// still loading (auto-start followed by the jump to the saved position, a seek, an
+// audio-track switch) waits and then reuses that model instead of loading a second copy.
+static MODEL_LOAD: Mutex<()> = Mutex::new(());
 
 fn state() -> &'static Mutex<LiveState> {
     static STATE: OnceLock<Mutex<LiveState>> = OnceLock::new();
@@ -183,6 +191,7 @@ pub fn start_live_subtitles(
         cancel: cancel.clone(),
         ffmpeg: ffmpeg.clone(),
     });
+    let unload_gen = st.unloads;
     let cached = st
         .model
         .as_ref()
@@ -213,6 +222,7 @@ pub fn start_live_subtitles(
         failed_translations: Mutex::new(Vec::new()),
         cancel,
         ffmpeg,
+        unload_gen,
     };
     std::thread::spawn(move || {
         let app = job.app.clone();
@@ -247,6 +257,7 @@ pub fn stop_live_subtitles(unload: bool) {
         stop_session(session);
     }
     if unload {
+        st.unloads += 1;
         st.model = None;
         st.translators.clear();
     }
@@ -275,6 +286,8 @@ struct Job {
     failed_translations: Mutex<Vec<String>>,
     cancel: Arc<AtomicBool>,
     ffmpeg: Arc<Mutex<Option<Child>>>,
+    // `LiveState::unloads` when the session started.
+    unload_gen: u64,
 }
 
 // Reaps FFmpeg however the job ends (finished, cancelled or failed).
@@ -297,14 +310,21 @@ impl Job {
             return Ok(ctx.clone());
         }
         emit_status(&self.app, self.session_id, "loading", "Loading speech model...");
+        let _loading = MODEL_LOAD.lock().unwrap_or_else(|e| e.into_inner());
+        // A load that finished while this session waited is reused.
+        if let Some((path, ctx)) = &state().lock().unwrap().model {
+            if *path == self.model_path {
+                return Ok(ctx.clone());
+            }
+        }
         let ctx = Arc::new(
             WhisperContext::new_with_params(&self.model_path, WhisperContextParameters::default())
                 .map_err(|e| format!("Failed to load Whisper model: {}", e))?,
         );
-        // Only cache if this session is still current, so a stopped session cannot
-        // repopulate the cache after an unload.
+        // Cached even when this session has been replaced meanwhile, so its replacement
+        // reuses it; but not after an unload, which must release the model.
         let mut st = state().lock().unwrap();
-        if st.session.as_ref().map(|s| s.id) == Some(self.session_id) {
+        if st.unloads == self.unload_gen {
             st.model = Some((self.model_path.clone(), ctx.clone()));
         }
         Ok(ctx)
