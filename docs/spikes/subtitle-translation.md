@@ -4,7 +4,7 @@ Branch: `spike/subtitle-translation` (child of `spike/live-subtitles`)
 
 ## Status and how to resume
 
-_Last updated 2026-10-11._
+_Last updated 2026-10-19._
 
 **Where things stand:** live translation is built and works in the running app (tried with English to German, which ran close to real time). Steps 1 (benchmark), 2 (native build check) and 3 (live translation in the app) are done, and the language pairs have been extended beyond German and French. Open items are under "Not done yet".
 
@@ -15,13 +15,13 @@ _Last updated 2026-10-11._
 - Live worker (`live_subtitles.rs`): `start_live_subtitles` takes `translate_to` and fails early if no installed model translates into that language. For each chunk it picks the model from the speech language (the one set in Settings, or the one Whisper detects), loads it on first use and caches it for the session (released on unload). Speech already in the target language, or in a language no model covers, is shown unchanged, and a translation error falls back to the original text for that chunk.
 - Live cache key includes `translate_to` (omitted when not translating, so existing caches still match).
 - Settings, AI tab, Live Subtitles: "Translate live subtitles": Off, German, French, Spanish, Russian, Turkish, Italian, Dutch or English (`localStorage` key `glucose_live_translate`), applied the next time live subtitles start. The subtitle menu entry and the status text name the language ("Live subtitles · small-q5_1 · German", "Generating German subtitles...", "Loading German translation model...").
-- **Language pairs:** from English into German, French, Spanish, Russian, Turkish, Italian and Dutch (compact `opus-mt_tiny_eng-*` models, about 20 MB each), and into English from German, French and Spanish (compact `opus-mt_tiny_*-eng`). All were converted, installed on the development machine and sanity-checked on a few sentences each; only German and French output has been reviewed for quality.
-- Models are looked up as `<model folder>/<model name>/` (CTranslate2 int8 conversion plus `source.spm` and `target.spm`), in the same folders as the Whisper models. On the development machine they were copied into `~/.whisper/models/` by hand.
+- **Language pairs:** from English into German, French, Spanish, Russian, Turkish, Italian and Dutch (compact `opus-mt_tiny_eng-*` models, about 20 MB each), and into English from the same seven languages (compact `opus-mt_tiny_*-eng`). All were converted, installed on the development machine and sanity-checked on a few sentences each; only German and French output has been reviewed for quality. No compact Finnish model exists, so Finnish is not offered.
+- Models are looked up as `<model folder>/<model name>/` (CTranslate2 int8 conversion plus `source.spm` and `target.spm`), in the same folders as the Whisper models.
+- **Downloading the models (`translation_models.rs`):** Settings, AI tab, "Translation models" lists the 14 pairs with Download, a progress bar and Remove. The converted models are release files of the public `rudi-q/glucose-translation-models` repository (release `v1`, files named `<model folder>__<file>`), since the published originals are PyTorch models the app cannot load and no converted copies of the compact models exist elsewhere. Every file's SHA-256 is pinned in the app and checked before installing; a download goes into a temporary folder that only replaces the model once complete, and an existing copy is kept until the new one is in place. Adding a model means converting it, uploading its five files to the release and adding its five checksums in `translation_models.rs`.
 - Tests: unit tests cover sentence grouping and word placement; `translates_real_cues_with_installed_model` (ignored by default, run with `cargo test --lib -- --ignored`) translates real cues with the installed German model.
 
 **Not done yet:**
 
-- Downloading the translation models from Settings. Conversion needs Python, so the converted models have to be hosted somewhere; where is still to be decided.
 - Translating batch-generated subtitles.
 - The full `pnpm tauri build`, and macOS and Linux build checks.
 - Word-alignment-based placement instead of proportional placement.
