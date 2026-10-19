@@ -53,10 +53,21 @@ fn request_path(request: &Request<Vec<u8>>) -> String {
     String::from_utf8_lossy(&urlencoding::decode_binary(encoded.as_bytes())).into_owned()
 }
 
+// Only video and audio files are served: everything the app loads this way is media (the
+// player, the audio player, gallery previews and thumbnails, and the temporary .mkv made
+// when switching audio tracks). Anything else, such as keys or documents, is refused, so a
+// script that got into the webview could not read other files through this protocol.
+fn is_servable(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| crate::is_media_extension(&e.to_lowercase()))
+}
+
 fn serve(request: &Request<Vec<u8>>, origin: &str) -> Served {
     let path = request_path(request);
     let resp = Response::builder().header(ACCESS_CONTROL_ALLOW_ORIGIN, origin);
-    if tauri::path::SafePathBuf::new(path.clone().into()).is_err() {
+    if tauri::path::SafePathBuf::new(path.clone().into()).is_err() || !is_servable(&path) {
         return Ok(resp.status(StatusCode::FORBIDDEN).body(Vec::new())?);
     }
     let mut file = match File::open(&path) {
@@ -133,7 +144,17 @@ fn parse_range(header: &str, len: u64) -> Option<(u64, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_range;
+    use super::{is_servable, parse_range};
+
+    #[test]
+    fn serves_only_media_files() {
+        assert!(is_servable(r"C:\Films\A Film.MKV"));
+        assert!(is_servable("/home/someone/music/song.flac"));
+        assert!(is_servable(r"C:\Users\x\AppData\Local\Temp\glucose_audio_1_2.mkv"));
+        assert!(!is_servable(r"C:\Users\x\.ssh\id_rsa"));
+        assert!(!is_servable(r"C:\Users\x\Documents\taxes.pdf"));
+        assert!(!is_servable(r"C:\Users\x\notes"));
+    }
 
     #[test]
     fn parses_ranges() {
