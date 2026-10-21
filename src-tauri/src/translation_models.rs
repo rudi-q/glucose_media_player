@@ -7,6 +7,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -162,6 +163,29 @@ pub async fn translation_models() -> Vec<TranslationModel> {
         .collect()
 }
 
+// Model folders being downloaded right now. A second download of the same pair would
+// wipe and share the first one's temporary folder, so it is refused while one runs.
+static ACTIVE_DOWNLOADS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+struct ActiveDownload(&'static str);
+
+impl ActiveDownload {
+    fn claim(folder: &'static str) -> Result<Self, String> {
+        let mut active = ACTIVE_DOWNLOADS.lock().unwrap_or_else(|e| e.into_inner());
+        if active.contains(&folder) {
+            return Err("This model is already being downloaded".into());
+        }
+        active.push(folder);
+        Ok(Self(folder))
+    }
+}
+
+impl Drop for ActiveDownload {
+    fn drop(&mut self) {
+        ACTIVE_DOWNLOADS.lock().unwrap_or_else(|e| e.into_inner()).retain(|f| *f != self.0);
+    }
+}
+
 /// Downloads one language pair. Files go into a temporary folder that only replaces the
 /// model folder once every file has arrived, so an interrupted download never leaves a
 /// half model behind. Progress is reported as `translation-model-progress` events.
@@ -172,6 +196,7 @@ pub async fn download_translation_model(
     target: String,
 ) -> Result<(), String> {
     let folder = folder_for(&source, &target)?;
+    let _active = ActiveDownload::claim(folder)?;
     let root = download_root()?;
     fs::create_dir_all(&root).map_err(|e| format!("Could not create the models folder: {e}"))?;
     let partial = root.join(format!("{folder}.download"));
@@ -241,7 +266,7 @@ async fn fetch_all(
 
     // Total size first, so the progress bar covers the whole model. Read from the header
     // itself: for a HEAD request the body is empty, so the client's own length can be 0.
-    let mut total = 0;
+    let mut total = Some(0);
     for file in MODEL_FILES {
         let response = client
             .head(url(file))
@@ -251,13 +276,16 @@ async fn fetch_all(
         if !response.status().is_success() {
             return Err(format!("The model server answered {} for {file}", response.status()));
         }
-        total += response
+        let length = response
             .headers()
             .get(reqwest::header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(0);
+            .and_then(|v| v.parse::<u64>().ok());
+        total = total.zip(length).map(|(t, l)| t + l);
     }
+    // When the server leaves out a size, the usual size of a compact model stands in, so
+    // the progress bar still moves; it is never reported below what has arrived.
+    let total = total.unwrap_or(APPROX_SIZE_MB as u64 * 1024 * 1024);
 
     let mut downloaded = 0;
     let mut last_reported = 0;
@@ -281,7 +309,7 @@ async fn fetch_all(
             // About every 512 KB, and at the end.
             if downloaded - last_reported >= 512 * 1024 || downloaded == total {
                 last_reported = downloaded;
-                on_progress(downloaded, total);
+                on_progress(downloaded, total.max(downloaded));
             }
         }
         out.flush().map_err(|e| format!("Could not save {file}: {e}"))?;
