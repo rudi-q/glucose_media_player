@@ -1833,44 +1833,61 @@ fn acquire_watch_progress_file_lock_shared(progress_file: &std::path::Path) -> R
     Ok(f)
 }
 
+// Runs a command's locking and file work on a blocking thread. An async command alone only
+// leaves the window thread: a lock held by another Glucose instance would still park one of
+// the async runtime's few worker threads.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| format!("Background task failed: {}", e))?
+}
+
 #[tauri::command]
 async fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> Result<(), String> {
-    let progress_file = watch_progress_path()?;
-    let _guard = watch_progress_lock()
-        .lock()
-        .map_err(|_| "Watch progress lock poisoned".to_string())?;
-    let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
+    blocking(move || {
+        let progress_file = watch_progress_path()?;
+        let _guard = watch_progress_lock()
+            .lock()
+            .map_err(|_| "Watch progress lock poisoned".to_string())?;
+        let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
 
-    let mut progress_map = read_watch_progress(&progress_file)?;
+        let mut progress_map = read_watch_progress(&progress_file)?;
 
-    let last_watched = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_err(|e| format!("Failed to get current time: {}", e))?
-        .as_secs();
+        let last_watched = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|e| format!("Failed to get current time: {}", e))?
+            .as_secs();
 
-    progress_map.insert(
-        video_path.clone(),
-        WatchProgress {
-            path: video_path,
-            current_time,
-            duration,
-            last_watched,
-        },
-    );
+        progress_map.insert(
+            video_path.clone(),
+            WatchProgress {
+                path: video_path,
+                current_time,
+                duration,
+                last_watched,
+            },
+        );
 
-    write_watch_progress(&progress_file, &progress_map)
+        write_watch_progress(&progress_file, &progress_map)
+    })
+    .await
 }
 
 // Get watch progress for a video
 #[tauri::command]
 async fn get_watch_progress(video_path: String) -> Result<Option<WatchProgress>, String> {
-    let progress_file = watch_progress_path()?;
-    let _guard = watch_progress_lock()
-        .lock()
-        .map_err(|_| "Watch progress lock poisoned".to_string())?;
-    let _file_lock = acquire_watch_progress_file_lock_shared(&progress_file)?;
-    let progress_map = read_watch_progress(&progress_file)?;
-    Ok(progress_map.get(&video_path).cloned())
+    blocking(move || {
+        let progress_file = watch_progress_path()?;
+        let _guard = watch_progress_lock()
+            .lock()
+            .map_err(|_| "Watch progress lock poisoned".to_string())?;
+        let _file_lock = acquire_watch_progress_file_lock_shared(&progress_file)?;
+        let progress_map = read_watch_progress(&progress_file)?;
+        Ok(progress_map.get(&video_path).cloned())
+    })
+    .await
 }
 
 // Get video file info
@@ -2067,44 +2084,53 @@ fn convert_video_with_ffmpeg(
 // Get all watch progress data
 #[tauri::command]
 async fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchProgress>, String> {
-    let progress_file = watch_progress_path()?;
-    let _guard = watch_progress_lock()
-        .lock()
-        .map_err(|_| "Watch progress lock poisoned".to_string())?;
-    let _file_lock = acquire_watch_progress_file_lock_shared(&progress_file)?;
-    read_watch_progress(&progress_file)
+    blocking(move || {
+        let progress_file = watch_progress_path()?;
+        let _guard = watch_progress_lock()
+            .lock()
+            .map_err(|_| "Watch progress lock poisoned".to_string())?;
+        let _file_lock = acquire_watch_progress_file_lock_shared(&progress_file)?;
+        read_watch_progress(&progress_file)
+    })
+    .await
 }
 
 #[tauri::command]
 async fn delete_watch_progress(video_path: String) -> Result<(), String> {
-    let progress_file = watch_progress_path()?;
-    let _guard = watch_progress_lock()
-        .lock()
-        .map_err(|_| "Watch progress lock poisoned".to_string())?;
-    let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
+    blocking(move || {
+        let progress_file = watch_progress_path()?;
+        let _guard = watch_progress_lock()
+            .lock()
+            .map_err(|_| "Watch progress lock poisoned".to_string())?;
+        let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
 
-    let mut progress_map = read_watch_progress(&progress_file)?;
-    progress_map.remove(&video_path);
-    write_watch_progress(&progress_file, &progress_map)
+        let mut progress_map = read_watch_progress(&progress_file)?;
+        progress_map.remove(&video_path);
+        write_watch_progress(&progress_file, &progress_map)
+    })
+    .await
 }
 
 #[tauri::command]
 async fn clear_watch_history_since(cutoff_timestamp: u64) -> Result<(), String> {
-    let progress_file = watch_progress_path()?;
-    let _guard = watch_progress_lock()
-        .lock()
-        .map_err(|_| "Watch progress lock poisoned".to_string())?;
-    let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
+    blocking(move || {
+        let progress_file = watch_progress_path()?;
+        let _guard = watch_progress_lock()
+            .lock()
+            .map_err(|_| "Watch progress lock poisoned".to_string())?;
+        let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
 
-    let mut progress_map = read_watch_progress(&progress_file)?;
+        let mut progress_map = read_watch_progress(&progress_file)?;
 
-    if cutoff_timestamp == 0 {
-        progress_map.clear();
-    } else {
-        progress_map.retain(|_, v| v.last_watched < cutoff_timestamp);
-    }
+        if cutoff_timestamp == 0 {
+            progress_map.clear();
+        } else {
+            progress_map.retain(|_, v| v.last_watched < cutoff_timestamp);
+        }
 
-    write_watch_progress(&progress_file, &progress_map)
+        write_watch_progress(&progress_file, &progress_map)
+    })
+    .await
 }
 
 fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
