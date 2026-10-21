@@ -53,15 +53,16 @@ fn request_path(request: &Request<Vec<u8>>) -> String {
     String::from_utf8_lossy(&urlencoding::decode_binary(encoded.as_bytes())).into_owned()
 }
 
-// Only video and audio files are served: everything the app loads this way is media (the
-// player, the audio player, gallery previews and thumbnails, and the temporary .mkv made
-// when switching audio tracks). Anything else, such as keys or documents, is refused, so a
-// script that got into the webview could not read other files through this protocol.
+// Only video and audio files the player opens are served: everything the app loads this
+// way is media (the player, the audio player, gallery previews and thumbnails, and the
+// temporary .mkv made when switching audio tracks). Anything else, such as keys or
+// documents, is refused, so a script that got into the webview could not read other files
+// through this protocol.
 fn is_servable(path: &str) -> bool {
     std::path::Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| crate::is_media_extension(&e.to_lowercase()))
+        .is_some_and(|e| crate::is_playable_extension(&e.to_lowercase()))
 }
 
 fn serve(request: &Request<Vec<u8>>, origin: &str) -> Served {
@@ -151,6 +152,8 @@ mod tests {
         assert!(is_servable(r"C:\Films\A Film.MKV"));
         assert!(is_servable("/home/someone/music/song.flac"));
         assert!(is_servable(r"C:\Users\x\AppData\Local\Temp\glucose_audio_1_2.mkv"));
+        assert!(is_servable(r"D:\Recordings\match.M2TS"));
+        assert!(is_servable("/home/someone/books/story.m4b"));
         assert!(!is_servable(r"C:\Users\x\.ssh\id_rsa"));
         assert!(!is_servable(r"C:\Users\x\Documents\taxes.pdf"));
         assert!(!is_servable(r"C:\Users\x\notes"));

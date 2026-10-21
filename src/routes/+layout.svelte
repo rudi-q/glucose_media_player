@@ -99,7 +99,7 @@
   } from "$lib/components/UpdateManager.svelte";
   import UpdateNotification from "$lib/components/UpdateNotification.svelte";
   import { getFormattedVersion } from "$lib/utils/version";
-  import { isAudio } from "$lib/utils/mediaType";
+  import { isAudio, isPlayable } from "$lib/utils/mediaType";
   import {
     getDefaultPlayMode,
     getEndBehavior,
@@ -708,12 +708,18 @@
           );
           invoke("mark_file_processed").catch(console.error);
         }),
-        listen<string[]>("tauri://drag-drop", async (event) => {
-          if (event.payload && event.payload.length > 0) {
-            const encodedPath = encodeURIComponent(event.payload[0]);
+        listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
+          const path = event.payload?.paths?.[0];
+          if (path) {
+            if (!isPlayable(path)) {
+              const name = path.split(/[\\/]/).pop();
+              alert(`Glucose can't open "${name}". Drop a video or audio file instead.`);
+              return;
+            }
+            const encodedPath = encodeURIComponent(path);
             const params = new URLSearchParams({ mode: defaultPlayMode });
             await goto(
-              isAudio(event.payload[0])
+              isAudio(path)
                 ? `/audio/${encodedPath}`
                 : `/player/${encodedPath}?${params.toString()}`,
             );

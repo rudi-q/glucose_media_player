@@ -36,6 +36,15 @@ const AUDIO_EXTENSIONS: &[&str] = &[
 fn is_media_extension(ext: &str) -> bool {
     VIDEO_EXTENSIONS.contains(&ext) || AUDIO_EXTENSIONS.contains(&ext)
 }
+// Formats the library does not list but the player still opens from drag-drop and
+// "Open with": some play directly, the rest can be converted from the player. Keep in
+// sync with src/lib/utils/mediaType.ts.
+const EXTRA_PLAYABLE_EXTENSIONS: &[&str] = &[
+    "ts", "m2ts", "mts", "3gp", "3g2", "m4b", "mka", "wv", "ape",
+];
+fn is_playable_extension(ext: &str) -> bool {
+    is_media_extension(ext) || EXTRA_PLAYABLE_EXTENSIONS.contains(&ext)
+}
 use tauri::Emitter;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use tauri::RunEvent;
@@ -2381,7 +2390,7 @@ pub fn run() {
                     let is_media = std::path::Path::new(&clean_arg)
                         .extension()
                         .and_then(|s| s.to_str())
-                        .map(|ext| is_media_extension(&ext.to_lowercase()))
+                        .map(|ext| is_playable_extension(&ext.to_lowercase()))
                         .unwrap_or(false);
                     if is_media {
                         video_files.push(clean_arg.clone());
@@ -2498,7 +2507,7 @@ pub fn run() {
                             let is_media = Path::new(decoded_path.as_ref())
                                 .extension()
                                 .and_then(|s| s.to_str())
-                                .map(|ext| is_media_extension(&ext.to_lowercase()))
+                                .map(|ext| is_playable_extension(&ext.to_lowercase()))
                                 .unwrap_or(false);
                             if is_media {
                                 video_files.push(decoded_path.to_string());
