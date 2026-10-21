@@ -58,11 +58,64 @@ fn request_path(request: &Request<Vec<u8>>) -> String {
 // temporary .mkv made when switching audio tracks). Anything else, such as keys or
 // documents, is refused, so a script that got into the webview could not read other files
 // through this protocol.
+// Paths in the Windows device namespace (\\.\, \\?\GLOBALROOT) and reserved device names
+// such as CON or NUL, even with an extension, are refused too: reading one can block a
+// thread forever. Network shares (\\server\share) stay allowed for videos on a NAS.
 fn is_servable(path: &str) -> bool {
-    std::path::Path::new(path)
+    let p = std::path::Path::new(path);
+    let media = p
         .extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| crate::is_playable_extension(&e.to_lowercase()))
+        .is_some_and(|e| crate::is_playable_extension(&e.to_lowercase()));
+    let normalized = path.replace('/', "\\").to_uppercase();
+    let device_path = normalized.starts_with("\\\\.\\") || normalized.starts_with("\\\\?\\GLOBALROOT");
+    let device_name = p
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.trim_end_matches([' ', '.']).to_uppercase())
+        .is_some_and(|s| {
+            matches!(s.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+                || (s.len() == 4
+                    && (s.starts_with("COM") || s.starts_with("LPT"))
+                    && s.ends_with(|c: char| c.is_ascii_digit()))
+        });
+    media && !device_path && !device_name
+}
+
+// Content type by extension; every servable extension is listed, so files are not read
+// on each range request to sniff it.
+fn mime_type(path: &str) -> &'static str {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+        .unwrap_or_default();
+    match ext.as_str() {
+        "mp4" | "m4v" => "video/mp4",
+        "mkv" => "video/x-matroska",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "avi" => "video/x-msvideo",
+        "wmv" => "video/x-ms-wmv",
+        "flv" => "video/x-flv",
+        "mpg" | "mpeg" => "video/mpeg",
+        "ogv" => "video/ogg",
+        "ts" | "m2ts" | "mts" => "video/mp2t",
+        "3gp" => "video/3gpp",
+        "3g2" => "video/3gpp2",
+        "mp3" => "audio/mpeg",
+        "flac" => "audio/flac",
+        "wav" => "audio/wav",
+        "aac" => "audio/aac",
+        "ogg" | "opus" => "audio/ogg",
+        "m4a" | "m4b" => "audio/mp4",
+        "aiff" => "audio/aiff",
+        "wma" => "audio/x-ms-wma",
+        "mka" => "audio/x-matroska",
+        "wv" => "audio/wavpack",
+        "ape" => "audio/ape",
+        _ => "application/octet-stream",
+    }
 }
 
 fn serve(request: &Request<Vec<u8>>, origin: &str) -> Served {
@@ -81,13 +134,15 @@ fn serve(request: &Request<Vec<u8>>, origin: &str) -> Served {
         }
         Err(e) => return Err(e.into()),
     };
-    let len = file.metadata()?.len();
+    let metadata = file.metadata()?;
+    // A folder named like a video, or a device, is not a file to serve.
+    if !metadata.is_file() {
+        return Ok(resp.status(StatusCode::FORBIDDEN).body(Vec::new())?);
+    }
+    let len = metadata.len();
 
-    let mut magic = Vec::new();
-    (&mut file).take(len.min(8192)).read_to_end(&mut magic)?;
-    let mime = tauri::utils::mime_type::MimeType::parse(&magic, &path);
     let resp = resp
-        .header(CONTENT_TYPE, mime)
+        .header(CONTENT_TYPE, mime_type(&path))
         .header(ACCEPT_RANGES, "bytes")
         .header(ACCESS_CONTROL_EXPOSE_HEADERS, "content-range");
 
@@ -145,7 +200,7 @@ fn parse_range(header: &str, len: u64) -> Option<(u64, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_servable, parse_range};
+    use super::{is_servable, mime_type, parse_range};
 
     #[test]
     fn serves_only_media_files() {
@@ -157,6 +212,25 @@ mod tests {
         assert!(!is_servable(r"C:\Users\x\.ssh\id_rsa"));
         assert!(!is_servable(r"C:\Users\x\Documents\taxes.pdf"));
         assert!(!is_servable(r"C:\Users\x\notes"));
+    }
+
+    #[test]
+    fn refuses_windows_devices_but_not_network_shares() {
+        assert!(!is_servable(r"C:\x\CON.mp4"));
+        assert!(!is_servable(r"C:\x\nul.mkv"));
+        assert!(!is_servable(r"C:\x\com1.mp3"));
+        assert!(!is_servable(r"\\.\PhysicalDrive0\x.mp4"));
+        assert!(!is_servable(r"\\?\GLOBALROOT\Device\x.mp4"));
+        assert!(is_servable(r"\\nas\films\Film.mkv"));
+        assert!(is_servable(r"C:\x\Conference.mp4"));
+        assert!(is_servable(r"C:\x\COM10.mp4"));
+    }
+
+    #[test]
+    fn content_type_comes_from_the_extension() {
+        assert_eq!(mime_type(r"C:\a\b.MKV"), "video/x-matroska");
+        assert_eq!(mime_type("/a/b.m4b"), "audio/mp4");
+        assert_eq!(mime_type("/a/b.m2ts"), "video/mp2t");
     }
 
     #[test]
