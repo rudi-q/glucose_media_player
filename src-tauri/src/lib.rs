@@ -1688,10 +1688,12 @@ fn transcribe_audio_with_whisper(
     #[cfg(debug_assertions)]
     println!("Found {} words", words.len());
 
-    let segments: Vec<(f64, f64, String)> = subtitle_format::build_cues(&words, audio_secs)
-        .into_iter()
-        .map(|c| (c.start, c.end, c.text))
-        .collect();
+    let spoken = subtitle_format::spoken_language(&state, language);
+    let segments: Vec<(f64, f64, String)> =
+        subtitle_format::cues_for_language(&words, audio_secs, &spoken)
+            .into_iter()
+            .map(|c| (c.start, c.end, c.text))
+            .collect();
 
     #[cfg(debug_assertions)]
     println!("Generating SRT file with {} segments...", segments.len());

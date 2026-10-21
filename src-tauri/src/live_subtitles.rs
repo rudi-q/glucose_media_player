@@ -26,7 +26,7 @@ const ENERGY_FRAME: usize = SAMPLE_RATE / 20; // 50 ms
 // Stop working this far ahead of the playhead and resume when it catches up.
 const MAX_LEAD_SECS: f64 = 180.0;
 // Thread count beyond this did not speed up transcription in the spike benchmark.
-const MAX_THREADS: usize = 8;
+pub(crate) const MAX_THREADS: usize = 8;
 
 // Preferred models for live mode, fastest acceptable first. small-q5_1 matches small's
 // speed with a third of the size; the rest are fallbacks for whatever is installed.
@@ -37,12 +37,31 @@ const LIVE_MODELS: &[(&str, &str)] = &[
     ("ggml-tiny.bin", "tiny"),
 ];
 
+// Label and path of the model live mode would use right now, if any is installed.
+pub(crate) fn find_live_model() -> Option<(&'static str, String)> {
+    LIVE_MODELS.iter().find_map(|(file, label)| {
+        super::find_model_path(file).map(|path| (*label, path.to_string_lossy().into_owned()))
+    })
+}
+
 // Label of the model live mode would use right now, if any is installed.
 pub(crate) fn preferred_model() -> Option<&'static str> {
-    LIVE_MODELS
-        .iter()
-        .find(|(file, _)| super::find_model_path(file).is_some())
-        .map(|(_, label)| *label)
+    find_live_model().map(|(label, _)| label)
+}
+
+// The Whisper model at `path` for the hardware check: reuses the one live mode holds
+// rather than loading a second copy, and otherwise loads it while no live session is
+// loading one. Not cached, since live mode may be off.
+pub(crate) fn load_shared_model(path: &str) -> Result<Arc<WhisperContext>, String> {
+    let _loading = MODEL_LOAD.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((loaded, ctx)) = &state().lock().unwrap().model {
+        if loaded == path {
+            return Ok(ctx.clone());
+        }
+    }
+    WhisperContext::new_with_params(path, WhisperContextParameters::default())
+        .map(Arc::new)
+        .map_err(|e| e.to_string())
 }
 
 /// The model live mode would use, or None when no live-capable model is installed. Live
@@ -75,7 +94,12 @@ struct LiveState {
     // Counts unloads (live mode turned off), so a model that finishes loading after an
     // unload is not cached again.
     unloads: u64,
+    // Highest request number seen from start_live_subtitles and stop_live_subtitles.
+    last_request: u64,
 }
+
+// The error a start gets when a later start or stop overtook it. The frontend ignores it.
+const SUPERSEDED: &str = "superseded";
 
 // Only one Whisper model load runs at a time. A session that starts while another is
 // still loading (auto-start followed by the jump to the saved position, a seek, an
@@ -145,9 +169,14 @@ fn stop_session(session: Session) {
     }
 }
 
+// Async so the file checks below do not run on the window thread; this runs on every
+// seek. Async commands can finish out of order, so each start and stop carries a request
+// number from the frontend, and a start overtaken by a later request is refused instead
+// of replacing the newer session or running after live mode was turned off.
 #[tauri::command]
-pub fn start_live_subtitles(
+pub async fn start_live_subtitles(
     app_handle: tauri::AppHandle,
+    request: u64,
     video_path: String,
     start_secs: f64,
     audio_stream_index: Option<i64>,
@@ -169,16 +198,14 @@ pub fn start_live_subtitles(
         };
         translate::check_installed(source, target)?;
     }
-    let (model_file, model_label) = LIVE_MODELS
-        .iter()
-        .find(|(file, _)| super::find_model_path(file).is_some())
-        .ok_or("No Whisper model installed. Download one from the Settings page.")?;
-    let model_path = super::find_model_path(model_file)
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
+    let (model_label, model_path) =
+        find_live_model().ok_or("No Whisper model installed. Download one from the Settings page.")?;
 
     let mut st = state().lock().unwrap();
+    if request < st.last_request {
+        return Err(SUPERSEDED.into());
+    }
+    st.last_request = request;
     if let Some(prev) = st.session.take() {
         stop_session(prev);
     }
@@ -249,10 +276,12 @@ pub fn start_live_subtitles(
 }
 
 // Stops the running session. `unload` also releases the Whisper model; pass false when
-// restarting at a new position so the model stays in memory.
+// restarting at a new position so the model stays in memory. `request` is the frontend's
+// request number (see start_live_subtitles); starts sent before this stop are refused.
 #[tauri::command]
-pub fn stop_live_subtitles(unload: bool) {
+pub fn stop_live_subtitles(unload: bool, request: u64) {
     let mut st = state().lock().unwrap();
+    st.last_request = st.last_request.max(request);
     if let Some(session) = st.session.take() {
         stop_session(session);
     }
@@ -305,17 +334,23 @@ impl Job {
         self.cancel.load(Ordering::Relaxed)
     }
 
-    fn load_model(&self) -> Result<Arc<WhisperContext>, String> {
+    // None when the session was cancelled while it waited for another load to finish.
+    fn load_model(&self) -> Result<Option<Arc<WhisperContext>>, String> {
         if let Some(ctx) = &self.cached {
-            return Ok(ctx.clone());
+            return Ok(Some(ctx.clone()));
         }
         emit_status(&self.app, self.session_id, "loading", "Loading speech model...");
         let _loading = MODEL_LOAD.lock().unwrap_or_else(|e| e.into_inner());
         // A load that finished while this session waited is reused.
         if let Some((path, ctx)) = &state().lock().unwrap().model {
             if *path == self.model_path {
-                return Ok(ctx.clone());
+                return Ok(Some(ctx.clone()));
             }
+        }
+        // Otherwise a replaced session gives up here rather than loading a model nobody
+        // will use while its replacement waits behind it.
+        if self.cancelled() {
+            return Ok(None);
         }
         let ctx = Arc::new(
             WhisperContext::new_with_params(&self.model_path, WhisperContextParameters::default())
@@ -327,7 +362,7 @@ impl Job {
         if st.unloads == self.unload_gen {
             st.model = Some((self.model_path.clone(), ctx.clone()));
         }
-        Ok(ctx)
+        Ok(Some(ctx))
     }
 
     // Returns the translator from `source` speech into the session's target language,
@@ -343,14 +378,18 @@ impl Job {
         let Some(target) = &self.translate_to else {
             return Ok(None);
         };
-        if source == target
-            || !translate::is_available(source, target)
-            || self.failed_translations.lock().unwrap().iter().any(|s| s == source)
-        {
+        if source == target {
             return Ok(None);
         }
+        // Runs for every chunk, so the loaded translator is looked up before anything that
+        // checks the disk.
         if let Some(t) = self.translators.lock().unwrap().iter().find(|t| t.source == source) {
             return Ok(Some(t.clone()));
+        }
+        if self.failed_translations.lock().unwrap().iter().any(|s| s == source)
+            || !translate::is_available(source, target)
+        {
+            return Ok(None);
         }
         emit_status(
             &self.app,
@@ -419,8 +458,14 @@ impl Job {
             .unwrap_or(4) as i32;
         let model_started = std::time::Instant::now();
         let whisper_cached = self.cached.is_some();
-        let ctx = self.load_model()?;
+        let Some(ctx) = self.load_model()? else {
+            return Ok(());
+        };
         let model_load_ms = live_log::ms(model_started);
+        // A session replaced while Whisper loaded does not go on to load a translator.
+        if self.cancelled() {
+            return Ok(());
+        }
         // Translation runs on this thread right after Whisper, so it can use the same
         // thread budget without competing with it. Load the model up front when the
         // speech language is known: English for translating out of English, or the
@@ -687,7 +732,8 @@ impl Job {
         // Cues may not run past this chunk, and leave the usual gap before it ends: the
         // next chunk's speech is not known yet.
         let limit = offset + chunk_secs - subtitle_format::MIN_GAP;
-        let mut cues = subtitle_format::build_cues(&words, limit);
+        let source = subtitle_format::spoken_language(&state, &self.language);
+        let mut cues = subtitle_format::cues_for_language(&words, limit, &source);
         let resume = if is_last {
             None
         } else {
@@ -703,13 +749,6 @@ impl Job {
         }
         // Translate when a model covers this chunk's speech language; otherwise, and if
         // translation fails, the original text is shown, which beats showing nothing.
-        let source = if self.language != "auto" {
-            self.language.clone()
-        } else {
-            whisper_rs::get_lang_str(state.full_lang_id_from_state())
-                .unwrap_or_default()
-                .to_string()
-        };
         stats.speech_lang = source.clone();
         let mut originals = Vec::new();
         match self.translator_for(&source, threads as usize, true) {

@@ -8,13 +8,13 @@
 use std::time::Instant;
 
 use serde::Serialize;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
+
+use super::live_subtitles::{self, MAX_THREADS};
 
 // 20 s of public-domain English speech, 16 kHz mono 16-bit PCM (see assets/hardware_check).
 const SPEECH_SAMPLE: &[u8] = include_bytes!("../assets/hardware_check/speech_sample_16k_mono.pcm");
 const SAMPLE_RATE: f64 = 16_000.0;
-// Live mode's thread cap (live_subtitles.rs), so the test matches what live mode gets.
-const MAX_THREADS: usize = 8;
 
 #[derive(Debug, Default, Serialize)]
 pub struct HardwareReport {
@@ -52,10 +52,10 @@ fn check() -> HardwareReport {
         ..Default::default()
     };
 
-    match super::live_subtitles::preferred_model() {
-        Some(label) => {
+    match live_subtitles::find_live_model() {
+        Some((label, path)) => {
             report.live_model = Some(label.to_string());
-            match whisper_speed(label, threads.min(MAX_THREADS)) {
+            match whisper_speed(label, &path, threads.min(MAX_THREADS)) {
                 Ok(speed) => report.live_speed_x = Some(speed),
                 Err(e) => report.problems.push(e),
             }
@@ -82,11 +82,9 @@ fn speech_samples() -> Vec<f32> {
 // Transcribes the sample the way live mode transcribes a chunk and returns audio seconds
 // per second of work. Model loading is not counted: live mode loads it once per session.
 // Runs twice and keeps the faster run, so a short burst of work from another program does
-// not decide the result.
-fn whisper_speed(label: &str, threads: usize) -> Result<f64, String> {
-    let file = format!("ggml-{label}.bin");
-    let path = super::find_model_path(&file).ok_or_else(|| format!("Speech model {file} was not found."))?;
-    let ctx = WhisperContext::new_with_params(&path, WhisperContextParameters::default())
+// not decide the result. Uses live mode's copy of the model when it has one loaded.
+fn whisper_speed(label: &str, path: &str, threads: usize) -> Result<f64, String> {
+    let ctx = live_subtitles::load_shared_model(path)
         .map_err(|e| format!("Could not load the speech model for the speed test: {e}"))?;
     let samples = speech_samples();
     let mut best = f64::MAX;

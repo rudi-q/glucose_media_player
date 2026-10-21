@@ -34,6 +34,10 @@ const WEAK_ENDINGS: &[&str] = &[
     "their", "our", "its", "this", "these", "those", "as", "if", "so", "than", "into",
 ];
 
+// Whisper codes of languages written without spaces between words (see
+// `cues_for_language`).
+const UNSPACED_LANGUAGES: &[&str] = &["zh", "yue", "ja", "th", "lo", "km", "my", "bo"];
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Word {
     pub start: f64,
@@ -88,6 +92,37 @@ pub(crate) fn words_from_state(state: &WhisperState, offset: f64, duration: f64)
     words
 }
 
+// The language Whisper transcribed: the one chosen in Settings, or the one it detected
+// when that is "auto".
+pub(crate) fn spoken_language(state: &WhisperState, setting: &str) -> String {
+    if setting != "auto" {
+        return setting.to_string();
+    }
+    whisper_rs::get_lang_str(state.full_lang_id_from_state())
+        .unwrap_or_default()
+        .to_string()
+}
+
+// Builds the cues for speech in `language`. Whisper splits its output into words only at
+// spaces, so for languages written without them each "word" is a whole segment, which
+// the rules in `build_cues` would garble: lines can only break at spaces, the 7 s limit
+// cuts the text off while it is still being spoken, and merged segments are joined with
+// spaces. Those segments are used as cues directly, as before word timing was added.
+pub(crate) fn cues_for_language(words: &[Word], limit: f64, language: &str) -> Vec<Cue> {
+    if !UNSPACED_LANGUAGES.contains(&language) {
+        return build_cues(words, limit);
+    }
+    words
+        .iter()
+        .filter(|w| w.start < limit)
+        .map(|w| Cue {
+            start: w.start,
+            end: w.end.min(limit),
+            text: w.text.clone(),
+        })
+        .collect()
+}
+
 // Groups words into cues, merges fragments, applies the timing rules and breaks lines.
 // `limit` is the latest time any cue may extend to (the end of the transcribed audio).
 pub(crate) fn build_cues(words: &[Word], limit: f64) -> Vec<Cue> {
@@ -127,8 +162,9 @@ fn join(words: &[Word]) -> String {
     words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
 }
 
-fn ends_sentence(word: &Word) -> bool {
-    word.text
+// Also used by translate.rs to group cues into sentences, so both agree on where one ends.
+pub(crate) fn ends_sentence(text: &str) -> bool {
+    text.trim_end()
         .trim_end_matches(['"', '\'', ')', ']'])
         // U+0964 is the danda, the full stop of Devanagari script.
         .ends_with(['.', '?', '!', '\u{0964}'])
@@ -170,7 +206,7 @@ fn segment(words: &[Word]) -> Vec<(usize, usize)> {
             }
             let long_enough = words[j].end - words[i].start >= SENTENCE_MIN_SECS
                 || char_len(&join(&words[i..=j])) >= SENTENCE_MIN_CHARS;
-            if ends_sentence(&words[j]) && long_enough {
+            if ends_sentence(&words[j].text) && long_enough {
                 break;
             }
             if !fits(words, i, j + 1) {
@@ -192,7 +228,7 @@ fn break_score(words: &[Word], i: usize, k: usize) -> f64 {
     let chars = char_len(&join(&words[i..=k]));
     let duration = words[k].end - words[i].start;
     let mut score = 40.0 * chars as f64 / MAX_CUE_CHARS as f64;
-    if ends_sentence(&words[k]) {
+    if ends_sentence(&words[k].text) {
         score += 60.0;
     } else if ends_clause(&words[k]) {
         score += 35.0;
@@ -435,6 +471,20 @@ mod tests {
         assert_eq!(resume_point(&w, &cues, 0.0, end + 2.0), None);
         // Rewinding would leave less than the minimum advance.
         assert_eq!(resume_point(&w, &cues, resume - 1.0, end), None);
+    }
+
+    #[test]
+    fn unspaced_languages_keep_whisper_segments() {
+        let segments = vec![
+            Word { start: 0.0, end: 9.0, text: "今日はとても良い天気ですね、散歩に行きましょうか。".into() },
+            Word { start: 9.2, end: 9.8, text: "はい。".into() },
+        ];
+        let cues = cues_for_language(&segments, 9.5, "ja");
+        assert_eq!(texts(&cues), vec![segments[0].text.clone(), segments[1].text.clone()]);
+        // Not cut at 7 s, but never past the end of the audio.
+        assert_eq!((cues[0].end, cues[1].end), (9.0, 9.5));
+        // Spaced languages still get the full cue rules.
+        assert_eq!(cues_for_language(&segments, 9.5, "en"), build_cues(&segments, 9.5));
     }
 
     #[test]

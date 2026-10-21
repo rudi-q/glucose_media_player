@@ -250,6 +250,9 @@
   // Session ids only increase; events from sessions below this are stale.
   let liveLastSession = 0;
   let liveMinSession = 0;
+  // Numbers each start and stop sent to the backend, which refuses a start that a later
+  // request overtook (starts are async and can finish out of order).
+  let liveRequest = 0;
   // Where the current worker session is transcribing from next.
   let liveWorkerPos = 0;
   let livePlayheadSentAt = 0;
@@ -2034,9 +2037,14 @@
     liveMinSession = liveLastSession + 1;
     liveWorkerPos = time;
     liveError = null;
+    // A worker that reached the end reported "done"; until the new session reports its own
+    // state, that would hide the "Generating" hint and stop "pause until ready" waiting.
+    if (liveState === "done") liveState = "running";
+    const request = ++liveRequest;
     try {
       const info = await invoke<LiveSessionInfo>("start_live_subtitles", {
         ...key,
+        request,
         startSecs: time,
       });
       liveLastSession = Math.max(liveLastSession, info.session_id);
@@ -2053,7 +2061,8 @@
         time: videoElement?.currentTime ?? time,
       }).catch(() => {});
     } catch (err) {
-      if (!liveActive || liveKey !== key) return;
+      // A later start or stop replaced this one; its outcome is the one that counts.
+      if (request !== liveRequest || !liveActive || liveKey !== key) return;
       if (liveAutoStarted) {
         // Auto-start never shows an error: without the translation model it falls back
         // to the original language, and if it still cannot start it stays off.
@@ -2098,7 +2107,7 @@
     // Stop the previous key's worker and drop its in-flight chunks, so they cannot
     // land in this key's cues while the cache loads.
     liveMinSession = liveLastSession + 1;
-    invoke("stop_live_subtitles", { unload: false }).catch(() => {});
+    invoke("stop_live_subtitles", { unload: false, request: ++liveRequest }).catch(() => {});
     liveKey = key;
     liveCues = [];
     liveOriginalCues = [];
@@ -2169,7 +2178,7 @@
     liveRanges = [];
     liveState = null;
     liveError = null;
-    invoke("stop_live_subtitles", { unload: true }).catch(() => {});
+    invoke("stop_live_subtitles", { unload: true, request: ++liveRequest }).catch(() => {});
   }
 
   function handleLiveChunk(chunk: LiveSubtitleChunk) {
@@ -2190,7 +2199,7 @@
     const range = findRange(liveRanges, chunk.covered_start);
     if (range && range[1] > chunk.covered_end + 0.5) {
       if (duration > 0 && range[1] >= duration - 0.5) {
-        invoke("stop_live_subtitles", { unload: false }).catch(() => {});
+        invoke("stop_live_subtitles", { unload: false, request: ++liveRequest }).catch(() => {});
         liveState = "done";
       } else {
         startLiveSubtitlesAt(range[1]);

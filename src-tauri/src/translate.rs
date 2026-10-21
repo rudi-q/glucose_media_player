@@ -166,13 +166,6 @@ fn group_text(group: &[Cue]) -> String {
     group.iter().map(cue_text).collect::<Vec<_>>().join(" ")
 }
 
-fn ends_sentence(text: &str) -> bool {
-    text.trim_end()
-        .trim_end_matches(['"', '\'', ')', ']'])
-        // U+0964 is the danda, the full stop of Devanagari script.
-        .ends_with(['.', '?', '!', '\u{0964}'])
-}
-
 // Splits cues into runs that each end with a finished sentence, so the model sees whole
 // sentences rather than fragments cut at cue boundaries.
 fn sentence_groups(cues: &[Cue]) -> Vec<&[Cue]> {
@@ -182,7 +175,7 @@ fn sentence_groups(cues: &[Cue]) -> Vec<&[Cue]> {
     for (i, cue) in cues.iter().enumerate() {
         chars += cue_text(cue).chars().count() + 1;
         let last = i + 1 == cues.len();
-        if last || ends_sentence(&cue.text) || chars >= MAX_GROUP_CHARS {
+        if last || subtitle_format::ends_sentence(&cue.text) || chars >= MAX_GROUP_CHARS {
             groups.push(&cues[start..=i]);
             start = i + 1;
             chars = 0;
