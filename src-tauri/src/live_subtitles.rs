@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Emitter;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
 
 const SAMPLE_RATE: usize = 16_000;
 // Whisper pads every input to 30 s, so shorter windows cost about the same and only add
@@ -54,7 +54,7 @@ pub(crate) fn preferred_model() -> Option<&'static str> {
 // loading one. Not cached, since live mode may be off.
 pub(crate) fn load_shared_model(path: &str) -> Result<Arc<WhisperContext>, String> {
     let _loading = MODEL_LOAD.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((loaded, ctx)) = &state().lock().unwrap().model {
+    if let Some((loaded, ctx)) = &state().lock().unwrap_or_else(|e| e.into_inner()).model {
         if loaded == path {
             return Ok(ctx.clone());
         }
@@ -85,7 +85,6 @@ struct Session {
 
 #[derive(Default)]
 struct LiveState {
-    next_id: u64,
     session: Option<Session>,
     // Kept across sessions so seeking does not reload the model; dropped on unload.
     model: Option<(String, Arc<WhisperContext>)>,
@@ -94,7 +93,9 @@ struct LiveState {
     // Counts unloads (live mode turned off), so a model that finishes loading after an
     // unload is not cached again.
     unloads: u64,
-    // Highest request number seen from start_live_subtitles and stop_live_subtitles.
+    // Highest request number seen from start_live_subtitles and stop_live_subtitles. The
+    // frontend numbers its requests from the time in milliseconds, so they keep rising
+    // when the player is reopened.
     last_request: u64,
 }
 
@@ -137,6 +138,8 @@ struct LiveStatus {
     session_id: u64,
     // "loading" | "running" | "paused" | "done" | "error"
     state: String,
+    // What is loading, the error, or with "running" a notice for the viewer (for example
+    // that no translation is available); empty otherwise.
     message: String,
 }
 
@@ -161,7 +164,7 @@ fn emit_status(app: &tauri::AppHandle, session_id: u64, state: &str, message: im
 // a separate thread so a slow exit under heavy load cannot freeze the window.
 fn stop_session(session: Session) {
     session.cancel.store(true, Ordering::Relaxed);
-    if let Some(mut child) = session.ffmpeg.lock().unwrap().take() {
+    if let Some(mut child) = session.ffmpeg.lock().unwrap_or_else(|e| e.into_inner()).take() {
         std::thread::spawn(move || {
             let _ = child.kill();
             let _ = child.wait();
@@ -186,22 +189,18 @@ pub async fn start_live_subtitles(
     translate_to: Option<String>,
 ) -> Result<LiveSessionInfo, String> {
     if let Some(target) = &translate_to {
-        // Every model either translates from English or into English, so the speech
-        // language is English unless English is the target; then it is the language set
-        // in Settings, or unknown when that is "auto".
-        let source = if target != "en" {
-            Some("en")
-        } else if language != "auto" {
-            Some(language.as_str())
-        } else {
-            None
-        };
-        translate::check_installed(source, target)?;
+        // The speech language is the one set in Settings, or unknown when that is "auto".
+        // A pair no model covers starts untranslated and says so (see translator_for); a
+        // covered pair whose model is missing fails here, so the viewer can download it.
+        let source = (language != "auto").then_some(language.as_str());
+        if source.is_none_or(|s| translate::is_supported(s, target)) {
+            translate::check_installed(source, target)?;
+        }
     }
     let (model_label, model_path) =
         find_live_model().ok_or("No Whisper model installed. Download one from the Settings page.")?;
 
-    let mut st = state().lock().unwrap();
+    let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
     if request < st.last_request {
         return Err(SUPERSEDED.into());
     }
@@ -209,8 +208,9 @@ pub async fn start_live_subtitles(
     if let Some(prev) = st.session.take() {
         stop_session(prev);
     }
-    st.next_id += 1;
-    let session_id = st.next_id;
+    // The request number doubles as the session id, so the frontend can keep only the
+    // events of the start it made last.
+    let session_id = request;
     let cancel = Arc::new(AtomicBool::new(false));
     let ffmpeg = Arc::new(Mutex::new(None));
     st.session = Some(Session {
@@ -254,7 +254,10 @@ pub async fn start_live_subtitles(
     std::thread::spawn(move || {
         let app = job.app.clone();
         let cancel = job.cancel.clone();
-        let result = job.run();
+        // A panic (in whisper-rs, say) would otherwise end the thread without a status,
+        // leaving the player on "Generating subtitles..." or paused waiting for them.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run()))
+            .unwrap_or_else(|_| Err("Live subtitles stopped unexpectedly".to_string()));
         let reason = match &result {
             Err(_) => "error",
             Ok(()) if cancel.load(Ordering::Relaxed) => "cancelled",
@@ -280,7 +283,7 @@ pub async fn start_live_subtitles(
 // request number (see start_live_subtitles); starts sent before this stop are refused.
 #[tauri::command]
 pub fn stop_live_subtitles(unload: bool, request: u64) {
-    let mut st = state().lock().unwrap();
+    let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
     st.last_request = st.last_request.max(request);
     if let Some(session) = st.session.take() {
         stop_session(session);
@@ -322,7 +325,7 @@ struct Job {
 // Reaps FFmpeg however the job ends (finished, cancelled or failed).
 impl Drop for Job {
     fn drop(&mut self) {
-        if let Some(mut child) = self.ffmpeg.lock().unwrap().take() {
+        if let Some(mut child) = self.ffmpeg.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -342,7 +345,7 @@ impl Job {
         emit_status(&self.app, self.session_id, "loading", "Loading speech model...");
         let _loading = MODEL_LOAD.lock().unwrap_or_else(|e| e.into_inner());
         // A load that finished while this session waited is reused.
-        if let Some((path, ctx)) = &state().lock().unwrap().model {
+        if let Some((path, ctx)) = &state().lock().unwrap_or_else(|e| e.into_inner()).model {
             if *path == self.model_path {
                 return Ok(Some(ctx.clone()));
             }
@@ -358,7 +361,7 @@ impl Job {
         );
         // Cached even when this session has been replaced meanwhile, so its replacement
         // reuses it; but not after an unload, which must release the model.
-        let mut st = state().lock().unwrap();
+        let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
         if st.unloads == self.unload_gen {
             st.model = Some((self.model_path.clone(), ctx.clone()));
         }
@@ -383,12 +386,24 @@ impl Job {
         }
         // Runs for every chunk, so the loaded translator is looked up before anything that
         // checks the disk.
-        if let Some(t) = self.translators.lock().unwrap().iter().find(|t| t.source == source) {
+        if let Some(t) = self.translators.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|t| t.source == source) {
             return Ok(Some(t.clone()));
         }
-        if self.failed_translations.lock().unwrap().iter().any(|s| s == source)
-            || !translate::is_available(source, target)
+        if source.is_empty()
+            || self.failed_translations.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|s| s == source)
         {
+            return Ok(None);
+        }
+        if let Err(reason) = translate::check_installed(Some(source), target) {
+            // Said once per session, rather than showing the original text without a word;
+            // remembered so the disk is not checked again for every chunk.
+            self.failed_translations.lock().unwrap_or_else(|e| e.into_inner()).push(source.to_string());
+            emit_status(
+                &self.app,
+                self.session_id,
+                "running",
+                format!("{reason}, so the original text is shown"),
+            );
             return Ok(None);
         }
         emit_status(
@@ -415,16 +430,19 @@ impl Job {
             Err(e) => {
                 // Remember the failure and clear the loading status; the caller shows the
                 // original text instead.
-                self.failed_translations.lock().unwrap().push(source.to_string());
+                self.failed_translations.lock().unwrap_or_else(|e| e.into_inner()).push(source.to_string());
                 if during_run {
                     emit_status(&self.app, self.session_id, "running", "");
                 }
                 return Err(e);
             }
         };
-        self.translators.lock().unwrap().push(translator.clone());
-        let mut st = state().lock().unwrap();
+        self.translators.lock().unwrap_or_else(|e| e.into_inner()).push(translator.clone());
+        let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
         if st.session.as_ref().map(|s| s.id) == Some(self.session_id) {
+            // Kept for later sessions: only the current target, and one per pair, since
+            // two overlapping sessions can each load the same one.
+            st.translators.retain(|t| t.target == *target && t.source != source);
             st.translators.push(translator.clone());
         }
         drop(st);
@@ -447,7 +465,7 @@ impl Job {
             .spawn()
             .map_err(|e| format!("Failed to start FFmpeg: {}", e))?;
         let stdout = child.stdout.take().ok_or("Failed to read FFmpeg output")?;
-        *self.ffmpeg.lock().unwrap() = Some(child);
+        *self.ffmpeg.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
         Ok(stdout)
     }
 
@@ -467,13 +485,17 @@ impl Job {
             return Ok(());
         }
         // Translation runs on this thread right after Whisper, so it can use the same
-        // thread budget without competing with it. Load the model up front when the
-        // speech language is known: English for translating out of English, or the
-        // language chosen in settings for translating into English. Otherwise it loads
-        // when Whisper first detects a language it covers.
+        // thread budget without competing with it. Load the model up front for the
+        // language chosen in settings, or, when that is "auto", for English speech if the
+        // target is another language (every model into it translates from English).
+        // Otherwise it loads when Whisper first detects a language it covers.
         if let Some(target) = &self.translate_to {
-            let source = if target != "en" { "en" } else { self.language.as_str() };
-            if source != "auto" {
+            let source = match self.language.as_str() {
+                "auto" if target != "en" => Some("en"),
+                "auto" => None,
+                language => Some(language),
+            };
+            if let Some(source) = source {
                 // A model that fails to load must not stop the session: chunks then show
                 // the original text.
                 if let Err(e) = self.translator_for(source, threads as usize, false) {
@@ -499,6 +521,11 @@ impl Job {
         if self.cancelled() {
             return Ok(());
         }
+        // One state for the whole session: its buffers are allocated once rather than for
+        // every chunk, and `no_context` keeps the chunks independent anyway.
+        let mut whisper = ctx
+            .create_state()
+            .map_err(|e| format!("Failed to create Whisper state: {}", e))?;
         let mut stdout = self.spawn_ffmpeg()?;
         emit_status(&self.app, self.session_id, "running", "");
 
@@ -561,7 +588,7 @@ impl Job {
             }
 
             let (cues, original_cues, resume, stats) =
-                self.transcribe(&ctx, &buffer[..cut], buffer_start, threads, is_last)?;
+                self.transcribe(&mut whisper, &buffer[..cut], buffer_start, threads, is_last)?;
             if self.cancelled() {
                 return Ok(());
             }
@@ -643,7 +670,7 @@ impl Job {
     // shared slot, so a stop or seek can still kill it if it hangs instead of exiting.
     fn ffmpeg_exit_error(&self) -> Option<String> {
         loop {
-            let mut slot = self.ffmpeg.lock().unwrap();
+            let mut slot = self.ffmpeg.lock().unwrap_or_else(|e| e.into_inner());
             // Taken by stop_session: the session was stopped.
             let child = slot.as_mut()?;
             match child.try_wait() {
@@ -690,7 +717,7 @@ impl Job {
 
     fn transcribe(
         &self,
-        ctx: &WhisperContext,
+        state: &mut WhisperState,
         samples: &[f32],
         offset: f64,
         threads: i32,
@@ -716,10 +743,17 @@ impl Job {
             params.set_abort_callback_user_data(Arc::as_ptr(&self.cancel) as *mut c_void);
         }
 
-        let mut state = ctx
-            .create_state()
-            .map_err(|e| format!("Failed to create Whisper state: {}", e))?;
-        if let Err(e) = state.full(params, samples) {
+        // Depending on the version, whisper.cpp skips, warns about or fails on input shorter
+        // than a second, which the last chunk can be after a rewind; it is padded with
+        // silence. Times past the real audio are clamped away below.
+        let padded;
+        let input = if samples.len() < SAMPLE_RATE {
+            padded = [samples, &vec![0.0; SAMPLE_RATE - samples.len()]].concat();
+            &padded[..]
+        } else {
+            samples
+        };
+        if let Err(e) = state.full(params, input) {
             if self.cancelled() {
                 return Ok((Vec::new(), Vec::new(), None, stats));
             }

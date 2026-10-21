@@ -39,18 +39,32 @@ const LANGUAGE_NAMES: &[(&str, &str)] = &[
     ("it", "Italian"),
     ("nl", "Dutch"),
     ("hi", "Hindi"),
+    // Languages no model covers, named in "not available" messages.
+    ("zh", "Chinese"),
+    ("ja", "Japanese"),
+    ("ko", "Korean"),
+    ("ar", "Arabic"),
+    ("pt", "Portuguese"),
+    ("pl", "Polish"),
+    ("uk", "Ukrainian"),
+    ("sv", "Swedish"),
 ];
 
 // A sentence group longer than this is translated in pieces, to stay well inside the
 // model's input limit.
 const MAX_GROUP_CHARS: usize = 400;
 
-pub(crate) fn language_name(code: &str) -> &'static str {
+// The English name of a Whisper language code, or the code itself for languages not listed.
+pub(crate) fn language_name(code: &str) -> String {
     LANGUAGE_NAMES
         .iter()
         .find(|(c, _)| *c == code)
-        .map(|(_, name)| *name)
-        .unwrap_or("this language")
+        .map_or_else(|| code.to_string(), |(_, name)| name.to_string())
+}
+
+// Whether any model translates `source` speech into `target`, installed or not.
+pub(crate) fn is_supported(source: &str, target: &str) -> bool {
+    MODELS.iter().any(|(s, t, _)| *s == source && *t == target)
 }
 
 // Files a model folder needs; a folder missing any of them (for example after an
@@ -102,11 +116,6 @@ pub(crate) fn check_installed(source: Option<&str>, target: &str) -> Result<(), 
     }
 }
 
-// Whether a model translating `source` speech into `target` is supported and installed.
-pub(crate) fn is_available(source: &str, target: &str) -> bool {
-    model_dir(source, target).is_ok()
-}
-
 pub(crate) struct CueTranslator {
     pub source: String,
     pub target: String,
@@ -154,7 +163,7 @@ impl CueTranslator {
             .zip(translated)
             .flat_map(|(group, (text, _))| spread_words(&text, group))
             .collect();
-        Ok(subtitle_format::build_cues(&words, limit))
+        Ok(subtitle_format::build_cues(&words, limit, &self.target))
     }
 }
 

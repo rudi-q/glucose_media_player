@@ -13,6 +13,7 @@ export interface LiveSubtitleChunk {
 export interface LiveSubtitleStatus {
   session_id: number;
   state: 'loading' | 'running' | 'paused' | 'done' | 'error';
+  // What is loading, the error, or for "running" a notice such as a missing translation.
   message: string;
 }
 

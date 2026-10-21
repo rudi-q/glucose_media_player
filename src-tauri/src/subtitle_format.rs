@@ -27,7 +27,9 @@ const BOUNDARY_SPEECH: f64 = 0.5;
 // A chunk is never rewound so far that it covers less than this.
 const MIN_CHUNK_ADVANCE: f64 = 5.0;
 
-// Words a line or cue should not end on, since they belong with what follows.
+// English words a line or cue should not end on, since they belong with what follows.
+// Many are ordinary words in other languages ("die", "in", "so"), so other languages
+// get no such list (see `weak_endings`).
 const WEAK_ENDINGS: &[&str] = &[
     "a", "an", "the", "of", "to", "in", "on", "at", "for", "with", "by", "from", "and", "or",
     "but", "that", "which", "who", "is", "are", "was", "were", "my", "your", "his", "her",
@@ -64,18 +66,54 @@ pub(crate) fn request_word_timestamps(params: &mut FullParams) {
 // Reads the word segments produced with `request_word_timestamps`. Times are in
 // seconds, shifted by `offset` and clamped to `[0, duration]` before shifting.
 pub(crate) fn words_from_state(state: &WhisperState, offset: f64, duration: f64) -> Vec<Word> {
-    let mut words: Vec<Word> = Vec::new();
+    let mut pieces: Vec<(String, f64, f64)> = Vec::new();
     for i in 0..state.full_n_segments() {
         let Some(segment) = state.get_segment(i) else {
             continue;
         };
         let raw = segment.to_str_lossy().map(|t| t.into_owned()).unwrap_or_default();
-        let text = raw.trim();
-        if text.is_empty() {
+        if raw.trim().is_empty() {
             continue;
         }
         let start = (segment.start_timestamp() as f64 / 100.0).clamp(0.0, duration);
         let end = (segment.end_timestamp() as f64 / 100.0).clamp(start, duration);
+        pieces.push((raw, start, end));
+    }
+    words_from_pieces(&drop_tags(pieces), offset)
+}
+
+// Whisper marks sounds that are not speech with tags such as [BLANK_AUDIO], [MUSIC
+// PLAYING] or (applause), which are not subtitles. A tag can be split over several
+// pieces; an opening bracket not closed within this many is taken as ordinary text.
+const MAX_TAG_PIECES: usize = 6;
+
+fn drop_tags(pieces: Vec<(String, f64, f64)>) -> Vec<(String, f64, f64)> {
+    let mut kept = Vec::with_capacity(pieces.len());
+    let mut i = 0;
+    while i < pieces.len() {
+        let opens = pieces[i].0.trim().starts_with(['[', '(']);
+        let closes_at = opens
+            .then(|| {
+                (i..pieces.len().min(i + MAX_TAG_PIECES))
+                    .find(|&j| pieces[j].0.trim().ends_with([']', ')']))
+            })
+            .flatten();
+        match closes_at {
+            Some(j) => i = j + 1,
+            None => {
+                kept.push(pieces[i].clone());
+                i += 1;
+            }
+        }
+    }
+    kept
+}
+
+// Turns Whisper's pieces (raw text, start, end) into words, shifting times by `offset`.
+fn words_from_pieces(pieces: &[(String, f64, f64)], offset: f64) -> Vec<Word> {
+    let mut words: Vec<Word> = Vec::new();
+    for (raw, start, end) in pieces {
+        let text = raw.trim();
         // Punctuation Whisper emits as its own piece belongs to the previous word.
         let attaches = !raw.starts_with(' ') && text.starts_with(|c: char| c.is_ascii_punctuation());
         if let (true, Some(prev)) = (attaches, words.last_mut()) {
@@ -110,7 +148,7 @@ pub(crate) fn spoken_language(state: &WhisperState, setting: &str) -> String {
 // spaces. Those segments are used as cues directly, as before word timing was added.
 pub(crate) fn cues_for_language(words: &[Word], limit: f64, language: &str) -> Vec<Cue> {
     if !UNSPACED_LANGUAGES.contains(&language) {
-        return build_cues(words, limit);
+        return build_cues(words, limit, language);
     }
     words
         .iter()
@@ -125,8 +163,10 @@ pub(crate) fn cues_for_language(words: &[Word], limit: f64, language: &str) -> V
 
 // Groups words into cues, merges fragments, applies the timing rules and breaks lines.
 // `limit` is the latest time any cue may extend to (the end of the transcribed audio).
-pub(crate) fn build_cues(words: &[Word], limit: f64) -> Vec<Cue> {
-    let groups = merge_orphans(words, segment(words));
+// `language` is the Whisper code of the text's language.
+pub(crate) fn build_cues(words: &[Word], limit: f64, language: &str) -> Vec<Cue> {
+    let weak = weak_endings(language);
+    let groups = merge_orphans(words, segment(words, weak), weak);
     let mut cues: Vec<Cue> = groups
         .into_iter()
         .map(|(i, j)| Cue {
@@ -137,7 +177,7 @@ pub(crate) fn build_cues(words: &[Word], limit: f64) -> Vec<Cue> {
         .collect();
     retime(&mut cues, limit);
     for cue in &mut cues {
-        cue.text = break_lines(&cue.text);
+        cue.text = break_lines(&cue.text, weak);
     }
     cues
 }
@@ -174,9 +214,17 @@ fn ends_clause(word: &Word) -> bool {
     word.text.ends_with([',', ';', ':']) || word.text.ends_with(['-', '\u{2014}'])
 }
 
-fn weak_ending(word: &Word) -> bool {
+pub(crate) fn weak_endings(language: &str) -> &'static [&'static str] {
+    if language == "en" {
+        WEAK_ENDINGS
+    } else {
+        &[]
+    }
+}
+
+fn weak_ending(word: &Word, weak: &[&str]) -> bool {
     let bare = word.text.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
-    WEAK_ENDINGS.contains(&bare.as_str())
+    weak.contains(&bare.as_str())
 }
 
 fn gap_after(words: &[Word], k: usize) -> f64 {
@@ -185,17 +233,17 @@ fn gap_after(words: &[Word], k: usize) -> f64 {
 
 // Whether words[i..=j] can be one cue: within the length and duration limits and
 // breakable into at most two lines of 42 characters.
-fn fits(words: &[Word], i: usize, j: usize) -> bool {
+fn fits(words: &[Word], i: usize, j: usize, weak: &[&str]) -> bool {
     let text = join(&words[i..=j]);
     char_len(&text) <= MAX_CUE_CHARS
         && words[j].end - words[i].start <= MAX_DURATION
-        && break_lines(&text).split('\n').all(|l| char_len(l) <= MAX_LINE_CHARS)
+        && break_lines(&text, weak).split('\n').all(|l| char_len(l) <= MAX_LINE_CHARS)
 }
 
 // Splits words into cues as (first, last) index pairs. A cue ends at a long silence or
 // a finished sentence; when the next word would not fit, the best earlier break is
 // chosen by `break_score`.
-fn segment(words: &[Word]) -> Vec<(usize, usize)> {
+fn segment(words: &[Word], weak: &[&str]) -> Vec<(usize, usize)> {
     let mut groups = Vec::new();
     let mut i = 0;
     while i < words.len() {
@@ -209,9 +257,9 @@ fn segment(words: &[Word]) -> Vec<(usize, usize)> {
             if ends_sentence(&words[j].text) && long_enough {
                 break;
             }
-            if !fits(words, i, j + 1) {
+            if !fits(words, i, j + 1, weak) {
                 j = (i..=j)
-                    .max_by(|&a, &b| break_score(words, i, a).total_cmp(&break_score(words, i, b)))
+                    .max_by(|&a, &b| break_score(words, i, a, weak).total_cmp(&break_score(words, i, b, weak)))
                     .unwrap_or(j);
                 break;
             }
@@ -224,7 +272,7 @@ fn segment(words: &[Word]) -> Vec<(usize, usize)> {
 }
 
 // How good a place the end of words[k] is to end a cue that starts at words[i].
-fn break_score(words: &[Word], i: usize, k: usize) -> f64 {
+fn break_score(words: &[Word], i: usize, k: usize, weak: &[&str]) -> f64 {
     let chars = char_len(&join(&words[i..=k]));
     let duration = words[k].end - words[i].start;
     let mut score = 40.0 * chars as f64 / MAX_CUE_CHARS as f64;
@@ -234,7 +282,7 @@ fn break_score(words: &[Word], i: usize, k: usize) -> f64 {
         score += 35.0;
     }
     score += 40.0 * gap_after(words, k).min(1.0);
-    if weak_ending(&words[k]) {
+    if weak_ending(&words[k], weak) {
         score -= 25.0;
     }
     if chars < ORPHAN_MAX_CHARS && duration < MIN_DURATION {
@@ -245,7 +293,7 @@ fn break_score(words: &[Word], i: usize, k: usize) -> f64 {
 
 // Folds cues that are both very short and on screen too briefly into the neighbour they
 // are closest to in time, as long as the result still fits.
-fn merge_orphans(words: &[Word], mut groups: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+fn merge_orphans(words: &[Word], mut groups: Vec<(usize, usize)>, weak: &[&str]) -> Vec<(usize, usize)> {
     let is_orphan = |(i, j): (usize, usize)| {
         char_len(&join(&words[i..=j])) < ORPHAN_MAX_CHARS && words[j].end - words[i].start < MIN_DURATION
     };
@@ -258,8 +306,8 @@ fn merge_orphans(words: &[Word], mut groups: Vec<(usize, usize)>) -> Vec<(usize,
         let (i, j) = groups[k];
         let gap_before = (k > 0).then(|| words[i].start - words[groups[k - 1].1].end);
         let gap_next = groups.get(k + 1).map(|&(ni, _)| words[ni].start - words[j].end);
-        let can_prev = gap_before.is_some_and(|g| g < SILENCE_BREAK) && fits(words, groups[k - 1].0, j);
-        let can_next = gap_next.is_some_and(|g| g < SILENCE_BREAK) && fits(words, i, groups[k + 1].1);
+        let can_prev = gap_before.is_some_and(|g| g < SILENCE_BREAK) && fits(words, groups[k - 1].0, j, weak);
+        let can_next = gap_next.is_some_and(|g| g < SILENCE_BREAK) && fits(words, i, groups[k + 1].1, weak);
         let prefer_prev = match (gap_before, gap_next) {
             (Some(b), Some(n)) => b <= n,
             _ => true,
@@ -298,8 +346,9 @@ fn retime(cues: &mut [Cue], limit: f64) {
 }
 
 // Breaks text longer than one line into two lines, as evenly as possible, preferring a
-// break after punctuation and avoiding a line that ends on a word like "the".
-pub(crate) fn break_lines(text: &str) -> String {
+// break after punctuation and avoiding a line that ends on one of `weak` (see
+// `weak_endings`), such as "the".
+pub(crate) fn break_lines(text: &str, weak: &[&str]) -> String {
     let len = char_len(text);
     if len <= MAX_LINE_CHARS {
         return text.to_string();
@@ -317,7 +366,7 @@ pub(crate) fn break_lines(text: &str) -> String {
             score -= 8.0;
         }
         let bare = last.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
-        if WEAK_ENDINGS.contains(&bare.as_str()) {
+        if weak.contains(&bare.as_str()) {
             score += 6.0;
         }
         if best.is_none_or(|(s, _)| score < s) {
@@ -389,7 +438,7 @@ mod tests {
 
     #[test]
     fn short_sentence_gets_minimum_duration() {
-        let cues = build_cues(&words("Hi.", 1.0, 0.2), 100.0);
+        let cues = build_cues(&words("Hi.", 1.0, 0.2), 100.0, "en");
         assert_eq!(texts(&cues), vec!["Hi."]);
         assert!((cues[0].end - (1.0 + MIN_DURATION)).abs() < 1e-9);
     }
@@ -399,7 +448,7 @@ mod tests {
         let text = "Teaching a machine to do that exact same thing is without a doubt one of the \
                     greatest technological challenges of our time. You've probably heard the term \
                     full stack developer before.";
-        let cues = build_cues(&words(text, 0.0, 0.3), 1000.0);
+        let cues = build_cues(&words(text, 0.0, 0.3), 1000.0, "en");
         assert!(cues.iter().all(|c| !c.text.ends_with("the")), "{:?}", texts(&cues));
         let joined = texts(&cues).join(" ");
         assert_eq!(joined, text.split_whitespace().collect::<Vec<_>>().join(" "));
@@ -414,21 +463,21 @@ mod tests {
         // "the" would otherwise be left on its own at the end.
         let text = "It's a highly dynamic physical signal that is literally shaped by the \
                     constraints of the human body and the";
-        let cues = build_cues(&words(text, 0.0, 0.25), 1000.0);
+        let cues = build_cues(&words(text, 0.0, 0.25), 1000.0, "en");
         assert!(cues.iter().all(|c| char_len(&c.text) >= ORPHAN_MAX_CHARS || c.end - c.start >= MIN_DURATION),
             "{:?}", texts(&cues));
     }
 
     #[test]
     fn silence_ends_a_cue() {
-        let cues = build_cues(&words("Wait for it| and now the rest", 0.0, 0.3), 100.0);
+        let cues = build_cues(&words("Wait for it| and now the rest", 0.0, 0.3), 100.0, "en");
         assert_eq!(texts(&cues), vec!["Wait for it", "and now the rest"]);
     }
 
     #[test]
     fn text_that_cannot_fit_two_lines_is_split() {
         let text = "understand the ethical, moral, and societal impacts of the systems you're putting out";
-        let cues = build_cues(&words(text, 0.0, 0.2), 100.0);
+        let cues = build_cues(&words(text, 0.0, 0.2), 100.0, "en");
         let v = check(&cues);
         assert_eq!(v.line_too_long, 0, "{:?}", texts(&cues));
         assert_eq!(v.over_two_lines, 0);
@@ -436,7 +485,7 @@ mod tests {
 
     #[test]
     fn long_speech_is_split_at_seven_seconds() {
-        let cues = build_cues(&words("one two three four five six seven eight nine ten", 0.0, 1.2), 100.0);
+        let cues = build_cues(&words("one two three four five six seven eight nine ten", 0.0, 1.2), 100.0, "en");
         assert!(cues.len() >= 2);
         assert_eq!(check(&cues).too_long, 0);
     }
@@ -446,15 +495,15 @@ mod tests {
         // 60 characters needs 3 s at 20 CPS.
         let long = Word { start: 0.0, end: 1.0, text: "a".repeat(29) + " " + &"b".repeat(30) };
         let next = Word { start: 2.0, end: 3.0, text: "Next.".into() };
-        let cues = build_cues(&[long.clone(), next], 100.0);
+        let cues = build_cues(&[long.clone(), next], 100.0, "en");
         assert!((cues[0].end - (2.0 - MIN_GAP)).abs() < 1e-9);
-        let alone = build_cues(&[long], 100.0);
+        let alone = build_cues(&[long], 100.0, "en");
         assert!((alone[0].end - 3.0).abs() < 1e-9);
     }
 
     #[test]
     fn last_cue_stops_before_limit() {
-        let cues = build_cues(&words("Right at the end.", 0.0, 0.5), 2.0 - MIN_GAP);
+        let cues = build_cues(&words("Right at the end.", 0.0, 0.5), 2.0 - MIN_GAP, "en");
         assert!(cues.last().unwrap().end <= 2.0 - MIN_GAP + 1e-9);
     }
 
@@ -463,7 +512,7 @@ mod tests {
         let text = "First sentence is here and it is long enough. Then speech runs into the";
         let w = words(text, 0.0, 0.7);
         let end = w.last().unwrap().end + 0.1;
-        let cues = build_cues(&w, end);
+        let cues = build_cues(&w, end, "en");
         let resume = resume_point(&w, &cues, 0.0, end).expect("should rewind");
         assert_eq!(resume, cues.last().unwrap().start);
         assert!(texts(&cues).last().unwrap().starts_with("Then"));
@@ -471,6 +520,20 @@ mod tests {
         assert_eq!(resume_point(&w, &cues, 0.0, end + 2.0), None);
         // Rewinding would leave less than the minimum advance.
         assert_eq!(resume_point(&w, &cues, resume - 1.0, end), None);
+    }
+
+    #[test]
+    fn non_speech_tags_are_dropped() {
+        let pieces = |texts: &[&str]| -> Vec<(String, f64, f64)> {
+            texts.iter().enumerate().map(|(i, t)| (t.to_string(), i as f64, i as f64 + 0.5)).collect()
+        };
+        let text = |words: Vec<Word>| words.into_iter().map(|w| w.text).collect::<Vec<_>>().join(" ");
+        let kept = drop_tags(pieces(&[" [BLANK_AUDIO]", " Hello", " [MUSIC", " PLAYING]", " there", "."]));
+        assert_eq!(text(words_from_pieces(&kept, 0.0)), "Hello there.");
+        assert_eq!(text(words_from_pieces(&drop_tags(pieces(&[" (applause)", " Thanks"])), 0.0)), "Thanks");
+        // A bracket that never closes is kept as text.
+        let open = pieces(&[" (and", " then", " we", " left", " the", " house", " early", " today"]);
+        assert_eq!(drop_tags(open.clone()), open);
     }
 
     #[test]
@@ -484,13 +547,13 @@ mod tests {
         // Not cut at 7 s, but never past the end of the audio.
         assert_eq!((cues[0].end, cues[1].end), (9.0, 9.5));
         // Spaced languages still get the full cue rules.
-        assert_eq!(cues_for_language(&segments, 9.5, "en"), build_cues(&segments, 9.5));
+        assert_eq!(cues_for_language(&segments, 9.5, "en"), build_cues(&segments, 9.5, "en"));
     }
 
     #[test]
     fn break_prefers_punctuation_over_slightly_better_balance() {
         let text = "I told him twice already, but he never listens to anyone";
-        assert_eq!(break_lines(text), "I told him twice already,\nbut he never listens to anyone");
+        assert_eq!(break_lines(text, WEAK_ENDINGS), "I told him twice already,\nbut he never listens to anyone");
     }
 
     #[test]

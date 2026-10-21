@@ -247,12 +247,13 @@
   });
   let liveState = $state<LiveSubtitleStatus["state"] | null>(null);
   let liveError = $state<string | null>(null);
-  // Session ids only increase; events from sessions below this are stale.
-  let liveLastSession = 0;
-  let liveMinSession = 0;
   // Numbers each start and stop sent to the backend, which refuses a start that a later
-  // request overtook (starts are async and can finish out of order).
-  let liveRequest = 0;
+  // request overtook (starts are async and can finish out of order). Counted from the
+  // time in milliseconds so the numbers keep rising when the player is opened again.
+  let liveRequest = Date.now();
+  // The start whose events are shown; a start's request number is its session id. 0 while
+  // none is (between switching keys and the next start).
+  let liveSession = 0;
   // Where the current worker session is transcribing from next.
   let liveWorkerPos = 0;
   let livePlayheadSentAt = 0;
@@ -270,6 +271,9 @@
   let liveWaitOverride = false;
   // What the worker is loading, as reported by the backend (speech or translation model).
   let liveLoadingMessage = $state("");
+  // Something the viewer should know about the live subtitles, such as no translation
+  // being available for the speech language; shown in a banner until dismissed.
+  let liveNotice = $state("");
   let livePlaceholder = $derived.by(() => {
     if (!liveActive) return null;
     if (liveError) return `Live subtitles: ${liveError}`;
@@ -482,7 +486,7 @@
     nearbySubtitles = [];
     selectedEmbeddedLanguage = "en";
     subtitlesEnabled = true;
-    disableLiveSubtitles(false);
+    disableLiveSubtitles(false, false);
 
     await cleanupAudioRemuxFiles();
     if (isVideoSetupStale(setupId)) return;
@@ -687,9 +691,10 @@
         ),
         listen<LiveSubtitleStatus>("live-subtitle-status", (event) => {
           const status = event.payload;
-          if (!liveActive || status.session_id < liveMinSession) return;
+          if (!liveActive || status.session_id !== liveSession) return;
           liveState = status.state;
           if (status.state === "loading") liveLoadingMessage = status.message;
+          if (status.state === "running" && status.message) liveNotice = status.message;
           if (status.state === "error") liveError = status.message;
           checkLiveWait();
         }),
@@ -2032,30 +2037,24 @@
   async function startLiveSubtitlesAt(time: number) {
     const key = liveKey;
     if (!key) return;
-    // The new session gets a higher id than any before it, so this drops events
-    // from the session being replaced without missing early ones from the new one.
-    liveMinSession = liveLastSession + 1;
     liveWorkerPos = time;
     liveError = null;
     // A worker that reached the end reported "done"; until the new session reports its own
     // state, that would hide the "Generating" hint and stop "pause until ready" waiting.
     if (liveState === "done") liveState = "running";
     const request = ++liveRequest;
+    // From now on only this session's events count, including any that arrive before
+    // the call below returns; the session being replaced is dropped at once.
+    liveSession = request;
     try {
       const info = await invoke<LiveSessionInfo>("start_live_subtitles", {
         ...key,
         request,
         startSecs: time,
       });
-      liveLastSession = Math.max(liveLastSession, info.session_id);
-      if (!liveActive || liveKey !== key) {
-        // The key changed (e.g. an audio-track switch) while this session was starting.
-        // Its id was not known when the switch raised liveMinSession, so drop its events
-        // explicitly; the replacement session gets a higher id.
-        liveMinSession = Math.max(liveMinSession, info.session_id + 1);
-        return;
-      }
-      liveMinSession = Math.max(liveMinSession, info.session_id);
+      // Replaced while starting (a seek, or an audio-track switch); its events are
+      // already ignored.
+      if (!liveActive || liveKey !== key || liveSession !== info.session_id) return;
       liveModel = info.model;
       invoke("update_live_subtitles_playhead", {
         time: videoElement?.currentTime ?? time,
@@ -2106,13 +2105,14 @@
   async function loadLiveSession(key: LiveCacheKey, time: number) {
     // Stop the previous key's worker and drop its in-flight chunks, so they cannot
     // land in this key's cues while the cache loads.
-    liveMinSession = liveLastSession + 1;
+    liveSession = 0;
     invoke("stop_live_subtitles", { unload: false, request: ++liveRequest }).catch(() => {});
     liveKey = key;
     liveCues = [];
     liveOriginalCues = [];
     liveRanges = [];
     liveModel = "";
+    liveNotice = "";
     liveDirty = false;
     try {
       const cached = await invoke<LiveCacheData | null>("load_live_cache", { ...key });
@@ -2139,13 +2139,16 @@
     startLiveSubtitlesAt(target);
   }
 
+  // Each save sends every cue so far, which for a long film is a lot to send every few
+  // seconds, so new cues are saved a minute later, or sooner when the viewer pauses, live
+  // mode is turned off or the video changes. A crash loses at most that minute.
   function scheduleLiveSave() {
     liveDirty = true;
     if (liveSaveTimer !== null) return;
     liveSaveTimer = setTimeout(() => {
       liveSaveTimer = null;
       flushLiveCache();
-    }, 10_000);
+    }, 60_000);
   }
 
   function flushLiveCache() {
@@ -2166,7 +2169,9 @@
 
   // Turning live mode off restores whatever subtitle track was loaded before. A wait
   // for subtitles ends with it; `resume` is false when the video itself is going away.
-  function disableLiveSubtitles(resume = true) {
+  // `unload` is false when another video is opening, so the models stay in memory in
+  // case live mode starts again for it; they are released when the player closes.
+  function disableLiveSubtitles(resume = true, unload = true) {
     if (!liveActive) return;
     flushLiveCache();
     liveKey = null;
@@ -2178,11 +2183,12 @@
     liveRanges = [];
     liveState = null;
     liveError = null;
-    invoke("stop_live_subtitles", { unload: true, request: ++liveRequest }).catch(() => {});
+    liveNotice = "";
+    invoke("stop_live_subtitles", { unload, request: ++liveRequest }).catch(() => {});
   }
 
   function handleLiveChunk(chunk: LiveSubtitleChunk) {
-    if (!liveActive || chunk.session_id < liveMinSession) return;
+    if (!liveActive || chunk.session_id !== liveSession) return;
     liveCues = mergeCues(liveCues, chunk.cues, chunk.covered_start, chunk.covered_end);
     liveOriginalCues = mergeCues(
       liveOriginalCues,
@@ -2356,6 +2362,10 @@
       src={videoSrc}
       ontimeupdate={handleTimeUpdate}
       onseeked={handleLiveSeek}
+      onpause={() => {
+        // A pause by the viewer is a good moment to save; not one made to wait for subtitles.
+        if (!liveWaiting) flushLiveCache();
+      }}
       onloadedmetadata={handleLoadedMetadata}
       onended={handleEnded}
       onclick={togglePlay}
@@ -2395,6 +2405,20 @@
         onclick={() => (showHevcWarning = false)}
         title="Dismiss"
         aria-label="Dismiss HEVC warning"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  {:else if liveActive && liveNotice}
+    <!-- Live subtitles notice, e.g. no translation for the speech language -->
+    <div class="hevc-warning-banner">
+      <AlertTriangle size={15} class="hevc-warning-icon" />
+      <span class="hevc-warning-text">{liveNotice}.</span>
+      <button
+        class="hevc-warning-dismiss"
+        onclick={() => (liveNotice = "")}
+        title="Dismiss"
+        aria-label="Dismiss live subtitles notice"
       >
         <X size={14} />
       </button>

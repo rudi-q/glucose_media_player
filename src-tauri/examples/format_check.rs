@@ -18,7 +18,8 @@ mod subtitle_format;
 
 use std::process::{Command, Stdio};
 use subtitle_format::{
-    build_cues, check, request_word_timestamps, resume_point, words_from_state, Cue, MIN_GAP,
+    check, cues_for_language, request_word_timestamps, resume_point, spoken_language,
+    words_from_state, Cue, MIN_GAP,
 };
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
@@ -81,7 +82,8 @@ fn main() {
         let mut state = ctx.create_state().unwrap();
         state.full(params, chunk).expect("transcription failed");
         let words = words_from_state(&state, offset, chunk_secs);
-        let mut built = build_cues(&words, offset + chunk_secs - MIN_GAP);
+        let spoken = spoken_language(&state, &lang);
+        let mut built = cues_for_language(&words, offset + chunk_secs - MIN_GAP, &spoken);
         // Same as live mode: a cue cut off by the chunk end is redone in the next chunk.
         let resume = (!is_last)
             .then(|| resume_point(&words, &built, offset, offset + chunk_secs))
