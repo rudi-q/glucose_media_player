@@ -3,6 +3,7 @@
 // models/face_detection/LICENSE), built into the app, run with tract (pure Rust).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
@@ -104,10 +105,27 @@ pub async fn detect_faces(request: Request<'_>) -> Result<Vec<Face>, String> {
     if width == 0 || height == 0 || width > MAX_SIDE || height > MAX_SIDE || pixels.len() != width * height * 4 {
         return Err("Frame size does not match its pixels".into());
     }
+    // One detection at a time: frames sent faster than detection runs are turned away
+    // rather than queued, each with its own copy of the pixels. The page treats the error
+    // like no faces found.
+    static BUSY: AtomicBool = AtomicBool::new(false);
+    if BUSY.swap(true, Ordering::Acquire) {
+        return Err("Face detection is busy with an earlier frame".into());
+    }
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            BUSY.store(false, Ordering::Release);
+        }
+    }
+    let done = Done;
     let pixels = pixels.clone();
-    tauri::async_runtime::spawn_blocking(move || detect(&pixels, width, height))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let _done = done;
+        detect(&pixels, width, height)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Prepares the model for a video's frame size ahead of the first subtitle, so that one is
@@ -164,12 +182,15 @@ fn detect(rgba: &[u8], width: usize, height: usize) -> Result<Vec<Face>, String>
         .run(tvec!(input.into()))
         .map_err(|e| format!("Face detection failed: {e}"))?;
     let mut faces = decode(&outputs, iw, scale).map_err(|e| format!("Face detection failed: {e}"))?;
+    // As fractions of the frame, clipped to it: a box at the edge can reach past it.
     for f in &mut faces {
-        f.x /= width as f32;
-        f.w /= width as f32;
-        f.y /= height as f32;
-        f.h /= height as f32;
+        let (x0, x1) = (f.x / width as f32, (f.x + f.w) / width as f32);
+        let (y0, y1) = (f.y / height as f32, (f.y + f.h) / height as f32);
+        let (x0, x1) = (x0.clamp(0.0, 1.0), x1.clamp(0.0, 1.0));
+        let (y0, y1) = (y0.clamp(0.0, 1.0), y1.clamp(0.0, 1.0));
+        (f.x, f.y, f.w, f.h) = (x0, y0, x1 - x0, y1 - y0);
     }
+    faces.retain(|f| [f.x, f.y, f.w, f.h].iter().all(|v| v.is_finite()) && f.w > 0.0 && f.h > 0.0);
     Ok(faces)
 }
 
@@ -185,7 +206,8 @@ fn decode(outputs: &[TValue], input_width: usize, scale: f32) -> TractResult<Vec
         let s = stride as f32;
         for idx in 0..cls.len().min(obj.len()).min(bbox.len() / 4) {
             let score = (cls[idx].clamp(0.0, 1.0) * obj[idx].clamp(0.0, 1.0)).sqrt();
-            if score < MIN_SCORE {
+            // Written so a NaN score (from a NaN model output) is skipped too.
+            if !(score >= MIN_SCORE) {
                 continue;
             }
             let (row, col) = ((idx / cols) as f32, (idx % cols) as f32);
@@ -234,6 +256,21 @@ fn iou(a: &Face, b: &Face) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Face detection is only usable in dev builds because Cargo.toml optimises the
+    // inference crates one by one ([profile.dev.package.*]). Fails when a tract update
+    // brings in a tract crate the list does not cover yet.
+    #[test]
+    fn every_tract_crate_is_optimised_in_dev_builds() {
+        let manifest = include_str!("../Cargo.toml");
+        let missing: Vec<&str> = include_str!("../Cargo.lock")
+            .lines()
+            .filter_map(|l| l.strip_prefix("name = \"")?.strip_suffix('"'))
+            .filter(|name| name.starts_with("tract-"))
+            .filter(|name| !manifest.contains(&format!("[profile.dev.package.{name}]")))
+            .collect();
+        assert!(missing.is_empty(), "add [profile.dev.package.<name>] opt-level = 3 for {missing:?}");
+    }
 
     #[test]
     fn model_loads_and_finds_no_face_in_a_blank_frame() {
