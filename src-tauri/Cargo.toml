@@ -76,3 +76,11 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.libm]
 opt-level = 3
+
+# Whisper, CTranslate2 and the face model make the app much larger than it used to be, so
+# release builds trade build time for size: link-time optimisation across crates, one
+# code unit per crate, and no debug symbols in the executable.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

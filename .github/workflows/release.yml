@@ -78,4 +78,6 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           assetNamePattern: 'Glucose_Windows.[ext]'
-          args: --target x86_64-pc-windows-msvc --bundles nsis
+          # --locked fails the build if Cargo.lock is out of date, rather than releasing
+          # with whatever versions resolve that day.
+          args: --target x86_64-pc-windows-msvc --bundles nsis -- --locked
