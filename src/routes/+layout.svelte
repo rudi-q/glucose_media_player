@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readStorage, removeStorage, writeStorage } from "$lib/utils/storage";
   import "$lib/styles/global.css";
   import theme from "$lib/theme.json";
   import { invoke } from "@tauri-apps/api/core";
@@ -99,7 +100,7 @@
   } from "$lib/components/UpdateManager.svelte";
   import UpdateNotification from "$lib/components/UpdateNotification.svelte";
   import { getFormattedVersion } from "$lib/utils/version";
-  import { isAudio, isPlayable } from "$lib/utils/mediaType";
+  import { isAudio } from "$lib/utils/mediaType";
   import {
     getDefaultPlayMode,
     getEndBehavior,
@@ -112,6 +113,7 @@
     getLiveTranslate,
     LIVE_DUAL_SUBTITLES_KEY,
     LIVE_DUAL_SUBTITLES_EVENT,
+    LIVE_SUBTITLE_WAIT_EVENT,
     getLiveDualSubtitles,
     SUBTITLE_POSITION_KEY,
     SUBTITLE_POSITION_EVENT,
@@ -242,38 +244,38 @@
     },
   ];
 
-  const _savedDefaultMode = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_default_mode") : null;
+  const _savedDefaultMode = readStorage("glucose_default_mode");
   let defaultPlayMode = $state<DefaultPlayMode>(
     getDefaultPlayMode(_savedDefaultMode)
   );
 
   $effect(() => {
-    if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_default_mode", defaultPlayMode);
+    if (!showOnboarding && !skipPlayerPreferencePersist) writeStorage("glucose_default_mode", defaultPlayMode);
   });
 
-  const _savedEndBehavior = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_end_behavior") : null;
+  const _savedEndBehavior = readStorage("glucose_end_behavior");
   let endBehavior = $state<EndBehavior>(
     getEndBehavior(_savedEndBehavior)
   );
 
   $effect(() => {
-    if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_end_behavior", endBehavior);
+    if (!showOnboarding && !skipPlayerPreferencePersist) writeStorage("glucose_end_behavior", endBehavior);
   });
 
-  const _savedFadeMode = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_fade") : null;
+  const _savedFadeMode = readStorage("glucose_fade");
   let fadeMode = $state<FadeMode>(getFadeMode(_savedFadeMode));
 
   $effect(() => {
-    if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_fade", fadeMode);
+    if (!showOnboarding && !skipPlayerPreferencePersist) writeStorage("glucose_fade", fadeMode);
   });
 
   const _savedSubtitlePosition =
-    typeof localStorage !== "undefined" ? localStorage.getItem(SUBTITLE_POSITION_KEY) : null;
+    readStorage(SUBTITLE_POSITION_KEY);
   let subtitlePosition = $state<SubtitlePosition>(getSubtitlePosition(_savedSubtitlePosition));
 
   $effect(() => {
     if (!showOnboarding && !skipPlayerPreferencePersist) {
-      localStorage.setItem(SUBTITLE_POSITION_KEY, subtitlePosition);
+      writeStorage(SUBTITLE_POSITION_KEY, subtitlePosition);
       window.dispatchEvent(new Event(SUBTITLE_POSITION_EVENT));
     }
   });
@@ -281,7 +283,7 @@
   // The player's subtitle style panel changes the same setting.
   $effect(() => {
     const read = () => {
-      subtitlePosition = getSubtitlePosition(localStorage.getItem(SUBTITLE_POSITION_KEY));
+      subtitlePosition = getSubtitlePosition(readStorage(SUBTITLE_POSITION_KEY));
     };
     window.addEventListener(SUBTITLE_POSITION_EVENT, read);
     return () => window.removeEventListener(SUBTITLE_POSITION_EVENT, read);
@@ -289,37 +291,38 @@
 
   let autoLiveSubtitles = $state(
     getAutoLiveSubtitles(
-      typeof localStorage !== "undefined" ? localStorage.getItem(AUTO_LIVE_SUBTITLES_KEY) : null,
+      readStorage(AUTO_LIVE_SUBTITLES_KEY),
     ),
   );
 
   function toggleAutoLiveSubtitles() {
     autoLiveSubtitles = !autoLiveSubtitles;
-    localStorage.setItem(AUTO_LIVE_SUBTITLES_KEY, String(autoLiveSubtitles));
+    writeStorage(AUTO_LIVE_SUBTITLES_KEY, String(autoLiveSubtitles));
   }
 
   let liveSubtitleWait = $state<LiveSubtitleWait>(
     getLiveSubtitleWait(
-      typeof localStorage !== "undefined" ? localStorage.getItem(LIVE_SUBTITLE_WAIT_KEY) : null,
+      readStorage(LIVE_SUBTITLE_WAIT_KEY),
     ),
   );
 
   function setLiveSubtitleWait(value: string) {
     liveSubtitleWait = getLiveSubtitleWait(value);
-    localStorage.setItem(LIVE_SUBTITLE_WAIT_KEY, liveSubtitleWait);
+    writeStorage(LIVE_SUBTITLE_WAIT_KEY, liveSubtitleWait);
+    window.dispatchEvent(new Event(LIVE_SUBTITLE_WAIT_EVENT));
   }
 
   let liveTranslate = $state<string>(
     getLiveTranslate(
-      typeof localStorage !== "undefined" ? localStorage.getItem(LIVE_TRANSLATE_KEY) : null,
+      readStorage(LIVE_TRANSLATE_KEY),
     ) ?? "off",
   );
 
   function setLiveTranslate(value: string) {
     const lang = getLiveTranslate(value);
     liveTranslate = lang ?? "off";
-    if (lang) localStorage.setItem(LIVE_TRANSLATE_KEY, lang);
-    else localStorage.removeItem(LIVE_TRANSLATE_KEY);
+    if (lang) writeStorage(LIVE_TRANSLATE_KEY, lang);
+    else removeStorage(LIVE_TRANSLATE_KEY);
   }
 
   // Translation models (Settings > AI > Live Subtitles): one download per language pair,
@@ -399,7 +402,7 @@
   // Hardware check (Features tab): measures what this PC can run and advises per feature.
   // It runs once by itself after onboarding, then again only from "Check again".
   let hardwareCheck = $state<StoredHardwareCheck | null>(
-    loadHardwareCheck(typeof localStorage !== "undefined" ? localStorage.getItem(HARDWARE_CHECK_KEY) : null),
+    loadHardwareCheck(readStorage(HARDWARE_CHECK_KEY)),
   );
   let hardwareChecking = $state(false);
   let hardwareCheckError = $state<string | null>(null);
@@ -420,44 +423,56 @@
     generation: "AI subtitles",
   };
 
-  // `first` is the automatic check: features it rates "Not recommended" are switched off
-  // (the user can switch them back on). "Check again" never changes settings.
-  async function runHardwareCheck(first = false) {
+  // `turnOff` lists the features this check switches off when it rates them "Not
+  // recommended" (the user can switch them back on): all of them for the automatic first
+  // check, and the speech features for the check after the first speech model download,
+  // since the first check had no model to test them with. "Check again" changes nothing.
+  // `cancellable` checks are stopped when a video opens, and run again later.
+  let hardwareCheckCancellable = false;
+  async function runHardwareCheck(turnOff: FeatureId[] = [], cancellable = false) {
     if (hardwareChecking) return;
     hardwareChecking = true;
+    hardwareCheckCancellable = cancellable;
     hardwareCheckError = null;
     try {
       const report = await invoke<HardwareReport>("run_hardware_check");
       const turnedOff: FeatureId[] = [];
-      if (first) {
-        for (const advice of adviseFeatures(report)) {
-          if (advice.verdict !== "poor") continue;
-          if (advice.id === "live" && autoLiveSubtitles) {
-            toggleAutoLiveSubtitles();
-            turnedOff.push("live");
-          } else if (advice.id === "translation" && liveTranslate !== "off") {
-            setLiveTranslate("off");
-            turnedOff.push("translation");
-          } else if (advice.id === "smart" && subtitlePosition === "smart") {
-            subtitlePosition = "fixed";
-            turnedOff.push("smart");
-          }
+      for (const advice of adviseFeatures(report)) {
+        if (advice.verdict !== "poor" || !turnOff.includes(advice.id)) continue;
+        if (advice.id === "live" && autoLiveSubtitles) {
+          toggleAutoLiveSubtitles();
+          turnedOff.push("live");
+        } else if (advice.id === "translation" && liveTranslate !== "off") {
+          setLiveTranslate("off");
+          turnedOff.push("translation");
+        } else if (advice.id === "smart" && subtitlePosition === "smart") {
+          subtitlePosition = "fixed";
+          turnedOff.push("smart");
         }
       }
       hardwareCheck = {
         version: HARDWARE_CHECK_VERSION,
         checkedAt: new Date().toISOString(),
         report,
-        turnedOff: first ? turnedOff : (hardwareCheck?.turnedOff ?? []),
+        turnedOff: [...new Set([...(hardwareCheck?.turnedOff ?? []), ...turnedOff])],
       };
-      localStorage.setItem(HARDWARE_CHECK_KEY, JSON.stringify(hardwareCheck));
+      writeStorage(HARDWARE_CHECK_KEY, JSON.stringify(hardwareCheck));
       window.dispatchEvent(new Event(HARDWARE_CHECK_KEY));
     } catch (err) {
-      hardwareCheckError = String(err);
+      // A cancelled first check runs again once the library is showing.
+      if (String(err) !== "cancelled") hardwareCheckError = String(err);
     } finally {
       hardwareChecking = false;
+      hardwareCheckCancellable = false;
     }
   }
+
+  // The automatic check stops when a video opens, so it cannot make playback stutter.
+  $effect(() => {
+    if (!isOnGallery && hardwareChecking && hardwareCheckCancellable) {
+      invoke("cancel_hardware_check").catch(() => {});
+    }
+  });
 
   // The first check waits until onboarding is done and the library is showing, since the
   // speech test keeps the processor busy for a few seconds and would make a playing video
@@ -468,7 +483,7 @@
     if (ready && !firstHardwareCheckTimer) {
       firstHardwareCheckTimer = setTimeout(() => {
         firstHardwareCheckTimer = null;
-        if (isOnGallery && !hardwareCheck) runHardwareCheck(true);
+        if (isOnGallery && !hardwareCheck) runHardwareCheck(["live", "translation", "smart"], true);
       }, 5000);
     } else if (!ready && firstHardwareCheckTimer) {
       clearTimeout(firstHardwareCheckTimer);
@@ -478,23 +493,28 @@
 
   let liveDualSubtitles = $state(
     getLiveDualSubtitles(
-      typeof localStorage !== "undefined" ? localStorage.getItem(LIVE_DUAL_SUBTITLES_KEY) : null,
+      readStorage(LIVE_DUAL_SUBTITLES_KEY),
     ),
   );
 
   function toggleLiveDualSubtitles() {
     liveDualSubtitles = !liveDualSubtitles;
-    localStorage.setItem(LIVE_DUAL_SUBTITLES_KEY, String(liveDualSubtitles));
+    writeStorage(LIVE_DUAL_SUBTITLES_KEY, String(liveDualSubtitles));
     window.dispatchEvent(new Event(LIVE_DUAL_SUBTITLES_EVENT));
   }
 
   // Set while a screen has crashed and its error boundary shows the error screen;
   // navigating away resets the boundary so the next screen renders normally.
   let resetCrashedScreen: (() => void) | null = null;
+  // Where the crash happened. A screen that crashed while the navigation to it rendered
+  // is not reset again right away, which would only crash it again and flash.
+  let crashedPath: string | null = null;
 
-  afterNavigate(() => {
+  afterNavigate((navigation) => {
+    if (navigation.to?.url.pathname === crashedPath) return;
     const reset = resetCrashedScreen;
     resetCrashedScreen = null;
+    crashedPath = null;
     reset?.();
   });
 
@@ -519,12 +539,12 @@
   const appVersion = getAppVersion();
   const whatsNewPending = shouldShowWhatsNew(
     appVersion,
-    typeof localStorage !== "undefined" ? localStorage.getItem(LAST_SEEN_VERSION_KEY) : null,
+    readStorage(LAST_SEEN_VERSION_KEY),
     !_isFirstRun,
   );
   const whatsNewItems = whatsNewHighlights(appVersion) ?? [];
-  if (!whatsNewPending && typeof localStorage !== "undefined") {
-    localStorage.setItem(LAST_SEEN_VERSION_KEY, appVersion);
+  if (!whatsNewPending) {
+    writeStorage(LAST_SEEN_VERSION_KEY, appVersion);
   }
   let showWhatsNew = $state(false);
   let whatsNewSeen = $state(false);
@@ -546,7 +566,7 @@
   function closeWhatsNew() {
     showWhatsNew = false;
     whatsNewSeen = true;
-    localStorage.setItem(LAST_SEEN_VERSION_KEY, appVersion);
+    writeStorage(LAST_SEEN_VERSION_KEY, appVersion);
   }
 
   // Returns true when the action happened in place; the others close the screen and open
@@ -650,13 +670,11 @@
   async function clearPlayerPreferences() {
     skipPlayerPreferencePersist = true;
     resetPlayerPreferences();
-    if (typeof localStorage !== "undefined") {
-      localStorage.removeItem("glucose_default_mode");
-      localStorage.removeItem("glucose_end_behavior");
-      localStorage.removeItem("glucose_fade");
-      localStorage.removeItem(SUBTITLE_POSITION_KEY);
-      window.dispatchEvent(new Event(SUBTITLE_POSITION_EVENT));
-    }
+    removeStorage("glucose_default_mode");
+    removeStorage("glucose_end_behavior");
+    removeStorage("glucose_fade");
+    removeStorage(SUBTITLE_POSITION_KEY);
+    window.dispatchEvent(new Event(SUBTITLE_POSITION_EVENT));
     await tick();
     skipPlayerPreferencePersist = false;
   }
@@ -667,10 +685,8 @@
 
   // Initialize from localStorage if available
   let lastAutoCheckTime = $state<number>(0);
-  if (typeof localStorage !== "undefined") {
-    const stored = localStorage.getItem("lastAutoCheckTime");
-    lastAutoCheckTime = stored ? parseInt(stored, 10) || 0 : 0;
-  }
+  const storedAutoCheckTime = readStorage("lastAutoCheckTime");
+  lastAutoCheckTime = storedAutoCheckTime ? parseInt(storedAutoCheckTime, 10) || 0 : 0;
 
   // Subscribe to stores
   let settings = $state($appSettings);
@@ -710,8 +726,11 @@
         }),
         listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
           const path = event.payload?.paths?.[0];
-          if (path) {
-            if (!isPlayable(path)) {
+          // A drop behind an open dialog or onboarding would navigate away underneath it.
+          if (path && !showOnboarding && !showSettings && !showSetupDialog && !showWhatsNew) {
+            // Checked by the backend: a regular file of a type the player opens, so a folder
+            // named "x.mp4" or a TypeScript ".ts" file is turned away here.
+            if (!(await invoke<boolean>("check_playable_file", { path }).catch(() => false))) {
               const name = path.split(/[\\/]/).pop();
               alert(`Glucose can't open "${name}". Drop a video or audio file instead.`);
               return;
@@ -740,7 +759,7 @@
           (event) => {
             const p = event.payload;
             if (translationDownload?.pair === pairKey(p) && p.total > 0) {
-              translationDownload = { pair: pairKey(p), percent: (p.downloaded / p.total) * 100 };
+              translationDownload = { pair: pairKey(p), percent: Math.min(100, (p.downloaded / p.total) * 100) };
             }
           },
         ),
@@ -842,7 +861,7 @@
       await invoke("mark_setup_completed");
       await checkSetupStatus();
       // The last hardware check had no speech model to test; now it can.
-      if (hardwareCheck && hardwareCheck.report.live_model === null) runHardwareCheck(false);
+      if (hardwareCheck && hardwareCheck.report.live_model === null) runHardwareCheck(["live", "translation"]);
 
       isDownloading = false;
       downloadProgress = 100;
@@ -873,9 +892,7 @@
 
   function handleAutoCheckTimeUpdate(time: number) {
     lastAutoCheckTime = time;
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem("lastAutoCheckTime", time.toString());
-    }
+    writeStorage("lastAutoCheckTime", time.toString());
   }
 
   function ffmpegLocationLabel(status: SetupStatus) {
@@ -905,6 +922,7 @@
     onerror={(error, reset) => {
       console.error("[glucose] Screen crashed:", error);
       resetCrashedScreen = reset;
+      crashedPath = $page.url.pathname;
     }}
   >
     {@render children()}
@@ -914,9 +932,17 @@
         status={500}
         message={screenErrorMessage(error)}
         screen={decodeURIComponentSafe($page.url.pathname)}
-        onHome={() => goto("/", { replaceState: true })}
+        onHome={() => {
+          // Reset here too: on the library itself, going to "/" may not count as a
+          // navigation, and the error screen would stay.
+          resetCrashedScreen = null;
+          crashedPath = null;
+          reset();
+          goto("/", { replaceState: true });
+        }}
         onRetry={() => {
           resetCrashedScreen = null;
+          crashedPath = null;
           reset();
         }}
       />
@@ -1225,6 +1251,7 @@
                   <div class="settings-item-action">
                     <select
                       class="language-select"
+                      aria-label="Subtitle language"
                       bind:value={settings.subtitleLanguage}
                       onchange={(e) =>
                         appSettings.updateSubtitleLanguage(
@@ -1289,6 +1316,7 @@
                   <div class="settings-item-action">
                     <select
                       class="language-select"
+                      aria-label="When subtitles aren't ready yet"
                       value={liveSubtitleWait}
                       onchange={(e) => setLiveSubtitleWait((e.target as HTMLSelectElement).value)}
                     >
@@ -1317,6 +1345,7 @@
                   <div class="settings-item-action">
                     <select
                       class="language-select"
+                      aria-label="Translate live subtitles"
                       value={liveTranslate}
                       onchange={(e) => setLiveTranslate((e.target as HTMLSelectElement).value)}
                     >
@@ -1371,7 +1400,14 @@
                           <span class="tm-name">{pairLabel(model)}</span>
                           {#if busy}
                             <span class="tm-progress">
-                              <span class="tm-bar"><span style="width: {translationDownload?.percent ?? 0}%"></span></span>
+                              <span
+                                class="tm-bar"
+                                role="progressbar"
+                                aria-label="Downloading the {pairLabel(model)} model"
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-valuenow={Math.round(translationDownload?.percent ?? 0)}
+                              ><span style="width: {translationDownload?.percent ?? 0}%"></span></span>
                               {Math.round(translationDownload?.percent ?? 0)}%
                             </span>
                           {:else if model.installed}
@@ -1381,6 +1417,7 @@
                             <button
                               class="tm-btn"
                               disabled={translationDownload !== null}
+                              title={translationDownload !== null ? "One model downloads at a time" : undefined}
                               onclick={() => downloadTranslationModel(model)}
                             >Download · {model.size_mb} MB</button>
                           {/if}
@@ -1599,9 +1636,11 @@
             <div class="settings-section">
               <h3>Features on this PC</h3>
               <p class="settings-description">
-                Glucose tested how well the heavier features run on this computer. Features
-                marked "Not recommended" were turned off the first time; you can still turn them
-                on in their settings.
+                Glucose tested how well the heavier features run on this computer.
+                {#if hardwareCheck?.turnedOff.length}
+                  Features it found "Not recommended" were turned off; you can still turn them on
+                  in their settings.
+                {/if}
               </p>
 
               {#if hardwareCheck}
@@ -1653,7 +1692,7 @@
 
                 {#if hardwareCheck.turnedOff.length > 0}
                   <p class="hw-note">
-                    Turned off after the first check: {hardwareCheck.turnedOff
+                    Turned off after checking: {hardwareCheck.turnedOff
                       .map((id) => FEATURE_TURNED_OFF_NAMES[id])
                       .join(", ")}.
                   </p>
@@ -1676,7 +1715,7 @@
                   size="sm"
                   loading={hardwareChecking}
                   disabled={hardwareChecking}
-                  onclick={() => runHardwareCheck(false)}
+                  onclick={() => runHardwareCheck()}
                 >
                   {hardwareChecking ? "Checking..." : hardwareCheck ? "Check again" : "Check now"}
                 </Button>

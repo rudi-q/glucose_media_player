@@ -57,10 +57,13 @@ function featureVersion(version: string): string {
   return version.split(".").slice(0, 2).join(".");
 }
 
+// NaN when either side is not a version: `NaN || x` would otherwise fall through to the
+// minor numbers and call a stored "abc" equal to 4.0.
 function compareFeatureVersions(a: string, b: string): number {
-  const [aMajor, aMinor] = a.split(".").map(Number);
-  const [bMajor, bMinor] = b.split(".").map(Number);
-  return aMajor - bMajor || (aMinor ?? 0) - (bMinor ?? 0);
+  const [aMajor, aMinor = 0] = a.split(".").map(Number);
+  const [bMajor, bMinor = 0] = b.split(".").map(Number);
+  if ([aMajor, aMinor, bMajor, bMinor].some(Number.isNaN)) return NaN;
+  return aMajor - bMajor || aMinor - bMinor;
 }
 
 export function whatsNewHighlights(version: string): WhatsNewHighlight[] | null {
@@ -73,8 +76,17 @@ export function whatsNewHighlights(version: string): WhatsNewHighlight[] | null 
 export function shouldShowWhatsNew(current: string, lastSeen: string | null, existingUser: boolean): boolean {
   if (!whatsNewHighlights(current)) return false;
   if (lastSeen === null) return existingUser;
-  return compareFeatureVersions(featureVersion(current), featureVersion(lastSeen)) > 0;
+  const newer = compareFeatureVersions(featureVersion(current), featureVersion(lastSeen));
+  // A stored value that is not a version (NaN) counts as unknown: the screen shows once,
+  // and closing it stores the right version.
+  return Number.isNaN(newer) || newer > 0;
 }
 
-// The release notes' first line: a one-sentence summary of the release.
-export const RELEASE_SUMMARY = releaseNotes.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ?? "";
+// The release notes' first line: a one-sentence summary of the release. A heading's "#"
+// marks are dropped, should the notes start with one.
+export const RELEASE_SUMMARY =
+  releaseNotes
+    .split(/\r?\n/)
+    .find((line) => line.trim().length > 0)
+    ?.trim()
+    .replace(/^#+\s*/, "") ?? "";

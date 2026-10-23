@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readStorage, writeStorage } from "$lib/utils/storage";
   import { X } from 'lucide-svelte';
   import { subtitleStyleStore, activeSubtitleStyle } from '$lib/subtitle/subtitleStyleStore';
   import { SUBTITLE_PRESETS, type SubtitleStyle } from '$lib/subtitle/subtitlePresets';
@@ -18,17 +19,20 @@
   let { onClose }: { onClose: () => void } = $props();
 
   // Same setting as Settings > Player > Subtitle Position; the event keeps both in step.
-  let placement = $state<SubtitlePosition>(getSubtitlePosition(localStorage.getItem(SUBTITLE_POSITION_KEY)));
+  let placement = $state<SubtitlePosition>(getSubtitlePosition(readStorage(SUBTITLE_POSITION_KEY)));
 
   // Shown under Smart when the hardware check found face detection slow on this PC.
   const smartWarning = featureWarning(
-    featureVerdicts(loadHardwareCheck(localStorage.getItem(HARDWARE_CHECK_KEY))).smart,
+    featureVerdicts(loadHardwareCheck(readStorage(HARDWARE_CHECK_KEY))).smart,
   );
 
+  // The player reads the setting from storage when told it changed, so a value that could
+  // not be stored is not shown here either: the panel and the player always agree.
   function setPlacement(value: SubtitlePosition) {
-    placement = value;
-    localStorage.setItem(SUBTITLE_POSITION_KEY, value);
-    window.dispatchEvent(new Event(SUBTITLE_POSITION_EVENT));
+    if (writeStorage(SUBTITLE_POSITION_KEY, value)) {
+      placement = value;
+      window.dispatchEvent(new Event(SUBTITLE_POSITION_EVENT));
+    }
   }
 
   $effect(() => {

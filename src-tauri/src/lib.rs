@@ -37,8 +37,8 @@ fn is_media_extension(ext: &str) -> bool {
     VIDEO_EXTENSIONS.contains(&ext) || AUDIO_EXTENSIONS.contains(&ext)
 }
 // Formats the library does not list but the player still opens from drag-drop and
-// "Open with": some play directly, the rest can be converted from the player. Keep in
-// sync with src/lib/utils/mediaType.ts.
+// "Open with": some play directly, the rest can be converted from the player. The audio
+// ones are also listed in src/lib/utils/mediaType.ts.
 const EXTRA_PLAYABLE_EXTENSIONS: &[&str] = &[
     "ts", "m2ts", "mts", "3gp", "3g2", "m4b", "mka", "wv", "ape",
 ];
@@ -51,6 +51,33 @@ fn is_playable_extension(ext: &str) -> bool {
 fn starts_like_transport_stream(file: &mut impl std::io::Read) -> bool {
     let mut head = [0u8; 5];
     file.read_exact(&mut head).is_ok() && (head[0] == 0x47 || head[4] == 0x47)
+}
+fn lowercase_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+        .unwrap_or_default()
+}
+// Whether a path's name is one the player opens; no disk access, so safe on the main thread.
+fn has_playable_extension(path: &Path) -> bool {
+    is_playable_extension(&lowercase_extension(path))
+}
+// Whether a file passed to Glucose ("Open with", the command line, drag-drop) is one the
+// player opens: a regular file (not a folder named like one) of a playable type. Touches
+// the disk, which can hang on a slow network share, so never on the main thread.
+fn is_playable_file(path: &Path) -> bool {
+    let ext = lowercase_extension(path);
+    is_playable_extension(&ext)
+        && path.is_file()
+        && (ext != "ts" || fs::File::open(path).is_ok_and(|mut f| starts_like_transport_stream(&mut f)))
+}
+
+/// Checks a dropped path before the player opens it.
+#[tauri::command]
+async fn check_playable_file(path: String) -> bool {
+    tokio::task::spawn_blocking(move || is_playable_file(Path::new(&path)))
+        .await
+        .unwrap_or(false)
 }
 use tauri::Emitter;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -2280,17 +2307,26 @@ async fn fetch_video_durations(
 // Function to process video files and emit events
 fn process_video_files(app_handle: &tauri::AppHandle, video_files: Vec<String>) {
     if !video_files.is_empty() {
-        // Store in global queue
-        {
-            let mut pending = PENDING_FILES.lock().unwrap();
-            for video_file in &video_files {
-                pending.push_back(video_file.clone());
-            }
-        }
-
         // Spawn background thread for persistent file loading attempts
         let app_handle_clone = app_handle.clone();
         thread::spawn(move || {
+            // Checked here rather than by the callers, which run on the main thread: a
+            // folder named like a video, or a TypeScript ".ts" file, is not opened.
+            let video_files: Vec<String> = video_files
+                .into_iter()
+                .filter(|f| is_playable_file(Path::new(f)))
+                .collect();
+            if video_files.is_empty() {
+                return;
+            }
+            // Store in global queue
+            {
+                let mut pending = PENDING_FILES.lock().unwrap();
+                for video_file in &video_files {
+                    pending.push_back(video_file.clone());
+                }
+            }
+
             for attempt in 1..=MAX_FILE_LOADING_ATTEMPTS {
                 // Check if file has been processed
                 {
@@ -2419,14 +2455,18 @@ pub fn run() {
                 for arg in &args[1..] {
                     // Sanitize the path
                     let clean_arg = sanitize_path(arg);
+                    // A path relative to the shell Glucose was started from is made
+                    // absolute here, while the working directory is still that shell's:
+                    // the media protocol only serves absolute paths.
+                    let clean_arg = std::path::absolute(&clean_arg)
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or(clean_arg);
                     #[cfg(debug_assertions)]
                     println!("Processing argument: {} -> {}", arg, clean_arg);
 
-                    let is_media = std::path::Path::new(&clean_arg)
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .map(|ext| is_playable_extension(&ext.to_lowercase()))
-                        .unwrap_or(false);
+                    // Extension only here, on the main thread at launch; the file itself is
+                    // checked off it, in process_video_files.
+                    let is_media = has_playable_extension(std::path::Path::new(&clean_arg));
                     if is_media {
                         video_files.push(clean_arg.clone());
                         #[cfg(debug_assertions)]
@@ -2474,6 +2514,7 @@ pub fn run() {
             live_subtitles::start_live_subtitles,
             live_subtitles::live_subtitle_model,
             hardware_check::run_hardware_check,
+            hardware_check::cancel_hardware_check,
             translation_models::translation_models,
             translation_models::download_translation_model,
             translation_models::delete_translation_model,
@@ -2481,6 +2522,7 @@ pub fn run() {
             live_subtitles::update_live_subtitles_playhead,
             live_cache::load_live_cache,
             live_cache::save_live_cache,
+            check_playable_file,
             check_ffmpeg_installed,
             check_installed_models,
             get_setup_status,
@@ -2539,11 +2581,7 @@ pub fn run() {
                             #[cfg(debug_assertions)]
                             println!("Decoded path: {}", decoded_path);
 
-                            let is_media = Path::new(decoded_path.as_ref())
-                                .extension()
-                                .and_then(|s| s.to_str())
-                                .map(|ext| is_playable_extension(&ext.to_lowercase()))
-                                .unwrap_or(false);
+                            let is_media = has_playable_extension(Path::new(decoded_path.as_ref()));
                             if is_media {
                                 video_files.push(decoded_path.to_string());
                                 #[cfg(debug_assertions)]

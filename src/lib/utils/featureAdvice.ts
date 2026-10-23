@@ -45,6 +45,9 @@ const FACE_SLOW_MS = 200;
 // The large model needs about 2 GB of memory on top of the app and the video.
 const GENERATION_GOOD_GB = 8;
 const GENERATION_SLOW_GB = 4;
+// Windows reports the memory left after the hardware's own share, so an 8 GB PC shows
+// about 7.6 to 7.9 GB; this much short of a limit still counts as reaching it.
+const RAM_TOLERANCE_GB = 0.75;
 
 function speed(x: number): string {
   return `${x.toFixed(1)}x`;
@@ -53,7 +56,7 @@ function speed(x: number): string {
 export function adviseFeatures(r: HardwareReport): FeatureAdvice[] {
   const x = r.live_speed_x;
   const live: FeatureAdvice =
-    x === null
+    x == null || !Number.isFinite(x)
       ? {
           id: "live",
           name: "Live subtitles",
@@ -97,7 +100,7 @@ export function adviseFeatures(r: HardwareReport): FeatureAdvice[] {
 
   const ms = r.face_ms;
   const smart: FeatureAdvice =
-    ms === null
+    ms == null || !Number.isFinite(ms)
       ? {
           id: "smart",
           name: "Smart subtitle position",
@@ -129,21 +132,21 @@ export function adviseFeatures(r: HardwareReport): FeatureAdvice[] {
   // longer; memory is what can make the large model fail.
   const gb = r.ram_gb;
   const generation: FeatureAdvice =
-    gb === null
+    gb == null || !Number.isFinite(gb)
       ? {
           id: "generation",
           name: "AI subtitles (Large model)",
           verdict: "unknown",
           reason: "The amount of memory could not be read.",
         }
-      : gb >= GENERATION_GOOD_GB
+      : gb + RAM_TOLERANCE_GB >= GENERATION_GOOD_GB
         ? {
             id: "generation",
             name: "AI subtitles (Large model)",
             verdict: "good",
             reason: `This PC has ${Math.round(gb)} GB of memory, plenty for the large model.`,
           }
-        : gb >= GENERATION_SLOW_GB
+        : gb + RAM_TOLERANCE_GB >= GENERATION_SLOW_GB
           ? {
               id: "generation",
               name: "AI subtitles (Large model)",
@@ -192,15 +195,38 @@ export interface StoredHardwareCheck {
   version: number;
   checkedAt: string;
   report: HardwareReport;
-  // Features the first automatic check turned off, to explain it in the Features tab.
+  // Features a check turned off, to explain it in the Features tab.
   turnedOff: FeatureId[];
 }
 
 export function loadHardwareCheck(raw: string | null): StoredHardwareCheck | null {
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as StoredHardwareCheck;
-    return parsed?.version === HARDWARE_CHECK_VERSION && parsed.report ? parsed : null;
+    const parsed = JSON.parse(raw);
+    if (parsed?.version !== HARDWARE_CHECK_VERSION || typeof parsed.report !== "object" || !parsed.report) {
+      return null;
+    }
+    // Stored values can be stale or hand-edited: each field is checked, and anything of
+    // the wrong type counts as not measured rather than breaking the advice.
+    const r = parsed.report;
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    const str = (v: unknown) => (typeof v === "string" ? v : null);
+    const ids: FeatureId[] = ["live", "translation", "smart", "generation"];
+    return {
+      version: HARDWARE_CHECK_VERSION,
+      checkedAt: str(parsed.checkedAt) ?? "",
+      report: {
+        cpu_name: str(r.cpu_name),
+        threads: num(r.threads) ?? 0,
+        ram_gb: num(r.ram_gb),
+        gpu_name: str(r.gpu_name),
+        live_model: str(r.live_model),
+        live_speed_x: num(r.live_speed_x),
+        face_ms: num(r.face_ms),
+        problems: Array.isArray(r.problems) ? r.problems.filter((p: unknown) => typeof p === "string") : [],
+      },
+      turnedOff: Array.isArray(parsed.turnedOff) ? parsed.turnedOff.filter((id: unknown) => ids.includes(id as FeatureId)) : [],
+    };
   } catch {
     return null;
   }

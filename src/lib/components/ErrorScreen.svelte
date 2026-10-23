@@ -44,22 +44,42 @@
   // The issue page is public, so the details sent there leave out local file paths: the
   // player and audio screens carry the media path in their route, and error messages can
   // quote paths. The details panel and "Copy details" keep everything.
+  const EXT = "(?:mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg|ogv|ts|m2ts|mts|3gp|3g2|mp3|flac|wav|aac|ogg|opus|m4a|m4b|aiff|wma|mka|wv|ape|srt|vtt|ass|ssa|sub)";
+  const MEDIA_NAME_QUOTED = new RegExp(`(["'\`])[^"'\`\\n]*\\.${EXT}\\1`, "gi");
+  const MEDIA_NAME = new RegExp(`(?:[^\\s"'\`/\\\\:<>]+ ){0,5}[^\\s"'\`/\\\\:<>]+\\.${EXT}\\b`, "gi");
+
   function withoutPaths(text: string): string {
+    // Percent-encoded text is decoded first, so encoded paths (%2FUsers%2Fme%2F...) are
+    // caught by the same rules as plain ones.
+    const decoded = text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+      try {
+        return decodeURIComponent(run);
+      } catch {
+        return run;
+      }
+    });
     // A path runs to the next quote or the end of the line, since folder names often
     // contain spaces. Web addresses are left alone: their scheme has two slashes
     // ("https://") where a drive path has one ("C:/"), and the slashes inside an address
-    // follow its host name, never a space or the start of the text.
-    return text
+    // follow its host name, never a space or the start of the text. No lookbehind is
+    // used: older WebKit cannot parse it, and this screen must load when all else fails.
+    return decoded
       // file:// addresses point at local files, whatever follows (file:///home/..., file:///C:/...).
       .replace(/file:\/\/[^"'`\n]*/gi, "<path>")
-      // Drive paths, also URL-encoded (C%3A%5C...).
-      .replace(/[A-Za-z](?::\\|:\/(?!\/)|%3A%5C|%3A%2F(?!%2F))[^"'`\n]*/gi, "<path>")
+      // So do the app's own media addresses (asset://localhost/..., http://asset.localhost/...).
+      .replace(/(asset(?::\/\/|\.)localhost)\/[^"'`\n]*/gi, "$1/<path>")
+      // Drive paths.
+      .replace(/[A-Za-z](?::\\|:\/(?!\/))[^"'`\n]*/g, "<path>")
       // Network paths (\\server\share).
       .replace(/\\\\[^"'`\n]+/g, "<path>")
       // Absolute macOS and Linux paths with at least two parts (/home/me/..., also
       // "/My Drive/..."). The first part may contain spaces but must not start with one,
       // so "a / b" stays.
-      .replace(/(?<![\w/:.%-])\/[^\s/"'`][^/"'`\n]*\/[^"'`\n]*/g, "<path>");
+      .replace(/(^|[^\w/:.%-])\/[^\s/"'`][^/"'`\n]*\/[^"'`\n]*/g, "$1<path>")
+      // Bare media and subtitle file names ("Secret Film.mkv"): a quoted name whole,
+      // otherwise the name with up to five words before it, since names contain spaces.
+      .replace(MEDIA_NAME_QUOTED, "$1<file>$1")
+      .replace(MEDIA_NAME, "<file>");
   }
 
   let publicDetails = $derived(

@@ -22,9 +22,16 @@
   const ICONS = { captions: Captions, languages: Languages, "scan-face": ScanFace, activity: Activity };
   let done = $state<Partial<Record<WhatsNewAction, boolean>>>({});
   let majorMinor = $derived(version.split(".").slice(0, 2).join("."));
+  // An action that opens Settings closes this screen at once, without the fade: while it
+  // faded out, its focus trap could pull focus back from Settings.
+  let closingForAction = $state(false);
 
   function act(action: WhatsNewAction) {
-    if (onAction(action)) done = { ...done, [action]: true };
+    closingForAction = true;
+    if (onAction(action)) {
+      closingForAction = false;
+      done = { ...done, [action]: true };
+    }
   }
 
   $effect(() => {
@@ -36,13 +43,13 @@
   });
 </script>
 
-<div class="wn-overlay" transition:fade={{ duration: 250 }}>
+<div class="wn-overlay" transition:fade={{ duration: closingForAction ? 0 : 250 }}>
   <div
     class="wn-modal"
     role="dialog"
     aria-modal="true"
     aria-labelledby="wn-title"
-    aria-describedby="wn-summary"
+    aria-describedby={RELEASE_SUMMARY ? "wn-summary" : undefined}
     tabindex="-1"
     use:trapFocus
   >
