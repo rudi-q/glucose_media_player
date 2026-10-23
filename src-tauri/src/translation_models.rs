@@ -5,7 +5,6 @@
 // files the app reads (translate.rs). Downloads land next to the Whisper models.
 
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -14,14 +13,13 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::Emitter;
+use tokio::io::AsyncWriteExt;
 
-use crate::translate;
+use crate::translate::{self, MODEL_FILES};
 
 // Release holding the model files. A new release (v2, ...) is only needed when models
 // are added or replaced; older app versions keep downloading from the release they know.
 const MODEL_RELEASE: &str = "https://github.com/rudi-q/glucose-translation-models/releases/download/v1";
-// Files in each folder, all required.
-const MODEL_FILES: &[&str] = &["config.json", "model.bin", "shared_vocabulary.json", "source.spm", "target.spm"];
 // Only the compact models are offered for download.
 const DOWNLOADABLE_PREFIX: &str = "opus-mt_tiny_";
 // Download size of one compact model, for the Settings list before anything is fetched.
@@ -198,10 +196,18 @@ pub async fn download_translation_model(
     let folder = folder_for(&source, &target)?;
     let _active = ActiveDownload::claim(folder)?;
     let root = download_root()?;
-    fs::create_dir_all(&root).map_err(|e| format!("Could not create the models folder: {e}"))?;
     let partial = root.join(format!("{folder}.download"));
-    let _ = fs::remove_dir_all(&partial);
-    fs::create_dir_all(&partial).map_err(|e| format!("Could not create the download folder: {e}"))?;
+    // Folder work (a leftover partial download can be large) runs on blocking threads, not
+    // on the async runtime.
+    {
+        let (root, partial) = (root.clone(), partial.clone());
+        crate::blocking(move || {
+            fs::create_dir_all(&root).map_err(|e| format!("Could not create the models folder: {e}"))?;
+            let _ = fs::remove_dir_all(&partial);
+            fs::create_dir_all(&partial).map_err(|e| format!("Could not create the download folder: {e}"))
+        })
+        .await?;
+    }
 
     let result = fetch_all(folder, &partial, |downloaded, total| {
         let _ = app.emit(
@@ -210,12 +216,15 @@ pub async fn download_translation_model(
         );
     })
     .await;
-    if let Err(e) = result {
-        let _ = fs::remove_dir_all(&partial);
-        return Err(e);
-    }
-
-    install(&partial, &root.join(folder))
+    let final_dir = root.join(folder);
+    crate::blocking(move || {
+        if let Err(e) = result {
+            let _ = fs::remove_dir_all(&partial);
+            return Err(e);
+        }
+        install(&partial, &final_dir)
+    })
+    .await
 }
 
 // Moves the downloaded folder into place. An existing copy is renamed out of the way first
@@ -224,7 +233,15 @@ pub async fn download_translation_model(
 // the language pair without a model.
 fn install(partial: &std::path::Path, final_dir: &std::path::Path) -> Result<(), String> {
     let backup = final_dir.with_extension("old");
-    let _ = fs::remove_dir_all(&backup);
+    // A crash between the two renames below leaves only the backup: it is the last good
+    // copy, so it is put back rather than deleted. A backup next to an installed model is
+    // only a leftover.
+    if !final_dir.exists() && backup.exists() {
+        let _ = fs::rename(&backup, final_dir);
+    }
+    if final_dir.exists() {
+        let _ = fs::remove_dir_all(&backup);
+    }
     let had_old = final_dir.exists();
     if had_old {
         if let Err(e) = fs::rename(final_dir, &backup) {
@@ -298,13 +315,16 @@ async fn fetch_all(
         if !response.status().is_success() {
             return Err(format!("The model server answered {} for {file}", response.status()));
         }
-        let mut out = fs::File::create(into.join(file)).map_err(|e| format!("Could not save {file}: {e}"))?;
+        // Written with tokio's file, so a slow disk does not hold up the async runtime.
+        let mut out = tokio::fs::File::create(into.join(file))
+            .await
+            .map_err(|e| format!("Could not save {file}: {e}"))?;
         let mut hasher = Sha256::new();
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| format!("Download of {file} failed: {e}"))?;
             hasher.update(&chunk);
-            out.write_all(&chunk).map_err(|e| format!("Could not save {file}: {e}"))?;
+            out.write_all(&chunk).await.map_err(|e| format!("Could not save {file}: {e}"))?;
             downloaded += chunk.len() as u64;
             // About every 512 KB, and at the end.
             if downloaded - last_reported >= 512 * 1024 || downloaded == total {
@@ -312,12 +332,14 @@ async fn fetch_all(
                 on_progress(downloaded, total.max(downloaded));
             }
         }
-        out.flush().map_err(|e| format!("Could not save {file}: {e}"))?;
+        out.flush().await.map_err(|e| format!("Could not save {file}: {e}"))?;
         let digest: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
         if Some(digest.as_str()) != expected_sha256(&asset(file)) {
             return Err(format!("{file} did not download correctly (checksum mismatch). Please try again."));
         }
     }
+    // Always ends at 100%, even when the size was estimated or the last piece was small.
+    on_progress(downloaded, downloaded);
     Ok(())
 }
 
@@ -326,23 +348,29 @@ async fn fetch_all(
 #[tauri::command]
 pub async fn delete_translation_model(source: String, target: String) -> Result<(), String> {
     let folder = folder_for(&source, &target)?;
-    let copies: Vec<PathBuf> = crate::model_candidate_dirs()
-        .into_iter()
-        .map(|dir| dir.join(folder))
-        .filter(|dir| dir.is_dir())
-        .collect();
-    if copies.is_empty() {
-        return Err("This model is not installed".into());
-    }
-    let failed: Vec<String> = copies
-        .iter()
-        .filter_map(|dir| fs::remove_dir_all(dir).err().map(|e| format!("{}: {e}", dir.display())))
-        .collect();
-    if failed.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("Could not remove the model: {}", failed.join("; ")))
-    }
+    // Not while the same model downloads: its install could run halfway through the delete.
+    let _active = ActiveDownload::claim(folder)
+        .map_err(|_| "This model is being downloaded; remove it once the download finishes".to_string())?;
+    crate::blocking(move || {
+        let copies: Vec<PathBuf> = crate::model_candidate_dirs()
+            .into_iter()
+            .map(|dir| dir.join(folder))
+            .filter(|dir| dir.is_dir())
+            .collect();
+        if copies.is_empty() {
+            return Err("This model is not installed".into());
+        }
+        let failed: Vec<String> = copies
+            .iter()
+            .filter_map(|dir| fs::remove_dir_all(dir).err().map(|e| format!("{}: {e}", dir.display())))
+            .collect();
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("Could not remove the model: {}", failed.join("; ")))
+        }
+    })
+    .await
 }
 
 #[cfg(test)]
