@@ -114,6 +114,10 @@ fn words_from_pieces(pieces: &[(String, f64, f64)], offset: f64) -> Vec<Word> {
     let mut words: Vec<Word> = Vec::new();
     for (raw, start, end) in pieces {
         let text = raw.trim();
+        // Token timestamps can step backwards; a word never starts before the one before
+        // it, so cues built from them cannot overlap or end before they start.
+        let start = words.last().map_or(*start, |w| start.max(w.start - offset));
+        let end = end.max(start);
         // Punctuation Whisper emits as its own piece belongs to the previous word.
         let attaches = !raw.starts_with(' ') && text.starts_with(|c: char| c.is_ascii_punctuation());
         if let (true, Some(prev)) = (attaches, words.last_mut()) {
@@ -143,22 +147,96 @@ pub(crate) fn spoken_language(state: &WhisperState, setting: &str) -> String {
 
 // Builds the cues for speech in `language`. Whisper splits its output into words only at
 // spaces, so for languages written without them each "word" is a whole segment, which
-// the rules in `build_cues` would garble: lines can only break at spaces, the 7 s limit
-// cuts the text off while it is still being spoken, and merged segments are joined with
-// spaces. Those segments are used as cues directly, as before word timing was added.
+// the rules in `build_cues` would garble: lines can only break at spaces, and merged
+// segments are joined with spaces. Those are cut by characters instead (`unspaced_cues`).
 pub(crate) fn cues_for_language(words: &[Word], limit: f64, language: &str) -> Vec<Cue> {
-    if !UNSPACED_LANGUAGES.contains(&language) {
-        return build_cues(words, limit, language);
+    if UNSPACED_LANGUAGES.contains(&language) {
+        unspaced_cues(words, limit, language)
+    } else {
+        build_cues(words, limit, language)
     }
-    words
-        .iter()
-        .filter(|w| w.start < limit)
-        .map(|w| Cue {
-            start: w.start,
-            end: w.end.min(limit),
-            text: w.text.clone(),
+}
+
+// Characters per line for languages written without spaces: Chinese and Japanese
+// characters are about twice as wide, so a line holds fewer of them.
+fn unspaced_line_chars(language: &str) -> usize {
+    if matches!(language, "zh" | "yue" | "ja") {
+        16
+    } else {
+        35
+    }
+}
+
+// One cue per Whisper segment, except that a segment longer than two lines or 7 s is
+// split into pieces by characters, preferring a break after punctuation, with its time
+// shared out by length. Each piece is broken into lines by characters, and the usual
+// timing rules apply.
+fn unspaced_cues(words: &[Word], limit: f64, language: &str) -> Vec<Cue> {
+    let line = unspaced_line_chars(language);
+    let mut cues = Vec::new();
+    for w in words.iter().filter(|w| w.start < limit) {
+        let chars: Vec<char> = w.text.chars().collect();
+        let duration = w.end - w.start;
+        let pieces = chars
+            .len()
+            .div_ceil(2 * line)
+            .max((duration / MAX_DURATION).ceil() as usize)
+            .clamp(1, chars.len().max(1));
+        let mut done = 0;
+        // One under two full lines, since a piece may run one character long to keep its
+        // closing punctuation.
+        for piece in split_chars(&chars, chars.len().div_ceil(pieces).min(2 * line - 1)) {
+            let start = w.start + duration * done as f64 / chars.len() as f64;
+            done += piece.len();
+            let end = w.start + duration * done as f64 / chars.len() as f64;
+            let text: String = piece.iter().collect();
+            cues.push(Cue { start, end, text: break_chars(text.trim(), line) });
+        }
+    }
+    cues.retain(|c| !c.text.is_empty());
+    retime(&mut cues, limit);
+    cues
+}
+
+// Punctuation after which text written without spaces breaks best.
+fn is_break_char(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '\u{3001}' | '\u{3002}' | '\u{FF0C}' | '\u{FF01}' | '\u{FF1F}' | '\u{FF1B}' | '\u{FF1A}' | ',' | '.' | '!' | '?')
+}
+
+// Splits text into pieces of about `max` characters, each ending after punctuation when
+// there is some in its second half (one character over `max` included, so a piece never
+// starts with the punctuation that ends the one before).
+fn split_chars(chars: &[char], max: usize) -> Vec<&[char]> {
+    let max = max.max(1);
+    let mut pieces = Vec::new();
+    let mut rest = chars;
+    while rest.len() > max {
+        let cut = (max / 2..=max).rev().find(|&k| is_break_char(rest[k])).map_or(max, |k| k + 1);
+        pieces.push(&rest[..cut]);
+        rest = &rest[cut..];
+    }
+    if !rest.is_empty() {
+        pieces.push(rest);
+    }
+    pieces
+}
+
+// Breaks text written without spaces into two lines of at most `line` characters, as
+// evenly as possible, preferring a break after punctuation.
+fn break_chars(text: &str, line: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= line {
+        return text.to_string();
+    }
+    let best = (chars.len().saturating_sub(line).max(1)..chars.len().min(line + 1))
+        .min_by_key(|&k| {
+            let balance = k.abs_diff(chars.len() - k) * 2;
+            if is_break_char(chars[k - 1]) { balance.saturating_sub(6) } else { balance }
         })
-        .collect()
+        .unwrap_or(chars.len() / 2);
+    let first: String = chars[..best].iter().collect();
+    let second: String = chars[best..].iter().collect();
+    format!("{}\n{}", first.trim_end(), second.trim_start())
 }
 
 // Groups words into cues, merges fragments, applies the timing rules and breaks lines.
@@ -204,10 +282,27 @@ fn join(words: &[Word]) -> String {
 
 // Also used by translate.rs to group cues into sentences, so both agree on where one ends.
 pub(crate) fn ends_sentence(text: &str) -> bool {
-    text.trim_end()
-        .trim_end_matches(['"', '\'', ')', ']'])
-        // U+0964 is the danda, the full stop of Devanagari script.
-        .ends_with(['.', '?', '!', '\u{0964}'])
+    let text = text.trim_end().trim_end_matches(SENTENCE_CLOSERS);
+    // U+0964 is the danda, the full stop of Devanagari script; U+061F the Arabic question
+    // mark; the full-width marks end sentences in Chinese and Japanese.
+    text.ends_with(['.', '?', '!', '\u{2026}', '\u{0964}', '\u{061F}', '\u{3002}', '\u{FF01}', '\u{FF1F}'])
+        && !ends_with_abbreviation(text)
+}
+
+// Quotes and brackets that can follow the end of a sentence.
+const SENTENCE_CLOSERS: &[char] = &[
+    '"', '\'', ')', ']', '\u{201D}', '\u{2019}', '\u{00BB}', '\u{203A}', '\u{300D}', '\u{300F}', '\u{FF09}',
+];
+
+// Abbreviations whose full stop does not end a sentence.
+const ABBREVIATIONS: &[&str] = &["mr.", "mrs.", "ms.", "dr.", "prof.", "st.", "jr.", "sr.", "vs.", "e.g.", "i.e."];
+
+// "Dr.", or initials such as "U.S." at the end of the text.
+fn ends_with_abbreviation(text: &str) -> bool {
+    let last = text.rsplit(char::is_whitespace).next().unwrap_or("").to_lowercase();
+    let initials = last.len() >= 4
+        && last.chars().collect::<Vec<_>>().chunks(2).all(|p| p.len() == 2 && p[0].is_alphabetic() && p[1] == '.');
+    ABBREVIATIONS.contains(&last.as_str()) || initials
 }
 
 fn ends_clause(word: &Word) -> bool {
@@ -340,7 +435,7 @@ fn retime(cues: &mut [Cue], limit: f64) {
         let floor = cue.end.min(ceiling);
         cue.end = wanted.min(ceiling).max(floor);
         if cue.end <= cue.start {
-            cue.end = (cue.start + 0.01).min(next_start);
+            cue.end = cue.start + 0.01;
         }
     }
 }
@@ -543,11 +638,40 @@ mod tests {
             Word { start: 9.2, end: 9.8, text: "はい。".into() },
         ];
         let cues = cues_for_language(&segments, 9.5, "ja");
-        assert_eq!(texts(&cues), vec![segments[0].text.clone(), segments[1].text.clone()]);
-        // Not cut at 7 s, but never past the end of the audio.
-        assert_eq!((cues[0].end, cues[1].end), (9.0, 9.5));
+        // The 9 s segment is split in two so neither cue passes 7 s, with no text lost
+        // and no spaces added.
+        assert_eq!(texts(&cues).concat(), segments[0].text.clone() + &segments[1].text);
+        assert_eq!(cues.len(), 3, "{:?}", cues);
+        let v = check(&cues);
+        assert_eq!((v.too_long, v.over_two_lines), (0, 0), "{:?}", cues);
+        assert!(cues.iter().all(|c| c.text.split('\n').all(|l| l.chars().count() <= 16)), "{:?}", cues);
+        // Never past the end of the audio, and never overlapping.
+        assert!(cues.last().unwrap().end <= 9.5);
+        assert!(cues.windows(2).all(|p| p[0].end <= p[1].start), "{:?}", cues);
         // Spaced languages still get the full cue rules.
         assert_eq!(cues_for_language(&segments, 9.5, "en"), build_cues(&segments, 9.5, "en"));
+    }
+
+    #[test]
+    fn zero_length_and_overlapping_unspaced_segments_are_retimed() {
+        let segments = vec![
+            Word { start: 1.0, end: 1.0, text: "你好。".into() },
+            Word { start: 1.5, end: 3.0, text: "今天天气很好。".into() },
+            Word { start: 2.5, end: 4.0, text: "我们走吧。".into() },
+        ];
+        let cues = cues_for_language(&segments, 10.0, "zh");
+        assert!(cues.iter().all(|c| c.end > c.start), "{:?}", cues);
+        assert!(cues.windows(2).all(|p| p[0].end <= p[1].start), "{:?}", cues);
+    }
+
+    #[test]
+    fn sentence_ends() {
+        assert!(ends_sentence("He left.\u{201D}"));
+        assert!(ends_sentence("Wait\u{2026}"));
+        assert!(ends_sentence("\u{597D}\u{3002}"));
+        assert!(!ends_sentence("I asked Dr."));
+        assert!(!ends_sentence("He moved to the U.S."));
+        assert!(ends_sentence("It was a U-turn."));
     }
 
     #[test]

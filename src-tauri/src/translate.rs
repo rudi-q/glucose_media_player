@@ -69,7 +69,9 @@ pub(crate) fn is_supported(source: &str, target: &str) -> bool {
 
 // Files a model folder needs; a folder missing any of them (for example after an
 // interrupted copy) counts as not installed.
-const MODEL_FILES: &[&str] = &["model.bin", "source.spm", "target.spm"];
+// Also the files translation_models.rs downloads, so a folder counts as installed
+// exactly when a download would have completed it.
+pub(crate) const MODEL_FILES: &[&str] = &["config.json", "model.bin", "shared_vocabulary.json", "source.spm", "target.spm"];
 
 pub(crate) fn installed_dir(folder: &str) -> Option<PathBuf> {
     super::model_candidate_dirs()
@@ -149,14 +151,29 @@ impl CueTranslator {
         }
         let groups = sentence_groups(cues);
         let texts: Vec<String> = groups.iter().map(|g| group_text(g)).collect();
+        // The tiny int8 models could loop on a short fragment ("the the the ..."), so the
+        // output may be at most about twice as long as the longest input (measured in
+        // characters here, which is more than its tokens). Repetition penalties are not
+        // used: tried on the German and French models, they dropped deliberate repeats
+        // ("Nein, nein, nein") and introduced grammar errors.
+        let longest = texts.iter().map(|t| t.chars().count()).max().unwrap_or(0);
         let options: TranslationOptions<String, String> = TranslationOptions {
             beam_size: 2,
+            max_decoding_length: (2 * longest + 10).min(MAX_GROUP_CHARS * 2 + 10),
             ..Default::default()
         };
         let translated = self
             .translator
             .translate_batch(&texts, &options, None)
             .map_err(|e| format!("Translation failed: {}", e))?;
+        // Each group must get its translation, or its cues would silently vanish.
+        if translated.len() != texts.len() {
+            return Err(format!(
+                "Translation returned {} results for {} sentences",
+                translated.len(),
+                texts.len()
+            ));
+        }
 
         let words: Vec<Word> = groups
             .iter()
@@ -205,21 +222,18 @@ fn spread_words(translation: &str, source: &[Cue]) -> Vec<Word> {
     }
     let lens: Vec<f64> = source.iter().map(|c| cue_text(c).chars().count().max(1) as f64).collect();
     let total_src: f64 = lens.iter().sum();
-    // Maps a position in [0, 1] of the text to a time inside the source cues. A position
-    // exactly on a boundary between two cues belongs to the next cue when it starts a
-    // word and to the previous cue when it ends one, so no word spans the pause.
-    let time_at = |fraction: f64, is_end: bool| -> f64 {
-        let mut acc = 0.0;
-        for (cue, len) in source.iter().zip(&lens) {
-            let share = len / total_src;
-            let inside = if is_end { fraction <= acc + share } else { fraction < acc + share };
-            if inside || std::ptr::eq(cue, source.last().unwrap()) {
-                let within = ((fraction - acc) / share).clamp(0.0, 1.0);
-                return cue.start + within * (cue.end - cue.start);
-            }
-            acc += share;
-        }
-        source.last().unwrap().end
+    // Each source cue's share of the text, as [from, to) fractions of it.
+    let mut bounds = Vec::with_capacity(source.len());
+    let mut acc = 0.0;
+    for len in &lens {
+        bounds.push((acc, acc + len / total_src));
+        acc += len / total_src;
+    }
+    // A time inside cue `i` for a fraction of the text, clamped to that cue.
+    let time_in = |i: usize, fraction: f64| -> f64 {
+        let ((from, to), cue) = (bounds[i], &source[i]);
+        let within = ((fraction - from) / (to - from)).clamp(0.0, 1.0);
+        cue.start + within * (cue.end - cue.start)
     };
 
     let total_tgt = words.iter().map(|w| w.chars().count() + 1).sum::<usize>() as f64;
@@ -228,13 +242,18 @@ fn spread_words(translation: &str, source: &[Cue]) -> Vec<Word> {
         .into_iter()
         .map(|w| {
             let len = (w.chars().count() + 1) as f64;
-            let start = time_at(pos / total_tgt, false);
+            let from = pos / total_tgt;
             // The trailing separator is not part of the word.
-            let end = time_at(((pos + len - 1.0) / total_tgt).max(pos / total_tgt), true);
+            let to = ((pos + len - 1.0) / total_tgt).max(from);
             pos += len;
+            // A word belongs wholly to the source cue holding its middle, so none spans
+            // the pause between two cues (or runs past the 7 s cue limit through it).
+            let middle = (from + to) / 2.0;
+            let i = bounds.iter().position(|&(_, end)| middle < end).unwrap_or(source.len() - 1);
+            let start = time_in(i, from);
             Word {
                 start,
-                end: end.max(start),
+                end: time_in(i, to).max(start),
                 text: w.to_string(),
             }
         })
@@ -275,6 +294,19 @@ mod tests {
         assert!(words.windows(2).all(|p| p[0].start <= p[1].start));
         // The pause between the cues stays a pause, so the cue builder can break there.
         assert!(words[2].start - words[1].end > 2.0);
+    }
+
+    #[test]
+    fn a_word_straddling_two_cues_stays_in_one() {
+        let source = vec![cue(10.0, 12.0, "aaaa bbbb"), cue(15.0, 17.0, "cccc dddd")];
+        let words = spread_words("ein zwei drei", &source);
+        // "zwei" sits across the boundary; it goes wholly into one cue, not through the pause.
+        for w in &words {
+            let in_first = w.start >= 10.0 && w.end <= 12.0 + 1e-9;
+            let in_second = w.start >= 15.0 - 1e-9 && w.end <= 17.0 + 1e-9;
+            assert!(in_first || in_second, "{:?}", words);
+        }
+        assert!(words.windows(2).all(|p| p[0].start <= p[1].start));
     }
 
     // Needs the German model installed; run with `cargo test --lib -- --ignored`.
