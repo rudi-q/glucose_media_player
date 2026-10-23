@@ -45,6 +45,13 @@ const EXTRA_PLAYABLE_EXTENSIONS: &[&str] = &[
 fn is_playable_extension(ext: &str) -> bool {
     is_media_extension(ext) || EXTRA_PLAYABLE_EXTENSIONS.contains(&ext)
 }
+// ".ts" is also the TypeScript extension, so such a file only counts as video when it
+// starts like an MPEG transport stream: the 0x47 sync byte first, or after the 4-byte
+// timestamp of 192-byte packets.
+fn starts_like_transport_stream(file: &mut impl std::io::Read) -> bool {
+    let mut head = [0u8; 5];
+    file.read_exact(&mut head).is_ok() && (head[0] == 0x47 || head[4] == 0x47)
+}
 use tauri::Emitter;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use tauri::RunEvent;
