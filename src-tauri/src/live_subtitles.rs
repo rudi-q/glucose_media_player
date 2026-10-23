@@ -10,7 +10,7 @@ use std::ffi::c_void;
 use std::io::Read;
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 use tauri::Emitter;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
@@ -49,19 +49,26 @@ pub(crate) fn preferred_model() -> Option<&'static str> {
     find_live_model().map(|(label, _)| label)
 }
 
+// Whether a live session is running; the hardware check does not measure speed then,
+// since the two would compete for the processor.
+pub(crate) fn session_running() -> bool {
+    state().lock().unwrap_or_else(|e| e.into_inner()).session.is_some()
+}
+
 // The Whisper model at `path` for the hardware check: reuses the one live mode holds
 // rather than loading a second copy, and otherwise loads it while no live session is
-// loading one. Not cached, since live mode may be off.
+// loading one. Not kept once the check drops it, since live mode may be off, but a live
+// session starting while the check still holds it reuses it (`LiveState::borrowed`).
 pub(crate) fn load_shared_model(path: &str) -> Result<Arc<WhisperContext>, String> {
     let _loading = MODEL_LOAD.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((loaded, ctx)) = &state().lock().unwrap_or_else(|e| e.into_inner()).model {
-        if loaded == path {
-            return Ok(ctx.clone());
-        }
+    if let Some(ctx) = state().lock().unwrap_or_else(|e| e.into_inner()).loaded_model(path) {
+        return Ok(ctx);
     }
-    WhisperContext::new_with_params(path, WhisperContextParameters::default())
+    let ctx = WhisperContext::new_with_params(path, WhisperContextParameters::default())
         .map(Arc::new)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state().lock().unwrap_or_else(|e| e.into_inner()).borrowed = Some((path.to_string(), Arc::downgrade(&ctx)));
+    Ok(ctx)
 }
 
 /// The model live mode would use, or None when no live-capable model is installed. Live
@@ -93,14 +100,36 @@ struct LiveState {
     // Counts unloads (live mode turned off), so a model that finishes loading after an
     // unload is not cached again.
     unloads: u64,
+    // A model the hardware check loaded, without keeping it alive: reused by a session
+    // that starts while the check still holds it, instead of loading another copy.
+    borrowed: Option<(String, Weak<WhisperContext>)>,
     // Highest request number seen from start_live_subtitles and stop_live_subtitles. The
     // frontend numbers its requests from the time in milliseconds, so they keep rising
     // when the player is reopened.
     last_request: u64,
 }
 
-// The error a start gets when a later start or stop overtook it. The frontend ignores it.
-const SUPERSEDED: &str = "superseded";
+impl LiveState {
+    // The model at `path` if live mode or the hardware check has it in memory.
+    fn loaded_model(&self, path: &str) -> Option<Arc<WhisperContext>> {
+        if let Some((loaded, ctx)) = &self.model {
+            if loaded == path {
+                return Some(ctx.clone());
+            }
+        }
+        self.borrowed
+            .as_ref()
+            .filter(|(loaded, _)| loaded == path)
+            .and_then(|(_, ctx)| ctx.upgrade())
+    }
+}
+
+// The error a start gets when a later start or stop overtook it: "superseded:<highest
+// request number seen>". The frontend ignores it, unless it made no later request itself;
+// then the number came from before a window reload, and it retries above it.
+fn superseded(last_request: u64) -> String {
+    format!("superseded:{last_request}")
+}
 
 // Only one Whisper model load runs at a time. A session that starts while another is
 // still loading (auto-start followed by the jump to the saved position, a seek, an
@@ -188,22 +217,32 @@ pub async fn start_live_subtitles(
     // "nl" for English speech, or "en" for speech in the languages translate.rs covers.
     translate_to: Option<String>,
 ) -> Result<LiveSessionInfo, String> {
-    if let Some(target) = &translate_to {
-        // The speech language is the one set in Settings, or unknown when that is "auto".
-        // A pair no model covers starts untranslated and says so (see translator_for); a
-        // covered pair whose model is missing fails here, so the viewer can download it.
-        let source = (language != "auto").then_some(language.as_str());
-        if source.is_none_or(|s| translate::is_supported(s, target)) {
-            translate::check_installed(source, target)?;
-        }
+    // Checked before the file checks, to skip them, and after, so a start overtaken
+    // meanwhile reports that rather than an error about a setting the viewer may have
+    // changed since.
+    let last_request = state().lock().unwrap_or_else(|e| e.into_inner()).last_request;
+    if request < last_request {
+        return Err(superseded(last_request));
     }
-    let (model_label, model_path) =
-        find_live_model().ok_or("No Whisper model installed. Download one from the Settings page.")?;
+    let found = (|| {
+        if let Some(target) = &translate_to {
+            // The speech language is the one set in Settings, or unknown when that is
+            // "auto". A pair no model covers starts untranslated and says so (see
+            // translator_for); a covered pair whose model is missing fails here, so the
+            // viewer can download it.
+            let source = (language != "auto").then_some(language.as_str());
+            if source.is_none_or(|s| translate::is_supported(s, target)) {
+                translate::check_installed(source, target)?;
+            }
+        }
+        find_live_model().ok_or_else(|| "No Whisper model installed. Download one from the Settings page.".to_string())
+    })();
 
     let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
     if request < st.last_request {
-        return Err(SUPERSEDED.into());
+        return Err(superseded(st.last_request));
     }
+    let (model_label, model_path) = found?;
     st.last_request = request;
     if let Some(prev) = st.session.take() {
         stop_session(prev);
@@ -344,12 +383,16 @@ impl Job {
         }
         emit_status(&self.app, self.session_id, "loading", "Loading speech model...");
         let _loading = MODEL_LOAD.lock().unwrap_or_else(|e| e.into_inner());
-        // A load that finished while this session waited is reused.
-        if let Some((path, ctx)) = &state().lock().unwrap_or_else(|e| e.into_inner()).model {
-            if *path == self.model_path {
-                return Ok(Some(ctx.clone()));
+        // A load that finished while this session waited, or the copy the hardware check
+        // is using, is reused; the check's copy is then kept for later sessions too.
+        let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ctx) = st.loaded_model(&self.model_path) {
+            if st.unloads == self.unload_gen {
+                st.model = Some((self.model_path.clone(), ctx.clone()));
             }
+            return Ok(Some(ctx));
         }
+        drop(st);
         // Otherwise a replaced session gives up here rather than loading a model nobody
         // will use while its replacement waits behind it.
         if self.cancelled() {
@@ -464,9 +507,10 @@ impl Job {
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to start FFmpeg: {}", e))?;
-        let stdout = child.stdout.take().ok_or("Failed to read FFmpeg output")?;
+        // Stored before anything can fail, so Job::drop or a stop always kills and reaps it.
+        let stdout = child.stdout.take();
         *self.ffmpeg.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
-        Ok(stdout)
+        stdout.ok_or_else(|| "Failed to read FFmpeg output".to_string())
     }
 
     fn run(self) -> Result<(), String> {
@@ -527,6 +571,11 @@ impl Job {
             .create_state()
             .map_err(|e| format!("Failed to create Whisper state: {}", e))?;
         let mut stdout = self.spawn_ffmpeg()?;
+        // A stop that came while FFmpeg was starting found no process to kill; returning
+        // lets Job::drop kill it now instead of after its first output.
+        if self.cancelled() {
+            return Ok(());
+        }
         emit_status(&self.app, self.session_id, "running", "");
 
         let window = WINDOW_SECS * SAMPLE_RATE;
@@ -762,7 +811,10 @@ impl Job {
         stats.whisper_ms = live_log::ms(whisper_started);
 
         let chunk_secs = samples.len() as f64 / SAMPLE_RATE as f64;
-        let words = subtitle_format::words_from_state(&state, offset, chunk_secs);
+        let mut words = subtitle_format::words_from_state(&state, offset, chunk_secs);
+        // Whisper can make up words in the silence a short chunk was padded with; their
+        // times were clamped to the chunk's end, so anything starting there is dropped.
+        words.retain(|w| w.start < offset + chunk_secs);
         // Cues may not run past this chunk, and leave the usual gap before it ends: the
         // next chunk's speech is not known yet.
         let limit = offset + chunk_secs - subtitle_format::MIN_GAP;

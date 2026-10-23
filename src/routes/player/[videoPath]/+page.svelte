@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readStorage, writeStorage } from "$lib/utils/storage";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -55,6 +56,9 @@
     addRange,
     findRange,
     mergeCues,
+    nextLiveRequest,
+    skipLiveRequestsTo,
+    supersededBy,
     type CoveredRange,
     type LiveCacheData,
     type LiveCacheKey,
@@ -81,6 +85,7 @@
     LIVE_TRANSLATE_NAMES,
     LIVE_DUAL_SUBTITLES_KEY,
     LIVE_DUAL_SUBTITLES_EVENT,
+    LIVE_SUBTITLE_WAIT_EVENT,
     getLiveDualSubtitles,
     SUBTITLE_POSITION_KEY,
     SUBTITLE_POSITION_EVENT,
@@ -207,9 +212,21 @@
   let liveDualSubtitles = $state(false);
   let liveRanges = $state<CoveredRange[]>([]);
 
+  // "Pause until ready", kept here rather than read from storage on every timeupdate;
+  // refreshed when Settings changes it.
+  let liveWaitPreference = $state(getLiveSubtitleWait(readStorage(LIVE_SUBTITLE_WAIT_KEY)));
   $effect(() => {
     const read = () => {
-      liveDualSubtitles = getLiveDualSubtitles(localStorage.getItem(LIVE_DUAL_SUBTITLES_KEY));
+      liveWaitPreference = getLiveSubtitleWait(readStorage(LIVE_SUBTITLE_WAIT_KEY));
+      checkLiveWait();
+    };
+    window.addEventListener(LIVE_SUBTITLE_WAIT_EVENT, read);
+    return () => window.removeEventListener(LIVE_SUBTITLE_WAIT_EVENT, read);
+  });
+
+  $effect(() => {
+    const read = () => {
+      liveDualSubtitles = getLiveDualSubtitles(readStorage(LIVE_DUAL_SUBTITLES_KEY));
     };
     read();
     window.addEventListener(LIVE_DUAL_SUBTITLES_EVENT, read);
@@ -223,7 +240,7 @@
 
   $effect(() => {
     const read = () => {
-      featureVerdicts = verdictsFromCheck(loadHardwareCheck(localStorage.getItem(HARDWARE_CHECK_KEY)));
+      featureVerdicts = verdictsFromCheck(loadHardwareCheck(readStorage(HARDWARE_CHECK_KEY)));
     };
     read();
     window.addEventListener(HARDWARE_CHECK_KEY, read);
@@ -239,7 +256,7 @@
 
   $effect(() => {
     const read = () => {
-      smartSubtitlePosition = getSubtitlePosition(localStorage.getItem(SUBTITLE_POSITION_KEY)) === "smart";
+      smartSubtitlePosition = getSubtitlePosition(readStorage(SUBTITLE_POSITION_KEY)) === "smart";
     };
     read();
     window.addEventListener(SUBTITLE_POSITION_EVENT, read);
@@ -247,13 +264,20 @@
   });
   let liveState = $state<LiveSubtitleStatus["state"] | null>(null);
   let liveError = $state<string | null>(null);
-  // Numbers each start and stop sent to the backend, which refuses a start that a later
-  // request overtook (starts are async and can finish out of order). Counted from the
-  // time in milliseconds so the numbers keep rising when the player is opened again.
-  let liveRequest = Date.now();
+  // The number of the last start or stop sent to the backend (see nextLiveRequest), which
+  // refuses a start that a later request overtook: starts are async and can finish out
+  // of order.
+  let latestLiveRequest = 0;
+  function newLiveRequest(): number {
+    latestLiveRequest = nextLiveRequest();
+    return latestLiveRequest;
+  }
   // The start whose events are shown; a start's request number is its session id. 0 while
   // none is (between switching keys and the next start).
   let liveSession = 0;
+  // Set when live mode turned on before the video's position was known; the worker then
+  // starts from handleLoadedMetadata.
+  let liveStartWhenReady = false;
   // Where the current worker session is transcribing from next.
   let liveWorkerPos = 0;
   let livePlayheadSentAt = 0;
@@ -274,6 +298,8 @@
   // Something the viewer should know about the live subtitles, such as no translation
   // being available for the speech language; shown in a banner until dismissed.
   let liveNotice = $state("");
+  // The notice the viewer dismissed, for the current live subtitles key.
+  let liveNoticeDismissed = "";
   let livePlaceholder = $derived.by(() => {
     if (!liveActive) return null;
     if (liveError) return `Live subtitles: ${liveError}`;
@@ -385,8 +411,8 @@
     onPlayingChange: (playing) => {
       isPlaying = playing;
     },
-    fadeInMs: () => getFadeDurationMs(localStorage.getItem('glucose_fade')),
-    fadeOutMs: () => getFadeDurationMs(localStorage.getItem('glucose_fade')),
+    fadeInMs: () => getFadeDurationMs(readStorage('glucose_fade')),
+    fadeOutMs: () => getFadeDurationMs(readStorage('glucose_fade')),
   });
 
   $effect(() => {
@@ -581,7 +607,7 @@
       !subtitleSrc &&
       embeddedSubtitleTracks.length === 0 &&
       embeddedAudioTracks.length > 0 &&
-      getAutoLiveSubtitles(localStorage.getItem(AUTO_LIVE_SUBTITLES_KEY)) &&
+      getAutoLiveSubtitles(readStorage(AUTO_LIVE_SUBTITLES_KEY)) &&
       liveModelInstalled
     ) {
       enableLiveSubtitles(true);
@@ -694,7 +720,10 @@
           if (!liveActive || status.session_id !== liveSession) return;
           liveState = status.state;
           if (status.state === "loading") liveLoadingMessage = status.message;
-          if (status.state === "running" && status.message) liveNotice = status.message;
+          // Each restart (a seek) reports it again; once dismissed it stays away.
+          if (status.state === "running" && status.message && status.message !== liveNoticeDismissed) {
+            liveNotice = status.message;
+          }
           if (status.state === "error") liveError = status.message;
           checkLiveWait();
         }),
@@ -787,7 +816,13 @@
           console.error("Failed to revoke subtitle blob URL:", err);
         }
       }
-      disableLiveSubtitles(false);
+      if (liveActive) {
+        disableLiveSubtitles(false);
+      } else {
+        // Live mode may have been on for an earlier video in this player; a video change
+        // keeps its models loaded (see disableLiveSubtitles), so release them now.
+        invoke("stop_live_subtitles", { unload: true, request: newLiveRequest() }).catch(() => {});
+      }
       // Clean up audio remux temp files
       if (audioRemuxPath) {
         invoke("delete_temp_file", { path: audioRemuxPath }).catch(() => {});
@@ -1044,6 +1079,7 @@
   function toggleSubtitles() {
     if (!subtitleSrc && !liveActive) return;
     subtitlesEnabled = !subtitlesEnabled;
+    checkLiveWait();
   }
 
   async function goHome() {
@@ -1222,6 +1258,7 @@
 
     const handleMouseUp = () => {
       isScrubbing = false;
+      handleLiveSeek();
       if (wasPlayingBeforeScrub) {
         fadedPlayback.play().catch((err) => {
           console.log("Play prevented:", err);
@@ -1446,7 +1483,7 @@
       !nextVideoSkipped &&
       !nextVideoNotFound
     ) {
-      const behavior = getEndBehavior(localStorage.getItem('glucose_end_behavior'));
+      const behavior = getEndBehavior(readStorage('glucose_end_behavior'));
       if (behavior === 'next') {
         startNextVideoCountdown();
       }
@@ -1484,9 +1521,9 @@
       ]);
 
       if (disposed || currentVideoPath !== requestedForPath) return;
-      if (getEndBehavior(localStorage.getItem('glucose_end_behavior')) !== 'next') return;
+      if (getEndBehavior(readStorage('glucose_end_behavior')) !== 'next') return;
 
-      const filterPref = localStorage.getItem('glucose_filter') ?? 'all';
+      const filterPref = readStorage('glucose_filter') ?? 'all';
       if (filterPref === 'audio') { nextVideoNotFound = true; return; }
 
       // Filter out unavailable/cloud-only and audio-only files
@@ -1498,7 +1535,7 @@
       const normalizedCurrent = normalize(requestedForPath ?? '');
 
       // Match gallery sort order
-      const sortPref = localStorage.getItem('glucose_sort') ?? 'watched';
+      const sortPref = readStorage('glucose_sort') ?? 'watched';
       let sorted: VideoFile[];
       if (sortPref === 'watched') {
         sorted = [...available].sort((a, b) => {
@@ -1538,7 +1575,7 @@
           clearCountdown();
           return;
         }
-        if (getEndBehavior(localStorage.getItem('glucose_end_behavior')) !== 'next') {
+        if (getEndBehavior(readStorage('glucose_end_behavior')) !== 'next') {
           clearCountdown();
           showNextVideoOverlay = false;
           nextVideoPath = null;
@@ -1600,7 +1637,7 @@
     fadedPlayback.pauseNow();
     await saveWatchProgress();
 
-    const behavior = getEndBehavior(localStorage.getItem('glucose_end_behavior'));
+    const behavior = getEndBehavior(readStorage('glucose_end_behavior'));
     if (behavior === 'loop') {
       if (videoElement) {
         videoElement.currentTime = 0;
@@ -1651,6 +1688,19 @@
 
     // Bail if component unmounted or video changed during await
     if (!videoElement || currentVideoPath !== videoPathBeforeAwait) return;
+
+    if (liveStartWhenReady) {
+      liveStartWhenReady = false;
+      if (liveActive && liveKey) {
+        const target = findRange(liveRanges, videoElement.currentTime)?.[1] ?? videoElement.currentTime;
+        if (duration > 0 && target >= duration - 0.5) {
+          liveWorkerPos = target;
+          liveState = "done";
+        } else {
+          startLiveSubtitlesAt(target);
+        }
+      }
+    }
 
     // Set up interval to save progress every 5 seconds
     if (progressSaveInterval) {
@@ -1958,15 +2008,21 @@
   // Returns this check's own answer, for callers that act on it right away.
   async function refreshLiveModelAvailable(): Promise<boolean> {
     const checkId = ++liveModelCheckId;
-    let available = false;
+    let model: string | null = null;
     try {
-      available = (await invoke<string | null>("live_subtitle_model")) !== null;
+      model = await invoke<string | null>("live_subtitle_model");
     } catch (err) {
       console.log("Live model check failed:", err);
     }
-    if (checkId === liveModelCheckId) liveModelAvailable = available;
-    return available;
+    if (checkId === liveModelCheckId) {
+      liveModelAvailable = model !== null;
+      livePreferredModel = model ?? "";
+    }
+    return model !== null;
   }
+  // The model live mode would use, from the last check; names saved cues until a
+  // session reports its own.
+  let livePreferredModel = "";
 
   function openAIFromUnifiedMenu() {
     showSubtitleMenu = false;
@@ -2017,7 +2073,7 @@
       if (generationVideoDuration > 0) {
         const elapsed = (Date.now() - generationStartTime) / 1000;
         const coefficient = elapsed / generationVideoDuration;
-        localStorage.setItem(`glucose_whisper_coef_${modelSize}`, String(coefficient));
+        writeStorage(`glucose_whisper_coef_${modelSize}`, String(coefficient));
       }
 
       // Auto-load the generated subtitle
@@ -2034,7 +2090,7 @@
     }
   }
 
-  async function startLiveSubtitlesAt(time: number) {
+  async function startLiveSubtitlesAt(time: number, retried = false) {
     const key = liveKey;
     if (!key) return;
     liveWorkerPos = time;
@@ -2042,7 +2098,7 @@
     // A worker that reached the end reported "done"; until the new session reports its own
     // state, that would hide the "Generating" hint and stop "pause until ready" waiting.
     if (liveState === "done") liveState = "running";
-    const request = ++liveRequest;
+    const request = newLiveRequest();
     // From now on only this session's events count, including any that arrive before
     // the call below returns; the session being replaced is dropped at once.
     liveSession = request;
@@ -2061,7 +2117,18 @@
       }).catch(() => {});
     } catch (err) {
       // A later start or stop replaced this one; its outcome is the one that counts.
-      if (request !== liveRequest || !liveActive || liveKey !== key) return;
+      if (request !== latestLiveRequest || !liveActive || liveKey !== key) return;
+      // Refused as overtaken although this player sent nothing later: the backend's
+      // number is from before a window reload (with the clock since stepped back). The
+      // numbers continue above it and the start is tried once more.
+      const highest = supersededBy(err);
+      if (highest !== null) {
+        if (!retried) {
+          skipLiveRequestsTo(highest);
+          startLiveSubtitlesAt(time, true);
+        }
+        return;
+      }
       if (liveAutoStarted) {
         // Auto-start never shows an error: without the translation model it falls back
         // to the original language, and if it still cannot start it stays off.
@@ -2094,7 +2161,7 @@
         videoPath: currentVideoPath,
         audioStreamIndex: selectedAudioTrackIndex,
         language: $appSettings.subtitleLanguage,
-        translateTo: getLiveTranslate(localStorage.getItem(LIVE_TRANSLATE_KEY)),
+        translateTo: getLiveTranslate(readStorage(LIVE_TRANSLATE_KEY)),
       },
       videoElement?.currentTime ?? 0,
     );
@@ -2106,13 +2173,17 @@
     // Stop the previous key's worker and drop its in-flight chunks, so they cannot
     // land in this key's cues while the cache loads.
     liveSession = 0;
-    invoke("stop_live_subtitles", { unload: false, request: ++liveRequest }).catch(() => {});
+    invoke("stop_live_subtitles", { unload: false, request: newLiveRequest() }).catch(() => {});
     liveKey = key;
+    // A press of play during an earlier wait does not carry over to this session.
+    liveWaitOverride = false;
+    liveWorkerPos = 0;
     liveCues = [];
     liveOriginalCues = [];
     liveRanges = [];
     liveModel = "";
     liveNotice = "";
+    liveNoticeDismissed = "";
     liveDirty = false;
     try {
       const cached = await invoke<LiveCacheData | null>("load_live_cache", { ...key });
@@ -2128,7 +2199,14 @@
       console.warn("Failed to load live subtitle cache:", err);
     }
     if (!liveActive || liveKey !== key) return;
-    const now = videoElement?.currentTime ?? time;
+    // Before the video's metadata is in (auto-start, an audio-track switch reloading the
+    // video), its time is 0 and about to jump: the worker starts once the position is set
+    // (handleLoadedMetadata), rather than at 0 and again after the jump.
+    if (!videoElement || videoElement.readyState === 0) {
+      liveStartWhenReady = true;
+      return;
+    }
+    const now = pendingSeekTime ?? videoElement.currentTime;
     const target = findRange(liveRanges, now)?.[1] ?? now;
     if (duration > 0 && target >= duration - 0.5) {
       // Everything from here to the end is already transcribed.
@@ -2156,11 +2234,15 @@
       clearTimeout(liveSaveTimer);
       liveSaveTimer = null;
     }
-    if (!liveKey || !liveDirty || !liveModel) return;
+    // Saved under the session's model, or the one live mode would use; with neither known
+    // the cues wait for the next save, since a cache without a real model name would never
+    // be replaced by a better model's output.
+    const model = liveModel || livePreferredModel;
+    if (!liveKey || !liveDirty || !model) return;
     liveDirty = false;
     invoke("save_live_cache", {
       ...liveKey,
-      model: liveModel,
+      model,
       ranges: $state.snapshot(liveRanges),
       cues: $state.snapshot(liveCues),
       originalCues: $state.snapshot(liveOriginalCues),
@@ -2184,7 +2266,11 @@
     liveState = null;
     liveError = null;
     liveNotice = "";
-    invoke("stop_live_subtitles", { unload, request: ++liveRequest }).catch(() => {});
+    liveNoticeDismissed = "";
+    liveWaitOverride = false;
+    liveWorkerPos = 0;
+    liveStartWhenReady = false;
+    invoke("stop_live_subtitles", { unload, request: newLiveRequest() }).catch(() => {});
   }
 
   function handleLiveChunk(chunk: LiveSubtitleChunk) {
@@ -2205,7 +2291,7 @@
     const range = findRange(liveRanges, chunk.covered_start);
     if (range && range[1] > chunk.covered_end + 0.5) {
       if (duration > 0 && range[1] >= duration - 0.5) {
-        invoke("stop_live_subtitles", { unload: false, request: ++liveRequest }).catch(() => {});
+        invoke("stop_live_subtitles", { unload: false, request: newLiveRequest() }).catch(() => {});
         liveState = "done";
       } else {
         startLiveSubtitlesAt(range[1]);
@@ -2220,6 +2306,12 @@
     const time = videoElement.currentTime;
     livePlayheadSentAt = Date.now();
     invoke("update_live_subtitles_playhead", { time }).catch(() => {});
+    // A drag on the progress bar seeks on every mouse move; the worker restarts once,
+    // where the drag ends (see startScrubbing).
+    if (isScrubbing) return;
+    // While the cache loads (or the start waits for the video's position) no session is
+    // current; the worker then starts from wherever playback is, so nothing to do here.
+    if (liveSession === 0) return;
     // Inside a covered range, the work that matters is at that range's end.
     const target = findRange(liveRanges, time)?.[1] ?? time;
     if (duration > 0 && target >= duration - 0.5) return;
@@ -2233,11 +2325,13 @@
   // ranges or the worker state change.
   function checkLiveWait() {
     if (!videoElement) return;
+    // Not while subtitles are hidden: nothing would explain the pause.
     const waitEnabled =
       liveActive &&
+      subtitlesEnabled &&
       !liveError &&
       liveState !== "done" &&
-      getLiveSubtitleWait(localStorage.getItem(LIVE_SUBTITLE_WAIT_KEY)) === "pause";
+      liveWaitPreference === "pause";
     const time = videoElement.currentTime;
     // The last second is treated as ready, in case the audio ends before the video.
     const ready =
@@ -2277,7 +2371,7 @@
     if (!duration) return "Unknown";
 
     // Prefer a coefficient measured on this machine from a previous run.
-    const stored = localStorage.getItem(`glucose_whisper_coef_${modelKey}`);
+    const stored = readStorage(`glucose_whisper_coef_${modelKey}`);
     const calibrated = stored ? parseFloat(stored) : NaN;
     if (!isNaN(calibrated) && calibrated > 0) {
       return formatEstimatedTime(duration * calibrated);
@@ -2362,9 +2456,18 @@
       src={videoSrc}
       ontimeupdate={handleTimeUpdate}
       onseeked={handleLiveSeek}
+      onerror={() => {
+        // A video the webview cannot load never reports its metadata, so a live start
+        // waiting for it begins now instead (FFmpeg may still read the audio).
+        if (liveStartWhenReady) {
+          liveStartWhenReady = false;
+          if (liveActive && liveKey) startLiveSubtitlesAt(pendingSeekTime ?? 0);
+        }
+      }}
       onpause={() => {
-        // A pause by the viewer is a good moment to save; not one made to wait for subtitles.
-        if (!liveWaiting) flushLiveCache();
+        // A pause by the viewer is a good moment to save; not one made to wait for
+        // subtitles, or the one a drag on the progress bar starts with.
+        if (!liveWaiting && !isScrubbing) flushLiveCache();
       }}
       onloadedmetadata={handleLoadedMetadata}
       onended={handleEnded}
@@ -2416,7 +2519,10 @@
       <span class="hevc-warning-text">{liveNotice}.</span>
       <button
         class="hevc-warning-dismiss"
-        onclick={() => (liveNotice = "")}
+        onclick={() => {
+          liveNoticeDismissed = liveNotice;
+          liveNotice = "";
+        }}
         title="Dismiss"
         aria-label="Dismiss live subtitles notice"
       >

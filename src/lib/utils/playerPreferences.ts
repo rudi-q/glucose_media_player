@@ -31,6 +31,8 @@ export function getAutoLiveSubtitles(raw?: string | null): boolean {
 // What the player does when playback reaches a point live subtitles are not ready for.
 export type LiveSubtitleWait = "play" | "pause";
 export const LIVE_SUBTITLE_WAIT_KEY = "glucose_live_subtitle_wait";
+// Sent on window when the setting changes, so an open player picks it up.
+export const LIVE_SUBTITLE_WAIT_EVENT = "glucose-live-subtitle-wait-changed";
 
 export function getLiveSubtitleWait(raw?: string | null): LiveSubtitleWait {
   return raw === "pause" ? "pause" : "play";
@@ -53,7 +55,8 @@ export const LIVE_TRANSLATE_NAMES: Record<LiveTranslate, string> = {
 };
 
 export function getLiveTranslate(raw?: string | null): LiveTranslate | null {
-  return raw && raw in LIVE_TRANSLATE_NAMES ? (raw as LiveTranslate) : null;
+  // Own keys only: `in` would also accept "constructor" or "toString".
+  return raw && Object.prototype.hasOwnProperty.call(LIVE_TRANSLATE_NAMES, raw) ? (raw as LiveTranslate) : null;
 }
 
 // Dual subtitles: with translation on, also show the original line, smaller, under the

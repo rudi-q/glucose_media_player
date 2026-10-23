@@ -22,6 +22,28 @@ export interface LiveSessionInfo {
   model: string;
 }
 
+// Numbers live subtitle starts and stops (see start_live_subtitles in live_subtitles.rs).
+// One counter for the whole window, so the numbers keep rising when the player is opened
+// again, whatever the clock does; it starts from the time so that a reloaded window
+// continues above the numbers of the one before.
+let lastLiveRequest = Date.now();
+
+export function nextLiveRequest(): number {
+  return ++lastLiveRequest;
+}
+
+// After a start was refused as superseded by `highest` (a number from before a window
+// reload, when the clock has since stepped back), later requests continue above it.
+export function skipLiveRequestsTo(highest: number) {
+  lastLiveRequest = Math.max(lastLiveRequest, highest);
+}
+
+// The backend's number in a "superseded:<n>" error, or null for any other error.
+export function supersededBy(err: unknown): number | null {
+  const match = /^superseded:(\d+)$/.exec(String(err));
+  return match ? Number(match[1]) : null;
+}
+
 // A processed span of the timeline, [start, end) in seconds.
 export type CoveredRange = [number, number];
 
