@@ -69,19 +69,38 @@ fn episode(w: &str) -> Option<(u32, u32)> {
 }
 
 /// The title (plus episode, for TV) a file name is about: everything before the first
-/// year or release detail. None when there is no usable title.
+/// year or release detail. None when there is no usable title. The app compares
+/// `parse_name` results, which add the year; the tests read the key alone.
+#[cfg(test)]
 pub fn title_key(stem: &str) -> Option<String> {
+    parse_name(stem).map(|(key, _)| key)
+}
+
+// The title key and the release year that ended the title, if any.
+fn parse_name(stem: &str) -> Option<(String, Option<u32>)> {
     let words = words(stem);
     let mut title = Vec::new();
-    for w in &words {
-        // A year right at the start is the title (e.g. "1917").
-        if episode(w).is_some() || (is_year(w) && !title.is_empty()) || RELEASE_WORDS.contains(&w.as_str()) {
+    let mut year = None;
+    for (i, w) in words.iter().enumerate() {
+        // "1x02" style markers only count after the title, so a title such as "4x4" stays;
+        // "s01e02" counts anywhere.
+        if episode(w).is_some() && (!title.is_empty() || w.starts_with('s')) {
+            break;
+        }
+        // A year right at the start is the title ("1917"), and so is one followed by the
+        // release year ("Blade.Runner.2049.2017", "Wonder.Woman.1984.2020").
+        if is_year(w) && !title.is_empty() && !words.get(i + 1).is_some_and(|n| is_year(n)) {
+            year = w.parse().ok();
+            break;
+        }
+        if RELEASE_WORDS.contains(&w.as_str()) {
             break;
         }
         title.push(w.clone());
     }
-    // The episode can come after the year ("Show.2021.S01E02"), so look at every word.
-    let ep = words.iter().find_map(|w| episode(w));
+    // The episode can come after the year ("Show.2021.S01E02"), so look at every word
+    // after the title.
+    let ep = words[title.len()..].iter().find_map(|w| episode(w));
     while title.len() > 1 && title.last().is_some_and(|w| TAG_WORDS.contains(&w.as_str())) {
         title.pop();
     }
@@ -92,7 +111,17 @@ pub fn title_key(stem: &str) -> Option<String> {
     if let Some((s, e)) = ep {
         key.push_str(&format!(" s{s:02}e{e:02}"));
     }
-    Some(key)
+    Some((key, year))
+}
+
+// Whether two names are about the same title. Release years may differ by one (a film
+// and a later web release), but not more, so "Blade.Runner.1982" and "Blade.Runner.2049"
+// are told apart even when the title stops at the year.
+fn same_title(a: &Option<(String, Option<u32>)>, b: &Option<(String, Option<u32>)>) -> bool {
+    match (a, b) {
+        (Some((ka, ya)), Some((kb, yb))) => ka == kb && ya.zip(*yb).is_none_or(|(x, y)| x.abs_diff(y) <= 1),
+        _ => false,
+    }
 }
 
 fn subtitle_files(dir: &Path) -> Vec<PathBuf> {
@@ -111,25 +140,37 @@ fn subtitle_files(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn child_dirs(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()
+}
+
+fn dir_name_in(dir: &Path, names: &[&str]) -> bool {
+    dir.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| names.contains(&n.to_lowercase().as_str()))
+}
+
 /// Subtitle files near a video, best matches first.
 pub fn nearby_subtitles(video_path: &Path) -> Vec<NearbySubtitle> {
     let Some(dir) = video_path.parent() else {
         return Vec::new();
     };
     let video_stem = video_path.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
-    let video_key = title_key(&video_stem);
+    let video_name = parse_name(&video_stem);
 
     let mut files = subtitle_files(dir);
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let is_sub_dir = path.is_dir()
-                && path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| SUBTITLE_DIRS.contains(&n.to_lowercase().as_str()));
-            if is_sub_dir {
-                files.extend(subtitle_files(&path));
+    // Files in a Subs/<release name>/ folder for this video, whatever they are called
+    // ("2_English.srt"); they count as title matches.
+    let mut release_files = Vec::new();
+    for sub_dir in child_dirs(dir).into_iter().filter(|d| dir_name_in(d, &SUBTITLE_DIRS)) {
+        files.extend(subtitle_files(&sub_dir));
+        for release in child_dirs(&sub_dir) {
+            let name = release.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+            if name == video_stem || same_title(&parse_name(&name), &video_name) {
+                release_files.extend(subtitle_files(&release));
             }
         }
     }
@@ -140,7 +181,7 @@ pub fn nearby_subtitles(video_path: &Path) -> Vec<NearbySubtitle> {
             let stem = path.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
             let kind = if stem == video_stem {
                 MatchKind::Exact
-            } else if video_key.is_some() && title_key(&stem) == video_key {
+            } else if same_title(&parse_name(&stem), &video_name) {
                 MatchKind::Title
             } else {
                 MatchKind::Other
@@ -151,6 +192,11 @@ pub fn nearby_subtitles(video_path: &Path) -> Vec<NearbySubtitle> {
                 kind,
             }
         })
+        .chain(release_files.into_iter().map(|path| NearbySubtitle {
+            name: path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+            path: path.to_string_lossy().to_string(),
+            kind: MatchKind::Title,
+        }))
         .collect();
     let others = found.iter().filter(|s| s.kind == MatchKind::Other).count();
     if others > MAX_OTHER {
@@ -209,19 +255,36 @@ mod tests {
     #[test]
     fn a_year_can_be_the_title() {
         assert_eq!(title_key("1917.2019.1080p.BluRay").as_deref(), Some("1917"));
+        assert_eq!(title_key("Blade.Runner.2049.2017.1080p").as_deref(), Some("blade runner 2049"));
+        assert_eq!(title_key("Wonder.Woman.1984.2020.WEB").as_deref(), Some("wonder woman 1984"));
+    }
+
+    #[test]
+    fn release_years_far_apart_are_different_films() {
+        let film = parse_name("blade.runner.1982.1080p");
+        assert!(!same_title(&film, &parse_name("blade.runner.2049.1080p")));
+        assert!(same_title(&film, &parse_name("blade.runner.1983.web")));
+        assert!(same_title(&film, &parse_name("blade.runner.english")));
+    }
+
+    #[test]
+    fn a_title_shaped_like_an_episode_is_kept() {
+        assert_eq!(title_key("4x4.2019.1080p").as_deref(), Some("4x4"));
+        assert_eq!(title_key("Some.Show.1x02.english").as_deref(), Some("some show s01e02"));
     }
 
     #[test]
     fn finds_title_matches_and_subtitle_folders() {
         let dir = std::env::temp_dir().join(format!("glucose_subs_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("Subs")).unwrap();
+        fs::create_dir_all(dir.join("Subs").join("Some.Movie.2021.1080p.WEBRip.x264")).unwrap();
         let video = dir.join("Some.Movie.2021.1080p.WEBRip.x264.mp4");
         for f in [
             "Some.Movie.2021.1080p.WEBRip.x264.srt",
             "Some.Movie.2022.WEB-DL.HI-English.srt",
             "Unrelated.Film.2019.srt",
             "Subs/Some.Movie.English.srt",
+            "Subs/Some.Movie.2021.1080p.WEBRip.x264/2_English.srt",
         ] {
             fs::write(dir.join(f), "").unwrap();
         }
@@ -232,6 +295,7 @@ mod tests {
             summary,
             vec![
                 ("Some.Movie.2021.1080p.WEBRip.x264.srt".into(), MatchKind::Exact),
+                ("2_English.srt".into(), MatchKind::Title),
                 ("Some.Movie.2022.WEB-DL.HI-English.srt".into(), MatchKind::Title),
                 ("Some.Movie.English.srt".into(), MatchKind::Title),
                 ("Unrelated.Film.2019.srt".into(), MatchKind::Other),
