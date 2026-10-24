@@ -48,6 +48,21 @@ jobs:
       - name: Install pnpm dependencies
         run: pnpm install --frozen-lockfile
 
+      # The release text comes from RELEASE_NOTES.md. It is also baked into latest.json,
+      # so the in-app update popup shows it; editing the release on GitHub afterwards does
+      # not reach the popup. The popup shows the first two lines, so the file starts with
+      # a one-sentence summary.
+      - name: Read release notes
+        id: notes
+        shell: bash
+        run: |
+          {
+            echo 'body<<GLUCOSE_RELEASE_NOTES_EOF'
+            cat RELEASE_NOTES.md
+            echo
+            echo 'GLUCOSE_RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and Release
         uses: tauri-apps/tauri-action@v1
         env:
@@ -58,9 +73,11 @@ jobs:
           # Use tag name if triggered by tag push, otherwise use manual input
           tagName: ${{ github.event.inputs.version || github.ref_name }}
           releaseName: 'Glucose ${{ github.event.inputs.version || github.ref_name }}'
-          releaseBody: ''
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
           assetNamePattern: 'Glucose_Windows.[ext]'
-          args: --target x86_64-pc-windows-msvc --bundles nsis
+          # --locked fails the build if Cargo.lock is out of date, rather than releasing
+          # with whatever versions resolve that day.
+          args: --target x86_64-pc-windows-msvc --bundles nsis -- --locked

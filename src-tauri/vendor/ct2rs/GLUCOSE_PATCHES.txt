@@ -1,0 +1,22 @@
+Vendored ct2rs 0.10.1 (https://github.com/jkawamoto/ctranslate2-rs), used through
+[patch.crates-io] in src-tauri/Cargo.toml. Changes from the published crate:
+
+1. build.rs (Windows): build CTranslate2 against the same C runtime as the rest of the
+   app. Upstream always uses the static runtime (/MT) and links with /FORCE:MULTIPLE,
+   which cannot link next to whisper.cpp (/MD). Now the static runtime is used only when
+   Rust's `crt-static` target feature is on, CMAKE_MSVC_RUNTIME_LIBRARY is set to match,
+   /FORCE:MULTIPLE is gone, and so is the build warning recommending crt-static.
+
+2. CTranslate2/CMakeLists.txt: the line that hardcodes
+   CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded" for static builds now only applies when
+   the caller has not set it.
+
+3. src/sys/{generator,translator,types}.rs: spelled out three elided lifetimes
+   (`<'_>`) that newer Rust warns about. No behaviour change.
+
+4. Removed CUDA-only and test sources that a CPU build never uses, to keep the repo
+   small: CTranslate2/third_party/{cutlass,thrust,googletest} and everything under
+   CTranslate2/python except python/ctranslate2/version.py (read by CMake).
+
+Drop this copy once ct2rs supports choosing the C runtime upstream.
+See docs/spikes/subtitle-translation.md ("Step 2").

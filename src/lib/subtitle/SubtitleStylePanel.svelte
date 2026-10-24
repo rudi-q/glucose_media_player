@@ -1,9 +1,39 @@
 <script lang="ts">
+  import { readStorage, writeStorage } from "$lib/utils/storage";
   import { X } from 'lucide-svelte';
   import { subtitleStyleStore, activeSubtitleStyle } from '$lib/subtitle/subtitleStyleStore';
   import { SUBTITLE_PRESETS, type SubtitleStyle } from '$lib/subtitle/subtitlePresets';
+  import {
+    SUBTITLE_POSITION_KEY,
+    SUBTITLE_POSITION_EVENT,
+    getSubtitlePosition,
+    type SubtitlePosition,
+  } from '$lib/utils/playerPreferences';
+  import {
+    featureVerdicts,
+    featureWarning,
+    HARDWARE_CHECK_KEY,
+    loadHardwareCheck,
+  } from '$lib/utils/featureAdvice';
 
   let { onClose }: { onClose: () => void } = $props();
+
+  // Same setting as Settings > Player > Subtitle Position; the event keeps both in step.
+  let placement = $state<SubtitlePosition>(getSubtitlePosition(readStorage(SUBTITLE_POSITION_KEY)));
+
+  // Shown under Smart when the hardware check found face detection slow on this PC.
+  const smartWarning = featureWarning(
+    featureVerdicts(loadHardwareCheck(readStorage(HARDWARE_CHECK_KEY))).smart,
+  );
+
+  // The player reads the setting from storage when told it changed, so a value that could
+  // not be stored is not shown here either: the panel and the player always agree.
+  function setPlacement(value: SubtitlePosition) {
+    if (writeStorage(SUBTITLE_POSITION_KEY, value)) {
+      placement = value;
+      window.dispatchEvent(new Event(SUBTITLE_POSITION_EVENT));
+    }
+  }
 
   $effect(() => {
     function handleKeydown(e: KeyboardEvent) {
@@ -101,17 +131,40 @@
     </div>
 
     <div class="control-row">
+      <span class="control-label">Placement</span>
+      <div class="font-buttons">
+        <button
+          class="font-btn"
+          class:active={placement === 'fixed'}
+          title="Always where the Position slider puts them"
+          onclick={() => setPlacement('fixed')}
+        >Fixed</button>
+        <button
+          class="font-btn"
+          class:active={placement === 'smart'}
+          title="At the bottom, moving to the top to keep off on-screen text, faces and bright areas"
+          onclick={() => setPlacement('smart')}
+        >Smart</button>
+      </div>
+    </div>
+
+    {#if placement === 'smart' && smartWarning}
+      <div class="placement-warning">{smartWarning}</div>
+    {/if}
+
+    <div class="control-row" class:disabled={placement === 'smart'}>
       <span class="control-label">Position</span>
-      <div class="slider-row">
+      <div class="slider-row" title={placement === 'smart' ? 'Smart placement chooses the position' : undefined}>
         <input
           type="range"
           min="4"
           max="90"
           step="1"
+          disabled={placement === 'smart'}
           value={$activeSubtitleStyle.position}
           oninput={(e) => subtitleStyleStore.customize({ position: +e.currentTarget.value })}
         />
-        <span class="slider-value">{$activeSubtitleStyle.position}%</span>
+        <span class="slider-value">{placement === 'smart' ? 'Auto' : `${$activeSubtitleStyle.position}%`}</span>
       </div>
     </div>
 
@@ -341,6 +394,20 @@
     border-radius: 50%;
     cursor: pointer;
     border: none;
+  }
+
+  .placement-warning {
+    font-size: 0.68rem;
+    color: #f2c46d;
+    margin-top: -0.25rem;
+  }
+
+  .control-row.disabled {
+    opacity: 0.4;
+  }
+
+  .slider-row input[type='range']:disabled::-webkit-slider-thumb {
+    cursor: not-allowed;
   }
 
   .slider-value {

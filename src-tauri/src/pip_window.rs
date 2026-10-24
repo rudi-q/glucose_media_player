@@ -191,8 +191,9 @@ pub(crate) fn exit_pip_mode(app_handle: AppHandle) -> Result<(), String> {
     };
 
     if let Err(err) = persist_current_pip_layout(&window, Some(saved_state.pip_size)) {
-        #[cfg(debug_assertions)]
-        eprintln!("Failed to persist PiP layout before exit: {}", err);
+        if cfg!(debug_assertions) {
+            eprintln!("Failed to persist PiP layout before exit: {}", err);
+        }
     }
 
     let restore_result = (|| -> Result<(), String> {
