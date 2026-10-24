@@ -21,13 +21,24 @@ _A powerfully modern, thoughtfully designed media playback experience._
 
 ### 🤖 On-Device AI & Subtitles
 
-- **100% Private Transcription**: Generate highly accurate subtitles using Whisper running locally. No internet required.
-- **Universal Format Support**: Auto-loads `.srt`, `.vtt`, `.ass`, and directly extracts subtitles embedded in MKV and MP4 files.
+- **Live Subtitles**: Subtitles are generated as the video plays, a few minutes ahead of you, using Whisper on your own PC. The seek bar shows how far they're ready, and each video's subtitles are saved for instant rewatching. They can start automatically when a video has none.
+- **Live Translation**: Translate live subtitles on-device, from English into German, French, Spanish, Russian, Turkish, Italian or Dutch, and from several languages into English. Optionally show the original line under the translation.
+- **100% Private**: Transcription and translation run locally, with no internet needed once models are downloaded. Models are added and removed in Settings.
+- **Full-Video Transcription**: Generate subtitles for a whole video in one go, formatted to Netflix-style timing and line-length rules.
+- **Smart Subtitle Position**: Subtitles move out of the way of faces and of busy areas at the bottom of the picture.
+- **Custom Subtitle Styles**: Presets and live controls for font, size, colour and background.
+- **Universal Format Support**: Auto-loads `.srt`, `.vtt`, `.ass`, extracts subtitles embedded in MKV and MP4 files, and finds nearby subtitle files even when their names don't exactly match the video.
+
+### 🧪 Know What Your PC Can Run
+
+- **Features Tab**: Checks your processor, memory and graphics and runs a quick speed test, then tells you which heavy features (live subtitles, translation, smart subtitle position) will run well on your machine.
 
 ### ⏭️ Intelligent Playback
 
 - **"Up Next" Overlay**: A Netflix-style countdown overlay that smoothly transitions you to the next episode.
 - **Picture-in-Picture Mode**: A compact, draggable window that snaps to corners for easy multitasking.
+- **Windowed, Fullscreen or Cinematic**: A resizable window, with fullscreen and cinematic view modes a key away.
+- **Plays More Formats**: Opens formats such as `.ts`, `.m2ts` and `.3gp`, and converts ones the player can't play directly.
 
 ### 📂 Smart Gallery & Custom Libraries
 
@@ -50,7 +61,7 @@ _A powerfully modern, thoughtfully designed media playback experience._
 
 ### ⚡ Blazingly Fast & Private
 
-- **Native Performance**: Built with Rust and Tauri for GPU-accelerated rendering and a tiny footprint.
+- **Native Performance**: Built with Rust and Tauri for GPU-accelerated rendering and a light footprint.
 - **Zero Telemetry**: Detects cloud-only file placeholders locally without uploading file contents, with no ads and no tracking.
 
 ---

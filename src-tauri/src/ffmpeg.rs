@@ -145,7 +145,10 @@ pub fn get_ffmpeg_path() -> Result<FfmpegPathInfo, String> {
 }
 
 #[tauri::command]
-pub async fn pick_ffmpeg_executable(app: tauri::AppHandle) -> Result<Option<String>, String> {
+pub async fn pick_ffmpeg_executable(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let result = tokio::task::spawn_blocking(move || {
@@ -156,7 +159,7 @@ pub async fn pick_ffmpeg_executable(app: tauri::AppHandle) -> Result<Option<Stri
             .add_filter("FFmpeg Executable", &["exe"]);
         #[cfg(not(target_os = "windows"))]
         let builder = app.dialog().file();
-        builder.blocking_pick_file()
+        builder.set_parent(&window).blocking_pick_file()
     })
     .await
     .map_err(|e| e.to_string())?;

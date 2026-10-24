@@ -1,7 +1,7 @@
 {
   "name": "glucose",
-  "version": "3.7.1",
-  "description": "A minimalist video player",
+  "version": "4.0.0",
+  "description": "A modern video and audio player with on-device live subtitles and translation",
   "type": "module",
   "scripts": {
     "dev": "vite dev",

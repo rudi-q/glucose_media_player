@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readStorage } from "$lib/utils/storage";
   import { onMount, onDestroy, untrack } from 'svelte';
   import { goto } from '$app/navigation';
   import { convertFileSrc } from '@tauri-apps/api/core';
@@ -109,8 +110,8 @@
     onPlayingChange: (playing) => {
       isPlaying = playing;
     },
-    fadeInMs: () => getFadeDurationMs(localStorage.getItem('glucose_fade')),
-    fadeOutMs: () => getFadeDurationMs(localStorage.getItem('glucose_fade')),
+    fadeInMs: () => getFadeDurationMs(readStorage('glucose_fade')),
+    fadeOutMs: () => getFadeDurationMs(readStorage('glucose_fade')),
   });
 
   // ── Audio context setup ─────────────────────────────────────────────────────

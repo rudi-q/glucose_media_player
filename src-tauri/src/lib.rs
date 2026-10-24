@@ -1,4 +1,14 @@
+mod face_detect;
 mod ffmpeg;
+mod hardware_check;
+mod live_cache;
+mod live_log;
+mod live_subtitles;
+mod media_protocol;
+mod subtitle_format;
+mod subtitle_match;
+mod translate;
+mod translation_models;
 mod pip_window;
 
 use pip_window::{enter_pip_mode, exit_pip_mode, save_pip_window_layout, settle_pip_window};
@@ -25,6 +35,49 @@ const AUDIO_EXTENSIONS: &[&str] = &[
 ];
 fn is_media_extension(ext: &str) -> bool {
     VIDEO_EXTENSIONS.contains(&ext) || AUDIO_EXTENSIONS.contains(&ext)
+}
+// Formats the library does not list but the player still opens from drag-drop and
+// "Open with": some play directly, the rest can be converted from the player. The audio
+// ones are also listed in src/lib/utils/mediaType.ts.
+const EXTRA_PLAYABLE_EXTENSIONS: &[&str] = &[
+    "ts", "m2ts", "mts", "3gp", "3g2", "m4b", "mka", "wv", "ape",
+];
+fn is_playable_extension(ext: &str) -> bool {
+    is_media_extension(ext) || EXTRA_PLAYABLE_EXTENSIONS.contains(&ext)
+}
+// ".ts" is also the TypeScript extension, so such a file only counts as video when it
+// starts like an MPEG transport stream: the 0x47 sync byte first, or after the 4-byte
+// timestamp of 192-byte packets.
+fn starts_like_transport_stream(file: &mut impl std::io::Read) -> bool {
+    let mut head = [0u8; 5];
+    file.read_exact(&mut head).is_ok() && (head[0] == 0x47 || head[4] == 0x47)
+}
+fn lowercase_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+        .unwrap_or_default()
+}
+// Whether a path's name is one the player opens; no disk access, so safe on the main thread.
+fn has_playable_extension(path: &Path) -> bool {
+    is_playable_extension(&lowercase_extension(path))
+}
+// Whether a file passed to Glucose ("Open with", the command line, drag-drop) is one the
+// player opens: a regular file (not a folder named like one) of a playable type. Touches
+// the disk, which can hang on a slow network share, so never on the main thread.
+fn is_playable_file(path: &Path) -> bool {
+    let ext = lowercase_extension(path);
+    is_playable_extension(&ext)
+        && path.is_file()
+        && (ext != "ts" || fs::File::open(path).is_ok_and(|mut f| starts_like_transport_stream(&mut f)))
+}
+
+/// Checks a dropped path before the player opens it.
+#[tauri::command]
+async fn check_playable_file(path: String) -> bool {
+    tokio::task::spawn_blocking(move || is_playable_file(Path::new(&path)))
+        .await
+        .unwrap_or(false)
 }
 use tauri::Emitter;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -180,12 +233,17 @@ fn save_gallery_paths(paths: Vec<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn open_folder_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
+async fn open_folder_dialog(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let result = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
-        .await
-        .map_err(|e| e.to_string())?;
+    let result = tokio::task::spawn_blocking(move || {
+        app.dialog().file().set_parent(&window).blocking_pick_folder()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     match result {
         Some(folder) => {
@@ -214,7 +272,10 @@ fn sanitize_path(path: &str) -> String {
 }
 
 #[tauri::command]
-async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
+async fn open_file_dialog(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let all_exts: Vec<&'static str> = VIDEO_EXTENSIONS
@@ -226,6 +287,7 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, Strin
         app.dialog()
             .file()
             .add_filter("Media Files", &all_exts)
+            .set_parent(&window)
             .blocking_pick_file()
     })
     .await
@@ -242,13 +304,19 @@ async fn open_file_dialog(app: tauri::AppHandle) -> Result<Option<String>, Strin
 }
 
 #[tauri::command]
-async fn open_subtitle_dialog(app: tauri::AppHandle) -> Result<Option<String>, String> {
+// The picker is owned by the calling window, so it opens in front of it even when the
+// player is fullscreen or in always-on-top picture-in-picture.
+async fn open_subtitle_dialog(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let result = tokio::task::spawn_blocking(move || {
         app.dialog()
             .file()
             .add_filter("Subtitle Files", &["srt", "vtt", "ass", "ssa", "sub"])
+            .set_parent(&window)
             .blocking_pick_file()
     })
     .await
@@ -1615,8 +1683,7 @@ fn transcribe_audio_with_whisper(
     params.set_print_timestamps(true);
     params.set_translate(false); // Don't translate, keep original language
     params.set_language(Some(language)); // Use selected language
-    params.set_max_len(0); // Disable max length limit per segment
-    params.set_split_on_word(true); // Split on word boundaries
+    subtitle_format::request_word_timestamps(&mut params);
 
     // Emit real-time progress during state.full() via whisper's native progress callback.
     // Whisper reports 0-100; we map that to the 50-90% band in our UI.
@@ -1648,31 +1715,19 @@ fn transcribe_audio_with_whisper(
     #[cfg(debug_assertions)]
     println!("Transcription complete, extracting segments...");
 
-    // Extract segments — progress was already reported live via the callback above.
-    let num_segments = state.full_n_segments();
+    // Whisper returned one segment per word; group them into subtitle cues.
+    let audio_secs = audio_data.len() as f64 / 16_000.0;
+    let words = subtitle_format::words_from_state(&state, 0.0, audio_secs);
 
     #[cfg(debug_assertions)]
-    println!("Found {} segments", num_segments);
+    println!("Found {} words", words.len());
 
-    let mut segments = Vec::new();
-
-    for i in 0..num_segments {
-        let segment = state
-            .get_segment(i)
-            .ok_or_else(|| format!("Failed to get segment {}", i))?;
-
-        let start_seconds = segment.start_timestamp() as f64 / 100.0;
-        let end_seconds = segment.end_timestamp() as f64 / 100.0;
-
-        let text = segment
-            .to_str()
-            .map_err(|e| format!("Failed to parse segment text: {}", e))?
-            .to_string();
-
-        if !text.trim().is_empty() {
-            segments.push((start_seconds, end_seconds, text));
-        }
-    }
+    let spoken = subtitle_format::spoken_language(&state, language);
+    let segments: Vec<(f64, f64, String)> =
+        subtitle_format::cues_for_language(&words, audio_secs, &spoken)
+            .into_iter()
+            .map(|c| (c.start, c.end, c.text))
+            .collect();
 
     #[cfg(debug_assertions)]
     println!("Generating SRT file with {} segments...", segments.len());
@@ -1812,44 +1867,61 @@ fn acquire_watch_progress_file_lock_shared(progress_file: &std::path::Path) -> R
     Ok(f)
 }
 
+// Runs a command's locking and file work on a blocking thread. An async command alone only
+// leaves the window thread: a lock held by another Glucose instance would still park one of
+// the async runtime's few worker threads.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| format!("Background task failed: {}", e))?
+}
+
 #[tauri::command]
-fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> Result<(), String> {
-    let progress_file = watch_progress_path()?;
-    let _guard = watch_progress_lock()
-        .lock()
-        .map_err(|_| "Watch progress lock poisoned".to_string())?;
-    let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
+async fn save_watch_progress(video_path: String, current_time: f64, duration: f64) -> Result<(), String> {
+    blocking(move || {
+        let progress_file = watch_progress_path()?;
+        let _guard = watch_progress_lock()
+            .lock()
+            .map_err(|_| "Watch progress lock poisoned".to_string())?;
+        let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
 
-    let mut progress_map = read_watch_progress(&progress_file)?;
+        let mut progress_map = read_watch_progress(&progress_file)?;
 
-    let last_watched = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_err(|e| format!("Failed to get current time: {}", e))?
-        .as_secs();
+        let last_watched = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|e| format!("Failed to get current time: {}", e))?
+            .as_secs();
 
-    progress_map.insert(
-        video_path.clone(),
-        WatchProgress {
-            path: video_path,
-            current_time,
-            duration,
-            last_watched,
-        },
-    );
+        progress_map.insert(
+            video_path.clone(),
+            WatchProgress {
+                path: video_path,
+                current_time,
+                duration,
+                last_watched,
+            },
+        );
 
-    write_watch_progress(&progress_file, &progress_map)
+        write_watch_progress(&progress_file, &progress_map)
+    })
+    .await
 }
 
 // Get watch progress for a video
 #[tauri::command]
-fn get_watch_progress(video_path: String) -> Result<Option<WatchProgress>, String> {
-    let progress_file = watch_progress_path()?;
-    let _guard = watch_progress_lock()
-        .lock()
-        .map_err(|_| "Watch progress lock poisoned".to_string())?;
-    let _file_lock = acquire_watch_progress_file_lock_shared(&progress_file)?;
-    let progress_map = read_watch_progress(&progress_file)?;
-    Ok(progress_map.get(&video_path).cloned())
+async fn get_watch_progress(video_path: String) -> Result<Option<WatchProgress>, String> {
+    blocking(move || {
+        let progress_file = watch_progress_path()?;
+        let _guard = watch_progress_lock()
+            .lock()
+            .map_err(|_| "Watch progress lock poisoned".to_string())?;
+        let _file_lock = acquire_watch_progress_file_lock_shared(&progress_file)?;
+        let progress_map = read_watch_progress(&progress_file)?;
+        Ok(progress_map.get(&video_path).cloned())
+    })
+    .await
 }
 
 // Get video file info
@@ -2045,45 +2117,54 @@ fn convert_video_with_ffmpeg(
 
 // Get all watch progress data
 #[tauri::command]
-fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchProgress>, String> {
-    let progress_file = watch_progress_path()?;
-    let _guard = watch_progress_lock()
-        .lock()
-        .map_err(|_| "Watch progress lock poisoned".to_string())?;
-    let _file_lock = acquire_watch_progress_file_lock_shared(&progress_file)?;
-    read_watch_progress(&progress_file)
+async fn get_all_watch_progress() -> Result<std::collections::HashMap<String, WatchProgress>, String> {
+    blocking(move || {
+        let progress_file = watch_progress_path()?;
+        let _guard = watch_progress_lock()
+            .lock()
+            .map_err(|_| "Watch progress lock poisoned".to_string())?;
+        let _file_lock = acquire_watch_progress_file_lock_shared(&progress_file)?;
+        read_watch_progress(&progress_file)
+    })
+    .await
 }
 
 #[tauri::command]
-fn delete_watch_progress(video_path: String) -> Result<(), String> {
-    let progress_file = watch_progress_path()?;
-    let _guard = watch_progress_lock()
-        .lock()
-        .map_err(|_| "Watch progress lock poisoned".to_string())?;
-    let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
+async fn delete_watch_progress(video_path: String) -> Result<(), String> {
+    blocking(move || {
+        let progress_file = watch_progress_path()?;
+        let _guard = watch_progress_lock()
+            .lock()
+            .map_err(|_| "Watch progress lock poisoned".to_string())?;
+        let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
 
-    let mut progress_map = read_watch_progress(&progress_file)?;
-    progress_map.remove(&video_path);
-    write_watch_progress(&progress_file, &progress_map)
+        let mut progress_map = read_watch_progress(&progress_file)?;
+        progress_map.remove(&video_path);
+        write_watch_progress(&progress_file, &progress_map)
+    })
+    .await
 }
 
 #[tauri::command]
-fn clear_watch_history_since(cutoff_timestamp: u64) -> Result<(), String> {
-    let progress_file = watch_progress_path()?;
-    let _guard = watch_progress_lock()
-        .lock()
-        .map_err(|_| "Watch progress lock poisoned".to_string())?;
-    let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
+async fn clear_watch_history_since(cutoff_timestamp: u64) -> Result<(), String> {
+    blocking(move || {
+        let progress_file = watch_progress_path()?;
+        let _guard = watch_progress_lock()
+            .lock()
+            .map_err(|_| "Watch progress lock poisoned".to_string())?;
+        let _file_lock = acquire_watch_progress_file_lock_exclusive(&progress_file)?;
 
-    let mut progress_map = read_watch_progress(&progress_file)?;
+        let mut progress_map = read_watch_progress(&progress_file)?;
 
-    if cutoff_timestamp == 0 {
-        progress_map.clear();
-    } else {
-        progress_map.retain(|_, v| v.last_watched < cutoff_timestamp);
-    }
+        if cutoff_timestamp == 0 {
+            progress_map.clear();
+        } else {
+            progress_map.retain(|_, v| v.last_watched < cutoff_timestamp);
+        }
 
-    write_watch_progress(&progress_file, &progress_map)
+        write_watch_progress(&progress_file, &progress_map)
+    })
+    .await
 }
 
 fn scan_dir_for_media(dir: &Path, videos: &mut Vec<VideoFile>, depth: u32) {
@@ -2226,17 +2307,26 @@ async fn fetch_video_durations(
 // Function to process video files and emit events
 fn process_video_files(app_handle: &tauri::AppHandle, video_files: Vec<String>) {
     if !video_files.is_empty() {
-        // Store in global queue
-        {
-            let mut pending = PENDING_FILES.lock().unwrap();
-            for video_file in &video_files {
-                pending.push_back(video_file.clone());
-            }
-        }
-
         // Spawn background thread for persistent file loading attempts
         let app_handle_clone = app_handle.clone();
         thread::spawn(move || {
+            // Checked here rather than by the callers, which run on the main thread: a
+            // folder named like a video, or a TypeScript ".ts" file, is not opened.
+            let video_files: Vec<String> = video_files
+                .into_iter()
+                .filter(|f| is_playable_file(Path::new(f)))
+                .collect();
+            if video_files.is_empty() {
+                return;
+            }
+            // Store in global queue
+            {
+                let mut pending = PENDING_FILES.lock().unwrap();
+                for video_file in &video_files {
+                    pending.push_back(video_file.clone());
+                }
+            }
+
             for attempt in 1..=MAX_FILE_LOADING_ATTEMPTS {
                 // Check if file has been processed
                 {
@@ -2330,7 +2420,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        // Replaces the built-in asset protocol so media files are read off the window
+        // thread; see media_protocol.rs.
+        .register_asynchronous_uri_scheme_protocol("asset", |_ctx, request, responder| {
+            media_protocol::handle(request, responder)
+        });
 
     // Add updater plugin only on Windows
     #[cfg(target_os = "windows")]
@@ -2340,6 +2435,7 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            live_log::watch_ui_thread(app.handle().clone());
             // Handle command line arguments for file associations
             let args: Vec<String> = std::env::args().collect();
 
@@ -2359,14 +2455,18 @@ pub fn run() {
                 for arg in &args[1..] {
                     // Sanitize the path
                     let clean_arg = sanitize_path(arg);
+                    // A path relative to the shell Glucose was started from is made
+                    // absolute here, while the working directory is still that shell's:
+                    // the media protocol only serves absolute paths.
+                    let clean_arg = std::path::absolute(&clean_arg)
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or(clean_arg);
                     #[cfg(debug_assertions)]
                     println!("Processing argument: {} -> {}", arg, clean_arg);
 
-                    let is_media = std::path::Path::new(&clean_arg)
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .map(|ext| is_media_extension(&ext.to_lowercase()))
-                        .unwrap_or(false);
+                    // Extension only here, on the main thread at launch; the file itself is
+                    // checked off it, in process_video_files.
+                    let is_media = has_playable_extension(std::path::Path::new(&clean_arg));
                     if is_media {
                         video_files.push(clean_arg.clone());
                         #[cfg(debug_assertions)]
@@ -2386,7 +2486,10 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(live_log::with_command_log(tauri::generate_handler![
+            subtitle_match::find_nearby_subtitles,
+            face_detect::detect_faces,
+            face_detect::preload_face_detection,
             open_file_dialog,
             open_folder_dialog,
             open_subtitle_dialog,
@@ -2408,6 +2511,18 @@ pub fn run() {
             delete_temp_file,
             generate_subtitles,
             cancel_subtitle_generation,
+            live_subtitles::start_live_subtitles,
+            live_subtitles::live_subtitle_model,
+            hardware_check::run_hardware_check,
+            hardware_check::cancel_hardware_check,
+            translation_models::translation_models,
+            translation_models::download_translation_model,
+            translation_models::delete_translation_model,
+            live_subtitles::stop_live_subtitles,
+            live_subtitles::update_live_subtitles_playhead,
+            live_cache::load_live_cache,
+            live_cache::save_live_cache,
+            check_playable_file,
             check_ffmpeg_installed,
             check_installed_models,
             get_setup_status,
@@ -2427,12 +2542,18 @@ pub fn run() {
             ffmpeg::get_ffmpeg_path,
             ffmpeg::pick_ffmpeg_executable,
             ffmpeg::save_ffmpeg_custom_path
-        ])
+        ]))
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
-            // Log events for debugging
-            if cfg!(debug_assertions) {
+            // Log app lifecycle events for debugging. The event-loop tick and window events
+            // (focus, move, resize) fire constantly and bury everything else in the terminal.
+            if cfg!(debug_assertions)
+                && !matches!(
+                    event,
+                    tauri::RunEvent::MainEventsCleared | tauri::RunEvent::WindowEvent { .. }
+                )
+            {
                 println!("Received event: {:?}", event);
             }
 
@@ -2460,11 +2581,7 @@ pub fn run() {
                             #[cfg(debug_assertions)]
                             println!("Decoded path: {}", decoded_path);
 
-                            let is_media = Path::new(decoded_path.as_ref())
-                                .extension()
-                                .and_then(|s| s.to_str())
-                                .map(|ext| is_media_extension(&ext.to_lowercase()))
-                                .unwrap_or(false);
+                            let is_media = has_playable_extension(Path::new(decoded_path.as_ref()));
                             if is_media {
                                 video_files.push(decoded_path.to_string());
                                 #[cfg(debug_assertions)]

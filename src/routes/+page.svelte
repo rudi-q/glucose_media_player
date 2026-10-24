@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readStorage, writeStorage } from "$lib/utils/storage";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -46,16 +47,16 @@
   let hoverTimer: ReturnType<typeof setTimeout> | null = null;
   let previewFadeOutTimer: ReturnType<typeof setTimeout> | null = null;
   let keyboardPreviewTimer: ReturnType<typeof setTimeout> | null = null;
-  const _previewMutedStored = localStorage.getItem('glucose_preview_muted');
+  const _previewMutedStored = readStorage('glucose_preview_muted');
   let previewMuted = $state(_previewMutedStored === null ? true : _previewMutedStored === 'true');
-  const _savedSort = localStorage.getItem('glucose_sort');
+  const _savedSort = readStorage('glucose_sort');
   let sortBy = $state<'added' | 'watched'>(
     _savedSort === 'added' || _savedSort === 'watched' ? _savedSort : 'watched'
   );
   let showSortMenu = $state(false);
   let sortMenuPos = $state({ top: 0, right: 0 });
 
-  const _savedFilter = localStorage.getItem('glucose_filter');
+  const _savedFilter = readStorage('glucose_filter');
   let filterBy = $state<'all' | 'video' | 'audio'>(
     _savedFilter === 'video' || _savedFilter === 'audio' ? _savedFilter : 'all'
   );
@@ -88,19 +89,19 @@
   });
 
   $effect(() => {
-    localStorage.setItem('glucose_sort', sortBy);
+    writeStorage('glucose_sort', sortBy);
     // Reset keyboard focus when sort order changes (watching sortBy, not sortedVideos, to
     // avoid resetting on every duration update which also replaces the recentVideos array)
     selectedVideoIndex = 0;
   });
 
   $effect(() => {
-    localStorage.setItem('glucose_filter', filterBy);
+    writeStorage('glucose_filter', filterBy);
     selectedVideoIndex = 0;
   });
 
   $effect(() => {
-    localStorage.setItem('glucose_preview_muted', String(previewMuted));
+    writeStorage('glucose_preview_muted', String(previewMuted));
   });
 
   type VideoGroup = { label: string | null; videos: { video: VideoFile; index: number }[] };
@@ -502,7 +503,7 @@
       await goto(`/audio/${encodedPath}`);
       return;
     }
-    const savedDefault = localStorage.getItem('glucose_default_mode');
+    const savedDefault = readStorage('glucose_default_mode');
     const defaultMode = getDefaultPlayMode(savedDefault);
     const resolvedMode = mode ?? defaultMode;
     const params = new URLSearchParams({ mode: resolvedMode });

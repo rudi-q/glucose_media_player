@@ -1,5 +1,6 @@
 import { writable, derived } from 'svelte/store';
 import { SUBTITLE_PRESETS, DEFAULT_PRESET_ID, type SubtitleStyle } from './subtitlePresets';
+import { readStorage, writeStorage } from "$lib/utils/storage";
 
 const STORAGE_KEY = 'glucose_subtitle_style';
 
@@ -29,7 +30,7 @@ function sanitizeCustomizations(raw: unknown): Partial<Omit<SubtitleStyle, 'id' 
 function loadFromStorage(): StyleState {
   const fallback: StyleState = { presetId: DEFAULT_PRESET_ID, customizations: {} };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = readStorage(STORAGE_KEY);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
     if (
@@ -51,7 +52,7 @@ function createSubtitleStyleStore() {
 
   function saveToStorage(state: StyleState) {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      writeStorage(STORAGE_KEY, JSON.stringify(state));
     } catch {
       // ignore storage errors
     }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readStorage, writeStorage } from "$lib/utils/storage";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -50,6 +51,21 @@
   } from "$lib/utils/windowChrome";
   import { loadSubtitleFile, convertSrtToVtt } from "$lib/utils/subtitles";
   import SubtitleOverlay from "$lib/subtitle/SubtitleOverlay.svelte";
+  import type { VttCue } from "$lib/subtitle/vttParser";
+  import {
+    addRange,
+    findRange,
+    mergeCues,
+    nextLiveRequest,
+    skipLiveRequestsTo,
+    supersededBy,
+    type CoveredRange,
+    type LiveCacheData,
+    type LiveCacheKey,
+    type LiveSessionInfo,
+    type LiveSubtitleChunk,
+    type LiveSubtitleStatus,
+  } from "$lib/subtitle/liveSubtitles";
   import SubtitleStylePanel from "$lib/subtitle/SubtitleStylePanel.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import {
@@ -57,7 +73,32 @@
     formatEstimatedTime,
     formatTimeForScreenReader,
   } from "$lib/utils/time";
-  import { getEndBehavior, getFadeDurationMs } from "$lib/utils/playerPreferences";
+  import {
+    AUTO_LIVE_SUBTITLES_KEY,
+    getAutoLiveSubtitles,
+    getEndBehavior,
+    getLiveSubtitleWait,
+    getLiveTranslate,
+    type LiveTranslate,
+    LIVE_SUBTITLE_WAIT_KEY,
+    LIVE_TRANSLATE_KEY,
+    LIVE_TRANSLATE_NAMES,
+    LIVE_DUAL_SUBTITLES_KEY,
+    LIVE_DUAL_SUBTITLES_EVENT,
+    LIVE_SUBTITLE_WAIT_EVENT,
+    getLiveDualSubtitles,
+    SUBTITLE_POSITION_KEY,
+    SUBTITLE_POSITION_EVENT,
+    getSubtitlePosition,
+    getFadeDurationMs,
+  } from "$lib/utils/playerPreferences";
+  import {
+    featureVerdicts as verdictsFromCheck,
+    HARDWARE_CHECK_KEY,
+    loadHardwareCheck,
+    type FeatureId,
+    type Verdict,
+  } from "$lib/utils/featureAdvice";
   import { generateThumbnail } from "$lib/utils/thumbnail";
   import { setWindowTitle } from "$lib/utils/windowTitle";
 
@@ -117,6 +158,20 @@
   let embeddedSubtitleTracks = $state<EmbeddedSubtitleTrack[]>([]);
   let selectedEmbeddedLanguage = $state('en');
 
+  // Subtitle files next to the video (or in a Subs folder), including ones whose names
+  // differ from the video's but share its title. From subtitle_match.rs.
+  interface NearbySubtitle {
+    path: string;
+    name: string;
+    kind: "exact" | "title" | "other";
+  }
+  let nearbySubtitles = $state<NearbySubtitle[]>([]);
+  const NEARBY_SUBTITLE_DESC: Record<NearbySubtitle["kind"], string> = {
+    exact: "Same name as the video",
+    title: "Same title, different release",
+    other: "In this folder",
+  };
+
   // Embedded audio tracks
   interface EmbeddedAudioTrack {
     index: number;
@@ -127,6 +182,9 @@
     is_default: boolean;
   }
   let embeddedAudioTracks = $state<EmbeddedAudioTrack[]>([]);
+  // Whether a Whisper model live mode can use is installed. Live mode has its own model
+  // list, so the batch models in setupStatus cannot tell.
+  let liveModelAvailable = $state(false);
   let selectedAudioTrackIndex = $state<number | null>(null);
   let audioRemuxPath = $state<string | null>(null);
   let pendingRemuxCleanupPaths = $state<string[]>([]);
@@ -142,6 +200,116 @@
   let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
   let isCancelling = $state(false);   // true after cancel button clicked, suppresses error alert
   let showModelSelector = $state(false);
+
+  // Live subtitles: generated ahead of the playhead while the video plays.
+  // While active they replace the loaded subtitle track in the overlay.
+  let liveActive = $state(false);
+  let liveModel = $state("");
+  let liveCues = $state<VttCue[]>([]);
+  // Untranslated cues while translating, shown under the translation when dual
+  // subtitles are on.
+  let liveOriginalCues = $state<VttCue[]>([]);
+  let liveDualSubtitles = $state(false);
+  let liveRanges = $state<CoveredRange[]>([]);
+
+  // "Pause until ready", kept here rather than read from storage on every timeupdate;
+  // refreshed when Settings changes it.
+  let liveWaitPreference = $state(getLiveSubtitleWait(readStorage(LIVE_SUBTITLE_WAIT_KEY)));
+  $effect(() => {
+    const read = () => {
+      liveWaitPreference = getLiveSubtitleWait(readStorage(LIVE_SUBTITLE_WAIT_KEY));
+      checkLiveWait();
+    };
+    window.addEventListener(LIVE_SUBTITLE_WAIT_EVENT, read);
+    return () => window.removeEventListener(LIVE_SUBTITLE_WAIT_EVENT, read);
+  });
+
+  $effect(() => {
+    const read = () => {
+      liveDualSubtitles = getLiveDualSubtitles(readStorage(LIVE_DUAL_SUBTITLES_KEY));
+    };
+    read();
+    window.addEventListener(LIVE_DUAL_SUBTITLES_EVENT, read);
+    return () => window.removeEventListener(LIVE_DUAL_SUBTITLES_EVENT, read);
+  });
+
+  let smartSubtitlePosition = $state(false);
+
+  // Verdicts from the hardware check (Features tab), for warnings in the AI model menu.
+  let featureVerdicts = $state<Partial<Record<FeatureId, Verdict>>>({});
+
+  $effect(() => {
+    const read = () => {
+      featureVerdicts = verdictsFromCheck(loadHardwareCheck(readStorage(HARDWARE_CHECK_KEY)));
+    };
+    read();
+    window.addEventListener(HARDWARE_CHECK_KEY, read);
+    return () => window.removeEventListener(HARDWARE_CHECK_KEY, read);
+  });
+
+  function hardwareWarning(id: FeatureId): string {
+    const verdict = featureVerdicts[id];
+    if (verdict === "poor") return " • Not recommended on this PC";
+    if (verdict === "slow") return " • May be slow on this PC";
+    return "";
+  }
+
+  $effect(() => {
+    const read = () => {
+      smartSubtitlePosition = getSubtitlePosition(readStorage(SUBTITLE_POSITION_KEY)) === "smart";
+    };
+    read();
+    window.addEventListener(SUBTITLE_POSITION_EVENT, read);
+    return () => window.removeEventListener(SUBTITLE_POSITION_EVENT, read);
+  });
+  let liveState = $state<LiveSubtitleStatus["state"] | null>(null);
+  let liveError = $state<string | null>(null);
+  // The number of the last start or stop sent to the backend (see nextLiveRequest), which
+  // refuses a start that a later request overtook: starts are async and can finish out
+  // of order.
+  let latestLiveRequest = 0;
+  function newLiveRequest(): number {
+    latestLiveRequest = nextLiveRequest();
+    return latestLiveRequest;
+  }
+  // The start whose events are shown; a start's request number is its session id. 0 while
+  // none is (between switching keys and the next start).
+  let liveSession = 0;
+  // Set when live mode turned on before the video's position was known; the worker then
+  // starts from handleLoadedMetadata.
+  let liveStartWhenReady = false;
+  // Where the current worker session is transcribing from next.
+  let liveWorkerPos = 0;
+  let livePlayheadSentAt = 0;
+  // The video, track and language the current live cues belong to; used as the cache key.
+  // Raw (not proxied) so the identity checks against a captured key keep working.
+  let liveKey = $state.raw<LiveCacheKey | null>(null);
+  let liveDirty = false;
+  // Whether the current live session was started by auto-start (see enableLiveSubtitles).
+  let liveAutoStarted = false;
+  let liveSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  // "Pause until ready": true while the player has paused itself to wait for subtitles.
+  let liveWaiting = $state(false);
+  // Set when the user presses play during a wait; playback then continues through
+  // the current gap without pausing again.
+  let liveWaitOverride = false;
+  // What the worker is loading, as reported by the backend (speech or translation model).
+  let liveLoadingMessage = $state("");
+  // Something the viewer should know about the live subtitles, such as no translation
+  // being available for the speech language; shown in a banner until dismissed.
+  let liveNotice = $state("");
+  // The notice the viewer dismissed, for the current live subtitles key.
+  let liveNoticeDismissed = "";
+  let livePlaceholder = $derived.by(() => {
+    if (!liveActive) return null;
+    if (liveError) return `Live subtitles: ${liveError}`;
+    if (findRange(liveRanges, currentTime) || liveState === "done") return null;
+    const lang = liveKey?.translateTo;
+    const what = lang ? `${LIVE_TRANSLATE_NAMES[lang as LiveTranslate]} subtitles` : "subtitles";
+    if (liveWaiting) return `Waiting for ${what}...`;
+    if (liveState === "loading") return liveLoadingMessage || "Loading speech model...";
+    return `Generating ${what}...`;
+  });
   let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
 
   // HEVC codec warning
@@ -243,8 +411,8 @@
     onPlayingChange: (playing) => {
       isPlaying = playing;
     },
-    fadeInMs: () => getFadeDurationMs(localStorage.getItem('glucose_fade')),
-    fadeOutMs: () => getFadeDurationMs(localStorage.getItem('glucose_fade')),
+    fadeInMs: () => getFadeDurationMs(readStorage('glucose_fade')),
+    fadeOutMs: () => getFadeDurationMs(readStorage('glucose_fade')),
   });
 
   $effect(() => {
@@ -341,8 +509,10 @@
     subtitleContent = null;
     subtitleFileName = null;
     embeddedSubtitleTracks = [];
+    nearbySubtitles = [];
     selectedEmbeddedLanguage = "en";
     subtitlesEnabled = true;
+    disableLiveSubtitles(false, false);
 
     await cleanupAudioRemuxFiles();
     if (isVideoSetupStale(setupId)) return;
@@ -384,6 +554,14 @@
 
     if (isVideoSetupStale(setupId)) return;
 
+    // List subtitle files nearby for the subtitle menu; the exact match (if any) was
+    // already loaded above.
+    invoke<NearbySubtitle[]>("find_nearby_subtitles", { videoPath })
+      .then((found) => {
+        if (!isVideoSetupStale(setupId)) nearbySubtitles = found;
+      })
+      .catch((err) => console.log("Nearby subtitle lookup failed:", err));
+
     try {
       // Always detect embedded tracks so the subtitle menu can list them
       const tracks = await invoke<EmbeddedSubtitleTrack[]>(
@@ -415,6 +593,24 @@
       }
     } catch (err) {
       console.log("Embedded audio track detection failed:", err);
+    }
+
+    // Uses this check's own answer: a newer check (the model menu opening meanwhile) may
+    // still be running and has not set the shared value yet.
+    const liveModelInstalled = await refreshLiveModelAvailable();
+    if (isVideoSetupStale(setupId)) return;
+
+    // Optional: start live subtitles when the video came with none. Only when a
+    // live-capable model is installed and there is audio, so it never surfaces an error
+    // by itself.
+    if (
+      !subtitleSrc &&
+      embeddedSubtitleTracks.length === 0 &&
+      embeddedAudioTracks.length > 0 &&
+      getAutoLiveSubtitles(readStorage(AUTO_LIVE_SUBTITLES_KEY)) &&
+      liveModelInstalled
+    ) {
+      enableLiveSubtitles(true);
     }
 
     try {
@@ -516,6 +712,21 @@
             }
           },
         ),
+        listen<LiveSubtitleChunk>("live-subtitle-chunk", (event) =>
+          handleLiveChunk(event.payload),
+        ),
+        listen<LiveSubtitleStatus>("live-subtitle-status", (event) => {
+          const status = event.payload;
+          if (!liveActive || status.session_id !== liveSession) return;
+          liveState = status.state;
+          if (status.state === "loading") liveLoadingMessage = status.message;
+          // Each restart (a seek) reports it again; once dismissed it stays away.
+          if (status.state === "running" && status.message && status.message !== liveNoticeDismissed) {
+            liveNotice = status.message;
+          }
+          if (status.state === "error") liveError = status.message;
+          checkLiveWait();
+        }),
         createPipWindowSettler(() => viewMode === "pip"),
       ]);
 
@@ -604,6 +815,13 @@
         } catch (err) {
           console.error("Failed to revoke subtitle blob URL:", err);
         }
+      }
+      if (liveActive) {
+        disableLiveSubtitles(false);
+      } else {
+        // Live mode may have been on for an earlier video in this player; a video change
+        // keeps its models loaded (see disableLiveSubtitles), so release them now.
+        invoke("stop_live_subtitles", { unload: true, request: newLiveRequest() }).catch(() => {});
       }
       // Clean up audio remux temp files
       if (audioRemuxPath) {
@@ -786,6 +1004,9 @@
       subtitleFileName = result.fileName;
       selectedEmbeddedLanguage = '';
       subtitlesEnabled = true;
+      // Live cues take priority over a loaded track, so the chosen file only shows once
+      // live subtitles are off.
+      disableLiveSubtitles();
     }
   }
 
@@ -840,6 +1061,8 @@
       subtitleFileName = formatEmbeddedTrackLabel(track);
       selectedEmbeddedLanguage = track.language ?? 'en';
       subtitlesEnabled = true;
+      // As for subtitle files: the chosen track replaces live subtitles.
+      disableLiveSubtitles();
     } catch (err) {
       console.error("Failed to extract embedded subtitle:", err);
       alert("Failed to load embedded subtitle: " + err);
@@ -854,8 +1077,9 @@
   }
 
   function toggleSubtitles() {
-    if (!subtitleSrc) return;
+    if (!subtitleSrc && !liveActive) return;
     subtitlesEnabled = !subtitlesEnabled;
+    checkLiveWait();
   }
 
   async function goHome() {
@@ -923,6 +1147,11 @@
 
   async function togglePlay() {
     if (!videoElement) return;
+    if (liveWaiting) {
+      // Playing by hand during a wait means "don't wait for this gap".
+      liveWaiting = false;
+      liveWaitOverride = true;
+    }
     if (!isPlaying) {
       setupAudioContext();
       if (audioCtx?.state === "suspended") await audioCtx.resume();
@@ -1029,6 +1258,7 @@
 
     const handleMouseUp = () => {
       isScrubbing = false;
+      handleLiveSeek();
       if (wasPlayingBeforeScrub) {
         fadedPlayback.play().catch((err) => {
           console.log("Play prevented:", err);
@@ -1230,6 +1460,11 @@
   function handleTimeUpdate() {
     if (!videoElement) return;
     currentTime = videoElement.currentTime;
+    if (liveActive && Date.now() - livePlayheadSentAt > 1000) {
+      livePlayheadSentAt = Date.now();
+      invoke("update_live_subtitles_playhead", { time: currentTime }).catch(() => {});
+    }
+    checkLiveWait();
     // Sync background video
     if (
       backgroundVideo &&
@@ -1248,7 +1483,7 @@
       !nextVideoSkipped &&
       !nextVideoNotFound
     ) {
-      const behavior = getEndBehavior(localStorage.getItem('glucose_end_behavior'));
+      const behavior = getEndBehavior(readStorage('glucose_end_behavior'));
       if (behavior === 'next') {
         startNextVideoCountdown();
       }
@@ -1286,9 +1521,9 @@
       ]);
 
       if (disposed || currentVideoPath !== requestedForPath) return;
-      if (getEndBehavior(localStorage.getItem('glucose_end_behavior')) !== 'next') return;
+      if (getEndBehavior(readStorage('glucose_end_behavior')) !== 'next') return;
 
-      const filterPref = localStorage.getItem('glucose_filter') ?? 'all';
+      const filterPref = readStorage('glucose_filter') ?? 'all';
       if (filterPref === 'audio') { nextVideoNotFound = true; return; }
 
       // Filter out unavailable/cloud-only and audio-only files
@@ -1300,7 +1535,7 @@
       const normalizedCurrent = normalize(requestedForPath ?? '');
 
       // Match gallery sort order
-      const sortPref = localStorage.getItem('glucose_sort') ?? 'watched';
+      const sortPref = readStorage('glucose_sort') ?? 'watched';
       let sorted: VideoFile[];
       if (sortPref === 'watched') {
         sorted = [...available].sort((a, b) => {
@@ -1340,7 +1575,7 @@
           clearCountdown();
           return;
         }
-        if (getEndBehavior(localStorage.getItem('glucose_end_behavior')) !== 'next') {
+        if (getEndBehavior(readStorage('glucose_end_behavior')) !== 'next') {
           clearCountdown();
           showNextVideoOverlay = false;
           nextVideoPath = null;
@@ -1402,7 +1637,7 @@
     fadedPlayback.pauseNow();
     await saveWatchProgress();
 
-    const behavior = getEndBehavior(localStorage.getItem('glucose_end_behavior'));
+    const behavior = getEndBehavior(readStorage('glucose_end_behavior'));
     if (behavior === 'loop') {
       if (videoElement) {
         videoElement.currentTime = 0;
@@ -1453,6 +1688,19 @@
 
     // Bail if component unmounted or video changed during await
     if (!videoElement || currentVideoPath !== videoPathBeforeAwait) return;
+
+    if (liveStartWhenReady) {
+      liveStartWhenReady = false;
+      if (liveActive && liveKey) {
+        const target = findRange(liveRanges, videoElement.currentTime)?.[1] ?? videoElement.currentTime;
+        if (duration > 0 && target >= duration - 0.5) {
+          liveWorkerPos = target;
+          liveState = "done";
+        } else {
+          startLiveSubtitlesAt(target);
+        }
+      }
+    }
 
     // Set up interval to save progress every 5 seconds
     if (progressSaveInterval) {
@@ -1614,6 +1862,11 @@
 
       audioRemuxPath = tempPath;
       selectedAudioTrackIndex = track.index;
+      if (liveActive && liveKey) {
+        // Each track has its own cues and cache; keep the old track's for switching back.
+        flushLiveCache();
+        loadLiveSession({ ...liveKey, audioStreamIndex: track.index }, preSwitchTime);
+      }
       pendingSeekTime = preSwitchTime;
       pendingPaused = preSwitchPaused;
       videoSrc = convertFileSrc(tempPath);
@@ -1749,8 +2002,32 @@
     }
   }
 
+  // Checks run when a video opens and whenever the model menu opens; only the latest one
+  // may set the result, so a slower, older check cannot overwrite a newer answer.
+  let liveModelCheckId = 0;
+  // Returns this check's own answer, for callers that act on it right away.
+  async function refreshLiveModelAvailable(): Promise<boolean> {
+    const checkId = ++liveModelCheckId;
+    let model: string | null = null;
+    try {
+      model = await invoke<string | null>("live_subtitle_model");
+    } catch (err) {
+      console.log("Live model check failed:", err);
+    }
+    if (checkId === liveModelCheckId) {
+      liveModelAvailable = model !== null;
+      livePreferredModel = model ?? "";
+    }
+    return model !== null;
+  }
+  // The model live mode would use, from the last check; names saved cues until a
+  // session reports its own.
+  let livePreferredModel = "";
+
   function openAIFromUnifiedMenu() {
     showSubtitleMenu = false;
+    // A model may have been downloaded since the video opened.
+    refreshLiveModelAvailable();
     setTimeout(() => {
       showModelSelector = true;
     }, 0);
@@ -1796,7 +2073,7 @@
       if (generationVideoDuration > 0) {
         const elapsed = (Date.now() - generationStartTime) / 1000;
         const coefficient = elapsed / generationVideoDuration;
-        localStorage.setItem(`glucose_whisper_coef_${modelSize}`, String(coefficient));
+        writeStorage(`glucose_whisper_coef_${modelSize}`, String(coefficient));
       }
 
       // Auto-load the generated subtitle
@@ -1813,6 +2090,273 @@
     }
   }
 
+  async function startLiveSubtitlesAt(time: number, retried = false) {
+    const key = liveKey;
+    if (!key) return;
+    liveWorkerPos = time;
+    liveError = null;
+    // A worker that reached the end reported "done"; until the new session reports its own
+    // state, that would hide the "Generating" hint and stop "pause until ready" waiting.
+    if (liveState === "done") liveState = "running";
+    const request = newLiveRequest();
+    // From now on only this session's events count, including any that arrive before
+    // the call below returns; the session being replaced is dropped at once.
+    liveSession = request;
+    try {
+      const info = await invoke<LiveSessionInfo>("start_live_subtitles", {
+        ...key,
+        request,
+        startSecs: time,
+      });
+      // Replaced while starting (a seek, or an audio-track switch); its events are
+      // already ignored.
+      if (!liveActive || liveKey !== key || liveSession !== info.session_id) return;
+      liveModel = info.model;
+      invoke("update_live_subtitles_playhead", {
+        time: videoElement?.currentTime ?? time,
+      }).catch(() => {});
+    } catch (err) {
+      // A later start or stop replaced this one; its outcome is the one that counts.
+      if (request !== latestLiveRequest || !liveActive || liveKey !== key) return;
+      // Refused as overtaken although this player sent nothing later: the backend's
+      // number is from before a window reload (with the clock since stepped back). The
+      // numbers continue above it and the start is tried once more.
+      const highest = supersededBy(err);
+      if (highest !== null) {
+        if (!retried) {
+          skipLiveRequestsTo(highest);
+          startLiveSubtitlesAt(time, true);
+        }
+        return;
+      }
+      if (liveAutoStarted) {
+        // Auto-start never shows an error: without the translation model it falls back
+        // to the original language, and if it still cannot start it stays off.
+        if (key.translateTo) {
+          loadLiveSession({ ...key, translateTo: null }, time);
+        } else {
+          disableLiveSubtitles();
+        }
+        return;
+      }
+      liveError = String(err);
+      liveState = "error";
+    }
+  }
+
+  // `auto` is true when the player starts live subtitles by itself (the "Auto-start when
+  // no subtitles are found" setting) rather than from the menu.
+  function enableLiveSubtitles(auto = false) {
+    if (!currentVideoPath) return;
+    liveAutoStarted = auto;
+    showModelSelector = false;
+    showSubtitleMenu = false;
+    liveActive = true;
+    liveState = "loading";
+    liveLoadingMessage = "";
+    liveError = null;
+    subtitlesEnabled = true;
+    loadLiveSession(
+      {
+        videoPath: currentVideoPath,
+        audioStreamIndex: selectedAudioTrackIndex,
+        language: $appSettings.subtitleLanguage,
+        translateTo: getLiveTranslate(readStorage(LIVE_TRANSLATE_KEY)),
+      },
+      videoElement?.currentTime ?? 0,
+    );
+  }
+
+  // Switches the live cues to `key`: restores its cache (if any), then transcribes
+  // whatever is still missing from `time` onward.
+  async function loadLiveSession(key: LiveCacheKey, time: number) {
+    // Stop the previous key's worker and drop its in-flight chunks, so they cannot
+    // land in this key's cues while the cache loads.
+    liveSession = 0;
+    invoke("stop_live_subtitles", { unload: false, request: newLiveRequest() }).catch(() => {});
+    liveKey = key;
+    // A press of play during an earlier wait does not carry over to this session.
+    liveWaitOverride = false;
+    liveWorkerPos = 0;
+    liveCues = [];
+    liveOriginalCues = [];
+    liveRanges = [];
+    liveModel = "";
+    liveNotice = "";
+    liveNoticeDismissed = "";
+    liveDirty = false;
+    try {
+      const cached = await invoke<LiveCacheData | null>("load_live_cache", { ...key });
+      if (!liveActive || liveKey !== key) return;
+      if (cached) {
+        liveCues = cached.cues;
+        liveOriginalCues = cached.original_cues;
+        liveRanges = cached.ranges;
+        liveModel = cached.model;
+      }
+    } catch (err) {
+      // A missing or unreadable cache only means starting from scratch.
+      console.warn("Failed to load live subtitle cache:", err);
+    }
+    if (!liveActive || liveKey !== key) return;
+    // Before the video's metadata is in (auto-start, an audio-track switch reloading the
+    // video), its time is 0 and about to jump: the worker starts once the position is set
+    // (handleLoadedMetadata), rather than at 0 and again after the jump.
+    if (!videoElement || videoElement.readyState === 0) {
+      liveStartWhenReady = true;
+      return;
+    }
+    const now = pendingSeekTime ?? videoElement.currentTime;
+    const target = findRange(liveRanges, now)?.[1] ?? now;
+    if (duration > 0 && target >= duration - 0.5) {
+      // Everything from here to the end is already transcribed.
+      liveWorkerPos = target;
+      liveState = "done";
+      return;
+    }
+    startLiveSubtitlesAt(target);
+  }
+
+  // Each save sends every cue so far, which for a long film is a lot to send every few
+  // seconds, so new cues are saved a minute later, or sooner when the viewer pauses, live
+  // mode is turned off or the video changes. A crash loses at most that minute.
+  function scheduleLiveSave() {
+    liveDirty = true;
+    if (liveSaveTimer !== null) return;
+    liveSaveTimer = setTimeout(() => {
+      liveSaveTimer = null;
+      flushLiveCache();
+    }, 60_000);
+  }
+
+  function flushLiveCache() {
+    if (liveSaveTimer !== null) {
+      clearTimeout(liveSaveTimer);
+      liveSaveTimer = null;
+    }
+    // Saved under the session's model, or the one live mode would use; with neither known
+    // the cues wait for the next save, since a cache without a real model name would never
+    // be replaced by a better model's output.
+    const model = liveModel || livePreferredModel;
+    if (!liveKey || !liveDirty || !model) return;
+    liveDirty = false;
+    invoke("save_live_cache", {
+      ...liveKey,
+      model,
+      ranges: $state.snapshot(liveRanges),
+      cues: $state.snapshot(liveCues),
+      originalCues: $state.snapshot(liveOriginalCues),
+    }).catch((err) => console.warn("Failed to save live subtitle cache:", err));
+  }
+
+  // Turning live mode off restores whatever subtitle track was loaded before. A wait
+  // for subtitles ends with it; `resume` is false when the video itself is going away.
+  // `unload` is false when another video is opening, so the models stay in memory in
+  // case live mode starts again for it; they are released when the player closes.
+  function disableLiveSubtitles(resume = true, unload = true) {
+    if (!liveActive) return;
+    flushLiveCache();
+    liveKey = null;
+    liveActive = false;
+    if (resume) endLiveWait();
+    else liveWaiting = false;
+    liveCues = [];
+    liveOriginalCues = [];
+    liveRanges = [];
+    liveState = null;
+    liveError = null;
+    liveNotice = "";
+    liveNoticeDismissed = "";
+    liveWaitOverride = false;
+    liveWorkerPos = 0;
+    liveStartWhenReady = false;
+    invoke("stop_live_subtitles", { unload, request: newLiveRequest() }).catch(() => {});
+  }
+
+  function handleLiveChunk(chunk: LiveSubtitleChunk) {
+    if (!liveActive || chunk.session_id !== liveSession) return;
+    liveCues = mergeCues(liveCues, chunk.cues, chunk.covered_start, chunk.covered_end);
+    liveOriginalCues = mergeCues(
+      liveOriginalCues,
+      chunk.original_cues,
+      chunk.covered_start,
+      chunk.covered_end,
+    );
+    liveRanges = addRange(liveRanges, chunk.covered_start, chunk.covered_end);
+    liveWorkerPos = chunk.covered_end;
+    scheduleLiveSave();
+    checkLiveWait();
+
+    // The worker ran into a range transcribed earlier: skip past it.
+    const range = findRange(liveRanges, chunk.covered_start);
+    if (range && range[1] > chunk.covered_end + 0.5) {
+      if (duration > 0 && range[1] >= duration - 0.5) {
+        invoke("stop_live_subtitles", { unload: false, request: newLiveRequest() }).catch(() => {});
+        liveState = "done";
+      } else {
+        startLiveSubtitlesAt(range[1]);
+      }
+    }
+  }
+
+  function handleLiveSeek() {
+    if (!liveActive || !videoElement) return;
+    liveWaitOverride = false;
+    checkLiveWait();
+    const time = videoElement.currentTime;
+    livePlayheadSentAt = Date.now();
+    invoke("update_live_subtitles_playhead", { time }).catch(() => {});
+    // A drag on the progress bar seeks on every mouse move; the worker restarts once,
+    // where the drag ends (see startScrubbing).
+    if (isScrubbing) return;
+    // While the cache loads (or the start waits for the video's position) no session is
+    // current; the worker then starts from wherever playback is, so nothing to do here.
+    if (liveSession === 0) return;
+    // Inside a covered range, the work that matters is at that range's end.
+    const target = findRange(liveRanges, time)?.[1] ?? time;
+    if (duration > 0 && target >= duration - 0.5) return;
+    if (Math.abs(target - liveWorkerPos) > 0.5) {
+      startLiveSubtitlesAt(target);
+    }
+  }
+
+  // "Pause until ready": pauses when playback reaches a point live subtitles are not
+  // ready for, and resumes once they are. Called whenever the playhead, the covered
+  // ranges or the worker state change.
+  function checkLiveWait() {
+    if (!videoElement) return;
+    // Not while subtitles are hidden: nothing would explain the pause.
+    const waitEnabled =
+      liveActive &&
+      subtitlesEnabled &&
+      !liveError &&
+      liveState !== "done" &&
+      liveWaitPreference === "pause";
+    const time = videoElement.currentTime;
+    // The last second is treated as ready, in case the audio ends before the video.
+    const ready =
+      !!findRange(liveRanges, time) || (duration > 0 && duration - time < 1);
+
+    if (!waitEnabled || ready) {
+      if (ready) liveWaitOverride = false;
+      endLiveWait();
+      return;
+    }
+    if (liveWaitOverride) return;
+    if (isPlaying) {
+      liveWaiting = true;
+      fadedPlayback.pause().catch(() => {});
+    }
+  }
+
+  // Ends a wait, resuming playback the player paused itself. A pause the user made is
+  // never resumed, since `liveWaiting` is only set by `checkLiveWait`.
+  function endLiveWait() {
+    if (!liveWaiting) return;
+    liveWaiting = false;
+    fadedPlayback.play().catch((err) => console.log("Resume after subtitle wait failed:", err));
+  }
+
   async function cancelSubtitleGeneration() {
     isCancelling = true;
     try {
@@ -1827,7 +2371,7 @@
     if (!duration) return "Unknown";
 
     // Prefer a coefficient measured on this machine from a previous run.
-    const stored = localStorage.getItem(`glucose_whisper_coef_${modelKey}`);
+    const stored = readStorage(`glucose_whisper_coef_${modelKey}`);
     const calibrated = stored ? parseFloat(stored) : NaN;
     if (!isNaN(calibrated) && calibrated > 0) {
       return formatEstimatedTime(duration * calibrated);
@@ -1911,6 +2455,20 @@
       class:pip-video={viewMode === "pip"}
       src={videoSrc}
       ontimeupdate={handleTimeUpdate}
+      onseeked={handleLiveSeek}
+      onerror={() => {
+        // A video the webview cannot load never reports its metadata, so a live start
+        // waiting for it begins now instead (FFmpeg may still read the audio).
+        if (liveStartWhenReady) {
+          liveStartWhenReady = false;
+          if (liveActive && liveKey) startLiveSubtitlesAt(pendingSeekTime ?? 0);
+        }
+      }}
+      onpause={() => {
+        // A pause by the viewer is a good moment to save; not one made to wait for
+        // subtitles, or the one a drag on the progress bar starts with.
+        if (!liveWaiting && !isScrubbing) flushLiveCache();
+      }}
       onloadedmetadata={handleLoadedMetadata}
       onended={handleEnded}
       onclick={togglePlay}
@@ -1923,6 +2481,10 @@
       {currentTime}
       enabled={subtitlesEnabled}
       {videoElement}
+      liveCues={liveActive ? liveCues : null}
+      secondaryCues={liveActive && liveDualSubtitles ? liveOriginalCues : null}
+      smartPosition={smartSubtitlePosition}
+      placeholder={livePlaceholder}
     />
   </div>
 
@@ -1946,6 +2508,23 @@
         onclick={() => (showHevcWarning = false)}
         title="Dismiss"
         aria-label="Dismiss HEVC warning"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  {:else if liveActive && liveNotice}
+    <!-- Live subtitles notice, e.g. no translation for the speech language -->
+    <div class="hevc-warning-banner">
+      <AlertTriangle size={15} class="hevc-warning-icon" />
+      <span class="hevc-warning-text">{liveNotice}.</span>
+      <button
+        class="hevc-warning-dismiss"
+        onclick={() => {
+          liveNoticeDismissed = liveNotice;
+          liveNotice = "";
+        }}
+        title="Dismiss"
+        aria-label="Dismiss live subtitles notice"
       >
         <X size={14} />
       </button>
@@ -2032,6 +2611,18 @@
           ></canvas>
           <div class="preview-time">{formatTime(previewTime)}</div>
         </div>
+        {#if liveActive && duration > 0}
+          <!-- Parts of the timeline live subtitles are ready for. -->
+          {#each liveRanges as [start, end] (start)}
+            <div
+              class="live-covered"
+              style="left: {Math.max(0, (start / duration) * 100)}%; width: {Math.max(
+                0,
+                (Math.min(end, duration) - Math.max(0, start)) / duration,
+              ) * 100}%"
+            ></div>
+          {/each}
+        {/if}
         <div
           class="progress-filled"
           style="width: {duration
@@ -2139,14 +2730,14 @@
           <div class="subtitle-control">
             <button
               class="control-button"
-              class:subtitle-active={subtitleSrc && subtitlesEnabled}
+              class:subtitle-active={(subtitleSrc || liveActive) && subtitlesEnabled}
               class:generating={isGeneratingSubtitles}
               data-tooltip="Subtitles (C)"
               aria-label="Subtitles (C)"
               onclick={() => (showSubtitleMenu = !showSubtitleMenu)}
               disabled={isGeneratingSubtitles}
             >
-              {#if subtitleSrc && subtitlesEnabled}
+              {#if (subtitleSrc || liveActive) && subtitlesEnabled}
                 <Captions size={20} />
               {:else}
                 <CaptionsOff size={20} />
@@ -2172,6 +2763,22 @@
                   <span class="model-name">Generate with AI</span>
                   <span class="model-desc">Auto-generate using Whisper AI</span>
                 </button>
+                {#if liveActive}
+                  <button
+                    class="model-option"
+                    onclick={() => {
+                      showSubtitleMenu = false;
+                      disableLiveSubtitles();
+                    }}
+                  >
+                    <span class="model-name"
+                      >Live subtitles{liveModel ? ` · ${liveModel}` : ""}{liveKey?.translateTo
+                        ? ` · ${LIVE_TRANSLATE_NAMES[liveKey.translateTo as LiveTranslate]}`
+                        : ""}</span
+                    >
+                    <span class="model-desc">Turn off live subtitles</span>
+                  </button>
+                {/if}
                 {#if embeddedSubtitleTracks.length > 0}
                   <div class="subtitle-menu-divider"></div>
                   {#each embeddedSubtitleTracks as track}
@@ -2184,6 +2791,23 @@
                     >
                       <span class="model-name">{formatEmbeddedTrackLabel(track)}</span>
                       <span class="model-desc">Embedded · {formatCodecLabel(track.codec_name)}{track.language ? ` · ${track.language}` : ""}</span>
+                    </button>
+                  {/each}
+                {/if}
+                {#if nearbySubtitles.length > 0}
+                  <div class="subtitle-menu-divider"></div>
+                  <div class="model-header">Subtitle files nearby</div>
+                  {#each nearbySubtitles as sub (sub.path)}
+                    <button
+                      class="model-option"
+                      title={sub.path}
+                      onclick={() => {
+                        showSubtitleMenu = false;
+                        loadSubtitle(sub.path);
+                      }}
+                    >
+                      <span class="model-name nearby-name">{sub.name}</span>
+                      <span class="model-desc">{NEARBY_SUBTITLE_DESC[sub.kind]}</span>
                     </button>
                   {/each}
                 {/if}
@@ -2221,8 +2845,16 @@
           {#if showModelSelector && !isGeneratingSubtitles}
             <div class="model-selector">
               <div class="model-header">Select AI Model</div>
-              {#if setupStatus && setupStatus.models_installed.length > 0}
-                {#each setupStatus.models_installed as model}
+              <!-- The Live entry is only offered while live subtitles are off, so a live
+                   model alone counts only then; otherwise the menu would open empty. -->
+              {#if (setupStatus?.models_installed.length ?? 0) > 0 || (liveModelAvailable && !liveActive)}
+                {#if !liveActive && liveModelAvailable}
+                  <button class="model-option" onclick={() => enableLiveSubtitles()}>
+                    <span class="model-name">Live (real-time)</span>
+                    <span class="model-desc">Subtitles appear as you watch{hardwareWarning("live")}</span>
+                  </button>
+                {/if}
+                {#each setupStatus?.models_installed ?? [] as model}
                   {#if model === "tiny"}
                     <button
                       class="model-option"
@@ -2251,7 +2883,7 @@
                       <span class="model-name">Large V3 Turbo</span>
                       <span class="model-desc"
                         >{getEstimatedTranscriptionTime("large-v3-turbo")} • Most
-                        Accurate</span
+                        Accurate{hardwareWarning("generation")}</span
                       >
                     </button>
                   {/if}
@@ -2791,6 +3423,17 @@
     transition: width 0.1s linear;
     border-radius: 2px;
     position: relative;
+    z-index: 1;
+  }
+
+  .live-covered {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 2px;
+    pointer-events: none;
+    transition: width 0.3s ease;
   }
 
   .progress-handle {
@@ -3117,6 +3760,13 @@
     min-width: 260px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
     z-index: 100;
+  }
+
+  .nearby-name {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .subtitle-menu-divider {

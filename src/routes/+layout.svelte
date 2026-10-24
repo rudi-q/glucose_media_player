@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readStorage, removeStorage, writeStorage } from "$lib/utils/storage";
   import "$lib/styles/global.css";
   import theme from "$lib/theme.json";
   import { invoke } from "@tauri-apps/api/core";
@@ -35,8 +36,9 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, setContext, tick } from "svelte";
   import { fade } from "svelte/transition";
-  import { goto } from "$app/navigation";
+  import { afterNavigate, goto } from "$app/navigation";
   import { page } from "$app/stores";
+  import ErrorScreen from "$lib/components/ErrorScreen.svelte";
   import {
     X,
     Settings,
@@ -71,10 +73,25 @@
     Wind,
     RotateCcw,
     Plus,
+    Pin,
+    Sparkles,
+    Activity,
+    Layers,
+    MemoryStick,
+    Gpu,
   } from "lucide-svelte";
   import Button from "$lib/components/Button.svelte";
   import LibrarySettings from "$lib/components/LibrarySettings.svelte";
   import FFmpegSettings from "$lib/components/FFmpegSettings.svelte";
+  import WhatsNew from "$lib/components/WhatsNew.svelte";
+  import { trapFocus } from "$lib/utils/trapFocus";
+  import { getAppVersion } from "$lib/utils/version";
+  import {
+    LAST_SEEN_VERSION_KEY,
+    shouldShowWhatsNew,
+    whatsNewHighlights,
+    type WhatsNewAction,
+  } from "$lib/utils/whatsNew";
   import PlayerPreferencesPicker, {
     type PlayerPreferenceOption,
   } from "$lib/components/PlayerPreferencesPicker.svelte";
@@ -88,10 +105,38 @@
     getDefaultPlayMode,
     getEndBehavior,
     getFadeMode,
+    AUTO_LIVE_SUBTITLES_KEY,
+    getAutoLiveSubtitles,
+    LIVE_SUBTITLE_WAIT_KEY,
+    getLiveSubtitleWait,
+    LIVE_TRANSLATE_KEY,
+    getLiveTranslate,
+    LIVE_DUAL_SUBTITLES_KEY,
+    LIVE_DUAL_SUBTITLES_EVENT,
+    LIVE_SUBTITLE_WAIT_EVENT,
+    getLiveDualSubtitles,
+    SUBTITLE_POSITION_KEY,
+    SUBTITLE_POSITION_EVENT,
+    getSubtitlePosition,
+    type SubtitlePosition,
+    type LiveSubtitleWait,
     type DefaultPlayMode,
     type EndBehavior,
     type FadeMode,
   } from "$lib/utils/playerPreferences";
+  import {
+    adviseFeatures,
+    displayHardwareName,
+    featureVerdicts,
+    featureWarning,
+    HARDWARE_CHECK_KEY,
+    HARDWARE_CHECK_VERSION,
+    loadHardwareCheck,
+    VERDICT_LABELS,
+    type FeatureId,
+    type HardwareReport,
+    type StoredHardwareCheck,
+  } from "$lib/utils/featureAdvice";
   import {
     appSettings,
     setupStore,
@@ -184,33 +229,358 @@
     },
   ];
 
-  const _savedDefaultMode = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_default_mode") : null;
+  const subtitlePositionOptions: PlayerPreferenceOption<SubtitlePosition>[] = [
+    {
+      value: "fixed",
+      icon: Pin,
+      label: "Fixed",
+      description: "Always where the Position slider in the subtitle style puts them",
+    },
+    {
+      value: "smart",
+      icon: Sparkles,
+      label: "Smart",
+      description: "At the bottom, moving to the top to keep off on-screen text, faces and bright areas",
+    },
+  ];
+
+  const _savedDefaultMode = readStorage("glucose_default_mode");
   let defaultPlayMode = $state<DefaultPlayMode>(
     getDefaultPlayMode(_savedDefaultMode)
   );
 
   $effect(() => {
-    if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_default_mode", defaultPlayMode);
+    if (!showOnboarding && !skipPlayerPreferencePersist) writeStorage("glucose_default_mode", defaultPlayMode);
   });
 
-  const _savedEndBehavior = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_end_behavior") : null;
+  const _savedEndBehavior = readStorage("glucose_end_behavior");
   let endBehavior = $state<EndBehavior>(
     getEndBehavior(_savedEndBehavior)
   );
 
   $effect(() => {
-    if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_end_behavior", endBehavior);
+    if (!showOnboarding && !skipPlayerPreferencePersist) writeStorage("glucose_end_behavior", endBehavior);
   });
 
-  const _savedFadeMode = typeof localStorage !== "undefined" ? localStorage.getItem("glucose_fade") : null;
+  const _savedFadeMode = readStorage("glucose_fade");
   let fadeMode = $state<FadeMode>(getFadeMode(_savedFadeMode));
 
   $effect(() => {
-    if (!showOnboarding && !skipPlayerPreferencePersist) localStorage.setItem("glucose_fade", fadeMode);
+    if (!showOnboarding && !skipPlayerPreferencePersist) writeStorage("glucose_fade", fadeMode);
   });
+
+  const _savedSubtitlePosition =
+    readStorage(SUBTITLE_POSITION_KEY);
+  let subtitlePosition = $state<SubtitlePosition>(getSubtitlePosition(_savedSubtitlePosition));
+
+  $effect(() => {
+    if (!showOnboarding && !skipPlayerPreferencePersist) {
+      writeStorage(SUBTITLE_POSITION_KEY, subtitlePosition);
+      window.dispatchEvent(new Event(SUBTITLE_POSITION_EVENT));
+    }
+  });
+
+  // The player's subtitle style panel changes the same setting.
+  $effect(() => {
+    const read = () => {
+      subtitlePosition = getSubtitlePosition(readStorage(SUBTITLE_POSITION_KEY));
+    };
+    window.addEventListener(SUBTITLE_POSITION_EVENT, read);
+    return () => window.removeEventListener(SUBTITLE_POSITION_EVENT, read);
+  });
+
+  let autoLiveSubtitles = $state(
+    getAutoLiveSubtitles(
+      readStorage(AUTO_LIVE_SUBTITLES_KEY),
+    ),
+  );
+
+  function toggleAutoLiveSubtitles() {
+    autoLiveSubtitles = !autoLiveSubtitles;
+    writeStorage(AUTO_LIVE_SUBTITLES_KEY, String(autoLiveSubtitles));
+  }
+
+  let liveSubtitleWait = $state<LiveSubtitleWait>(
+    getLiveSubtitleWait(
+      readStorage(LIVE_SUBTITLE_WAIT_KEY),
+    ),
+  );
+
+  function setLiveSubtitleWait(value: string) {
+    liveSubtitleWait = getLiveSubtitleWait(value);
+    writeStorage(LIVE_SUBTITLE_WAIT_KEY, liveSubtitleWait);
+    window.dispatchEvent(new Event(LIVE_SUBTITLE_WAIT_EVENT));
+  }
+
+  let liveTranslate = $state<string>(
+    getLiveTranslate(
+      readStorage(LIVE_TRANSLATE_KEY),
+    ) ?? "off",
+  );
+
+  function setLiveTranslate(value: string) {
+    const lang = getLiveTranslate(value);
+    liveTranslate = lang ?? "off";
+    if (lang) writeStorage(LIVE_TRANSLATE_KEY, lang);
+    else removeStorage(LIVE_TRANSLATE_KEY);
+  }
+
+  // Translation models (Settings > AI > Live Subtitles): one download per language pair,
+  // from translation_models.rs.
+  interface TranslationModel {
+    source: string;
+    target: string;
+    installed: boolean;
+    size_mb: number;
+  }
+  const LANGUAGE_LABELS: Record<string, string> = {
+    en: "English",
+    de: "German",
+    fr: "French",
+    es: "Spanish",
+    ru: "Russian",
+    tr: "Turkish",
+    it: "Italian",
+    nl: "Dutch",
+  };
+  let translationModels = $state<TranslationModel[]>([]);
+  // "source-target" of the pair being downloaded, and its progress (0-100).
+  let translationDownload = $state<{ pair: string; percent: number } | null>(null);
+  let translationModelError = $state<string | null>(null);
+  const pairKey = (m: { source: string; target: string }) => `${m.source}-${m.target}`;
+  const pairLabel = (m: { source: string; target: string }) =>
+    `${LANGUAGE_LABELS[m.source] ?? m.source} → ${LANGUAGE_LABELS[m.target] ?? m.target}`;
+
+  // Pairs the chosen translation language needs that are not installed yet: English
+  // speech into it, or, for English, any of the languages translated into English.
+  let missingTranslationModels = $derived(
+    liveTranslate === "off"
+      ? []
+      : liveTranslate === "en"
+        ? translationModels.filter((m) => m.target === "en").every((m) => !m.installed)
+          ? translationModels.filter((m) => m.target === "en")
+          : []
+        : translationModels.filter((m) => m.source === "en" && m.target === liveTranslate && !m.installed),
+  );
+
+  async function loadTranslationModels() {
+    try {
+      translationModels = await invoke<TranslationModel[]>("translation_models");
+    } catch (err) {
+      console.error("Failed to list translation models:", err);
+    }
+  }
+
+  async function downloadTranslationModel(model: TranslationModel) {
+    if (translationDownload) return;
+    translationModelError = null;
+    translationDownload = { pair: pairKey(model), percent: 0 };
+    try {
+      await invoke("download_translation_model", { source: model.source, target: model.target });
+    } catch (err) {
+      translationModelError = `${pairLabel(model)}: ${err}`;
+    } finally {
+      translationDownload = null;
+      await loadTranslationModels();
+    }
+  }
+
+  async function deleteTranslationModel(model: TranslationModel) {
+    translationModelError = null;
+    try {
+      await invoke("delete_translation_model", { source: model.source, target: model.target });
+    } catch (err) {
+      translationModelError = `${pairLabel(model)}: ${err}`;
+    }
+    await loadTranslationModels();
+  }
+
+  $effect(() => {
+    if (showSettings && selectedTab === "ai") loadTranslationModels();
+  });
+
+  // Hardware check (Features tab): measures what this PC can run and advises per feature.
+  // It runs once by itself after onboarding, then again only from "Check again".
+  let hardwareCheck = $state<StoredHardwareCheck | null>(
+    loadHardwareCheck(readStorage(HARDWARE_CHECK_KEY)),
+  );
+  let hardwareChecking = $state(false);
+  let hardwareCheckError = $state<string | null>(null);
+  let featureAdvice = $derived(hardwareCheck ? adviseFeatures(hardwareCheck.report) : []);
+  // Warnings shown next to the features' own settings.
+  let featureWarnings = $derived.by(() => {
+    const verdicts = featureVerdicts(hardwareCheck);
+    return {
+      live: featureWarning(verdicts.live),
+      translation: featureWarning(verdicts.translation),
+      smart: featureWarning(verdicts.smart),
+    };
+  });
+  const FEATURE_TURNED_OFF_NAMES: Record<FeatureId, string> = {
+    live: "auto-start for live subtitles",
+    translation: "live translation",
+    smart: "smart subtitle position",
+    generation: "AI subtitles",
+  };
+
+  // `turnOff` lists the features this check switches off when it rates them "Not
+  // recommended" (the user can switch them back on): all of them for the automatic first
+  // check, and the speech features for the check after the first speech model download,
+  // since the first check had no model to test them with. "Check again" changes nothing.
+  // `cancellable` checks are stopped when a video opens, and run again later.
+  let hardwareCheckCancellable = false;
+  async function runHardwareCheck(turnOff: FeatureId[] = [], cancellable = false) {
+    if (hardwareChecking) return;
+    hardwareChecking = true;
+    hardwareCheckCancellable = cancellable;
+    hardwareCheckError = null;
+    try {
+      const report = await invoke<HardwareReport>("run_hardware_check");
+      const turnedOff: FeatureId[] = [];
+      for (const advice of adviseFeatures(report)) {
+        if (advice.verdict !== "poor" || !turnOff.includes(advice.id)) continue;
+        if (advice.id === "live" && autoLiveSubtitles) {
+          toggleAutoLiveSubtitles();
+          turnedOff.push("live");
+        } else if (advice.id === "translation" && liveTranslate !== "off") {
+          setLiveTranslate("off");
+          turnedOff.push("translation");
+        } else if (advice.id === "smart" && subtitlePosition === "smart") {
+          subtitlePosition = "fixed";
+          turnedOff.push("smart");
+        }
+      }
+      hardwareCheck = {
+        version: HARDWARE_CHECK_VERSION,
+        checkedAt: new Date().toISOString(),
+        report,
+        turnedOff: [...new Set([...(hardwareCheck?.turnedOff ?? []), ...turnedOff])],
+      };
+      writeStorage(HARDWARE_CHECK_KEY, JSON.stringify(hardwareCheck));
+      window.dispatchEvent(new Event(HARDWARE_CHECK_KEY));
+    } catch (err) {
+      // A cancelled first check runs again once the library is showing.
+      if (String(err) !== "cancelled") hardwareCheckError = String(err);
+    } finally {
+      hardwareChecking = false;
+      hardwareCheckCancellable = false;
+    }
+  }
+
+  // The automatic check stops when a video opens, so it cannot make playback stutter.
+  $effect(() => {
+    if (!isOnGallery && hardwareChecking && hardwareCheckCancellable) {
+      invoke("cancel_hardware_check").catch(() => {});
+    }
+  });
+
+  // The first check waits until onboarding is done and the library is showing, since the
+  // speech test keeps the processor busy for a few seconds and would make a playing video
+  // stutter (Glucose can open straight into the player from a file).
+  let firstHardwareCheckTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    const ready = !showOnboarding && !hardwareCheck && isOnGallery;
+    if (ready && !firstHardwareCheckTimer) {
+      firstHardwareCheckTimer = setTimeout(() => {
+        firstHardwareCheckTimer = null;
+        if (isOnGallery && !hardwareCheck) runHardwareCheck(["live", "translation", "smart"], true);
+      }, 5000);
+    } else if (!ready && firstHardwareCheckTimer) {
+      clearTimeout(firstHardwareCheckTimer);
+      firstHardwareCheckTimer = null;
+    }
+  });
+
+  let liveDualSubtitles = $state(
+    getLiveDualSubtitles(
+      readStorage(LIVE_DUAL_SUBTITLES_KEY),
+    ),
+  );
+
+  function toggleLiveDualSubtitles() {
+    liveDualSubtitles = !liveDualSubtitles;
+    writeStorage(LIVE_DUAL_SUBTITLES_KEY, String(liveDualSubtitles));
+    window.dispatchEvent(new Event(LIVE_DUAL_SUBTITLES_EVENT));
+  }
+
+  // Set while a screen has crashed and its error boundary shows the error screen;
+  // navigating away resets the boundary so the next screen renders normally.
+  let resetCrashedScreen: (() => void) | null = null;
+  // Where the crash happened. A screen that crashed while the navigation to it rendered
+  // is not reset again right away, which would only crash it again and flash.
+  let crashedPath: string | null = null;
+
+  afterNavigate((navigation) => {
+    if (navigation.to?.url.pathname === crashedPath) return;
+    const reset = resetCrashedScreen;
+    resetCrashedScreen = null;
+    crashedPath = null;
+    reset?.();
+  });
+
+  function decodeURIComponentSafe(value: string): string {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+
+  function screenErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
 
   const _isFirstRun = _savedDefaultMode === null && _savedEndBehavior === null && _savedFadeMode === null;
   let showOnboarding = $state(_isFirstRun);
+
+  // "What's new" after an update to a new feature version (see whatsNew.ts): shown once,
+  // only in the library and never over onboarding or Settings. Fresh installs and patch
+  // updates just record the version.
+  const appVersion = getAppVersion();
+  const whatsNewPending = shouldShowWhatsNew(
+    appVersion,
+    readStorage(LAST_SEEN_VERSION_KEY),
+    !_isFirstRun,
+  );
+  const whatsNewItems = whatsNewHighlights(appVersion) ?? [];
+  if (!whatsNewPending) {
+    writeStorage(LAST_SEEN_VERSION_KEY, appVersion);
+  }
+  let showWhatsNew = $state(false);
+  let whatsNewSeen = $state(false);
+  let whatsNewTimer: ReturnType<typeof setTimeout> | null = null;
+
+  $effect(() => {
+    const ready = whatsNewPending && !whatsNewSeen && !showWhatsNew && isOnGallery && !showOnboarding && !showSettings;
+    if (ready && !whatsNewTimer) {
+      whatsNewTimer = setTimeout(() => {
+        whatsNewTimer = null;
+        if (isOnGallery && !showOnboarding && !showSettings) showWhatsNew = true;
+      }, 1200);
+    } else if (!ready && whatsNewTimer) {
+      clearTimeout(whatsNewTimer);
+      whatsNewTimer = null;
+    }
+  });
+
+  function closeWhatsNew() {
+    showWhatsNew = false;
+    whatsNewSeen = true;
+    writeStorage(LAST_SEEN_VERSION_KEY, appVersion);
+  }
+
+  // Returns true when the action happened in place; the others close the screen and open
+  // the right Settings tab.
+  function whatsNewAction(action: WhatsNewAction): boolean {
+    if (action === "smart") {
+      subtitlePosition = "smart";
+      return true;
+    }
+    closeWhatsNew();
+    selectedTab = action === "features" ? "features" : "ai";
+    showSettings = true;
+    return false;
+  }
   let onboardingModalEl = $state<HTMLDivElement | undefined>(undefined);
   let onboardingError = $state<string | null>(null);
   let onboardingPathsRequestId = 0;
@@ -233,68 +603,6 @@
   });
 
   let onboardingPaths = $state<string[]>([]);
-
-  function trapFocus(node: HTMLElement) {
-    const previous = document.activeElement as HTMLElement | null;
-    const focusableSelector = [
-      "a[href]",
-      "button:not([disabled])",
-      "input:not([disabled])",
-      "select:not([disabled])",
-      "textarea:not([disabled])",
-      "[tabindex]:not([tabindex='-1'])",
-    ].join(",");
-
-    function getFocusable() {
-      return Array.from(node.querySelectorAll<HTMLElement>(focusableSelector))
-        .filter((el) => !el.hasAttribute("disabled") && el.offsetParent !== null);
-    }
-
-    function focusModal() {
-      node.focus();
-    }
-
-    function handleKeydown(event: KeyboardEvent) {
-      if (event.key !== "Tab") return;
-
-      const focusable = getFocusable();
-      if (focusable.length === 0) {
-        event.preventDefault();
-        focusModal();
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-
-      if (event.shiftKey && (active === first || active === node)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-
-    function handleFocusIn(event: FocusEvent) {
-      if (event.target instanceof Node && !node.contains(event.target)) {
-        focusModal();
-      }
-    }
-
-    node.addEventListener("keydown", handleKeydown);
-    document.addEventListener("focusin", handleFocusIn);
-    queueMicrotask(focusModal);
-
-    return {
-      destroy() {
-        node.removeEventListener("keydown", handleKeydown);
-        document.removeEventListener("focusin", handleFocusIn);
-        previous?.focus();
-      },
-    };
-  }
 
   function _obNormPath(p: string): string {
     return p.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '');
@@ -356,16 +664,17 @@
     defaultPlayMode = getDefaultPlayMode(null);
     endBehavior = getEndBehavior(null);
     fadeMode = getFadeMode(null);
+    subtitlePosition = getSubtitlePosition(null);
   }
 
   async function clearPlayerPreferences() {
     skipPlayerPreferencePersist = true;
     resetPlayerPreferences();
-    if (typeof localStorage !== "undefined") {
-      localStorage.removeItem("glucose_default_mode");
-      localStorage.removeItem("glucose_end_behavior");
-      localStorage.removeItem("glucose_fade");
-    }
+    removeStorage("glucose_default_mode");
+    removeStorage("glucose_end_behavior");
+    removeStorage("glucose_fade");
+    removeStorage(SUBTITLE_POSITION_KEY);
+    window.dispatchEvent(new Event(SUBTITLE_POSITION_EVENT));
     await tick();
     skipPlayerPreferencePersist = false;
   }
@@ -376,10 +685,8 @@
 
   // Initialize from localStorage if available
   let lastAutoCheckTime = $state<number>(0);
-  if (typeof localStorage !== "undefined") {
-    const stored = localStorage.getItem("lastAutoCheckTime");
-    lastAutoCheckTime = stored ? parseInt(stored, 10) || 0 : 0;
-  }
+  const storedAutoCheckTime = readStorage("lastAutoCheckTime");
+  lastAutoCheckTime = storedAutoCheckTime ? parseInt(storedAutoCheckTime, 10) || 0 : 0;
 
   // Subscribe to stores
   let settings = $state($appSettings);
@@ -417,12 +724,21 @@
           );
           invoke("mark_file_processed").catch(console.error);
         }),
-        listen<string[]>("tauri://drag-drop", async (event) => {
-          if (event.payload && event.payload.length > 0) {
-            const encodedPath = encodeURIComponent(event.payload[0]);
+        listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
+          const path = event.payload?.paths?.[0];
+          // A drop behind an open dialog or onboarding would navigate away underneath it.
+          if (path && !showOnboarding && !showSettings && !showSetupDialog && !showWhatsNew) {
+            // Checked by the backend: a regular file of a type the player opens, so a folder
+            // named "x.mp4" or a TypeScript ".ts" file is turned away here.
+            if (!(await invoke<boolean>("check_playable_file", { path }).catch(() => false))) {
+              const name = path.split(/[\\/]/).pop();
+              alert(`Glucose can't open "${name}". Drop a video or audio file instead.`);
+              return;
+            }
+            const encodedPath = encodeURIComponent(path);
             const params = new URLSearchParams({ mode: defaultPlayMode });
             await goto(
-              isAudio(event.payload[0])
+              isAudio(path)
                 ? `/audio/${encodedPath}`
                 : `/player/${encodedPath}?${params.toString()}`,
             );
@@ -438,6 +754,15 @@
           downloadProgress = event.payload.percentage;
           downloadMessage = event.payload.message;
         }),
+        listen<{ source: string; target: string; downloaded: number; total: number }>(
+          "translation-model-progress",
+          (event) => {
+            const p = event.payload;
+            if (translationDownload?.pair === pairKey(p) && p.total > 0) {
+              translationDownload = { pair: pairKey(p), percent: Math.min(100, (p.downloaded / p.total) * 100) };
+            }
+          },
+        ),
       ]);
 
       for (const r of results) {
@@ -535,6 +860,8 @@
 
       await invoke("mark_setup_completed");
       await checkSetupStatus();
+      // The last hardware check had no speech model to test; now it can.
+      if (hardwareCheck && hardwareCheck.report.live_model === null) runHardwareCheck(["live", "translation"]);
 
       isDownloading = false;
       downloadProgress = 100;
@@ -565,9 +892,7 @@
 
   function handleAutoCheckTimeUpdate(time: number) {
     lastAutoCheckTime = time;
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem("lastAutoCheckTime", time.toString());
-    }
+    writeStorage("lastAutoCheckTime", time.toString());
   }
 
   function ffmpegLocationLabel(status: SetupStatus) {
@@ -592,7 +917,38 @@
   </div>
 {/if}
 
-<div style="display: contents" inert={showOnboarding}>{@render children()}</div>
+<div style="display: contents" inert={showOnboarding}>
+  <svelte:boundary
+    onerror={(error, reset) => {
+      console.error("[glucose] Screen crashed:", error);
+      resetCrashedScreen = reset;
+      crashedPath = $page.url.pathname;
+    }}
+  >
+    {@render children()}
+
+    {#snippet failed(error, reset)}
+      <ErrorScreen
+        status={500}
+        message={screenErrorMessage(error)}
+        screen={decodeURIComponentSafe($page.url.pathname)}
+        onHome={() => {
+          // Reset here too: on the library itself, going to "/" may not count as a
+          // navigation, and the error screen would stay.
+          resetCrashedScreen = null;
+          crashedPath = null;
+          reset();
+          goto("/", { replaceState: true });
+        }}
+        onRetry={() => {
+          resetCrashedScreen = null;
+          crashedPath = null;
+          reset();
+        }}
+      />
+    {/snippet}
+  </svelte:boundary>
+</div>
 
 <svelte:window onkeydown={(e) => {
   if (e.key === 'Escape') {
@@ -652,6 +1008,14 @@
           >
             <Play size={18} />
             <span>Player</span>
+          </button>
+          <button
+            class="sidebar-tab"
+            class:active={selectedTab === "features"}
+            onclick={() => (selectedTab = "features")}
+          >
+            <Activity size={18} />
+            <span>Features</span>
           </button>
           <button
             class="sidebar-tab"
@@ -887,6 +1251,7 @@
                   <div class="settings-item-action">
                     <select
                       class="language-select"
+                      aria-label="Subtitle language"
                       bind:value={settings.subtitleLanguage}
                       onchange={(e) =>
                         appSettings.updateSubtitleLanguage(
@@ -910,6 +1275,155 @@
                       <option value="pl">Polish</option>
                       <option value="tr">Turkish</option>
                     </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Live Subtitles</h3>
+              <div class="settings-group">
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">Auto-start when no subtitles are found</div>
+                    <div class="settings-item-desc">
+                      If a video has no subtitle file or embedded track, generate subtitles live as it plays.
+                    </div>
+                    {#if featureWarnings.live}
+                      <div class="hw-warning">{featureWarnings.live}</div>
+                    {/if}
+                  </div>
+                  <div class="settings-item-action">
+                    <button
+                      class="toggle-switch"
+                      class:on={autoLiveSubtitles}
+                      role="switch"
+                      aria-checked={autoLiveSubtitles}
+                      aria-label="Auto-start live subtitles when no subtitles are found"
+                      onclick={toggleAutoLiveSubtitles}
+                    >
+                      <span class="toggle-knob"></span>
+                    </button>
+                  </div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">When subtitles aren't ready yet</div>
+                    <div class="settings-item-desc">
+                      Keep the video playing, or pause it until subtitles for that moment are generated.
+                    </div>
+                  </div>
+                  <div class="settings-item-action">
+                    <select
+                      class="language-select"
+                      aria-label="When subtitles aren't ready yet"
+                      value={liveSubtitleWait}
+                      onchange={(e) => setLiveSubtitleWait((e.target as HTMLSelectElement).value)}
+                    >
+                      <option value="play">Keep playing</option>
+                      <option value="pause">Pause until ready</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">Translate live subtitles</div>
+                    <div class="settings-item-desc">
+                      English speech into the language you pick, or German, French, Spanish, Italian, Dutch, Russian and Turkish speech into English. Runs on your device and applies the next time live subtitles start.
+                    </div>
+                    {#if featureWarnings.translation}
+                      <div class="hw-warning">{featureWarnings.translation}</div>
+                    {/if}
+                    {#if missingTranslationModels.length > 0}
+                      <div class="hw-warning">
+                        {missingTranslationModels.length === 1
+                          ? `Needs the ${pairLabel(missingTranslationModels[0])} model. Download it under Translation models below.`
+                          : "Needs at least one model translating into English. Download one under Translation models below."}
+                      </div>
+                    {/if}
+                  </div>
+                  <div class="settings-item-action">
+                    <select
+                      class="language-select"
+                      aria-label="Translate live subtitles"
+                      value={liveTranslate}
+                      onchange={(e) => setLiveTranslate((e.target as HTMLSelectElement).value)}
+                    >
+                      <option value="off">Off</option>
+                      <option value="de">German</option>
+                      <option value="fr">French</option>
+                      <option value="es">Spanish</option>
+                      <option value="ru">Russian</option>
+                      <option value="tr">Turkish</option>
+                      <option value="it">Italian</option>
+                      <option value="nl">Dutch</option>
+                      <option value="en">English</option>
+                    </select>
+                  </div>
+                </div>
+                {#if liveTranslate !== "off"}
+                  <div class="settings-item">
+                    <div class="settings-item-label">
+                      <div class="settings-item-title">Show original subtitles too</div>
+                      <div class="settings-item-desc">
+                        Show the original line, smaller, under the translation.
+                      </div>
+                    </div>
+                    <div class="settings-item-action">
+                      <button
+                        class="toggle-switch"
+                        class:on={liveDualSubtitles}
+                        role="switch"
+                        aria-checked={liveDualSubtitles}
+                        aria-label="Show original subtitles under the translation"
+                        onclick={toggleLiveDualSubtitles}
+                      >
+                        <span class="toggle-knob"></span>
+                      </button>
+                    </div>
+                  </div>
+                {/if}
+                <div class="settings-item translation-models">
+                  <div class="settings-item-label">
+                    <div class="settings-item-title">Translation models</div>
+                    <div class="settings-item-desc">
+                      One model per language pair, about 20 MB each, stored on this PC. Download the
+                      ones you want to translate with.
+                    </div>
+                    {#if translationModelError}
+                      <div class="hw-error">{translationModelError}</div>
+                    {/if}
+                    <div class="tm-list">
+                      {#each translationModels as model (pairKey(model))}
+                        {@const busy = translationDownload?.pair === pairKey(model)}
+                        <div class="tm-row" class:tm-needed={missingTranslationModels.some((m) => pairKey(m) === pairKey(model))}>
+                          <span class="tm-name">{pairLabel(model)}</span>
+                          {#if busy}
+                            <span class="tm-progress">
+                              <span
+                                class="tm-bar"
+                                role="progressbar"
+                                aria-label="Downloading the {pairLabel(model)} model"
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-valuenow={Math.round(translationDownload?.percent ?? 0)}
+                              ><span style="width: {translationDownload?.percent ?? 0}%"></span></span>
+                              {Math.round(translationDownload?.percent ?? 0)}%
+                            </span>
+                          {:else if model.installed}
+                            <span class="tm-installed">Installed</span>
+                            <button class="tm-btn tm-remove" onclick={() => deleteTranslationModel(model)}>Remove</button>
+                          {:else}
+                            <button
+                              class="tm-btn"
+                              disabled={translationDownload !== null}
+                              title={translationDownload !== null ? "One model downloads at a time" : undefined}
+                              onclick={() => downloadTranslationModel(model)}
+                            >Download · {model.size_mb} MB</button>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1099,6 +1613,16 @@
               bind:value={fadeMode}
               options={fadeModeOptions}
             />
+            <PlayerPreferencesPicker
+              id="subtitle-position"
+              label="Subtitle Position"
+              description="Choose where subtitles appear. Smart keeps them off on-screen text, faces and bright parts of the picture."
+              bind:value={subtitlePosition}
+              options={subtitlePositionOptions}
+            />
+            {#if featureWarnings.smart}
+              <p class="hw-warning subtitle-position-warning">Smart: {featureWarnings.smart}</p>
+            {/if}
             <div class="reset-prefs-row">
               <button class="reset-prefs-btn" onclick={resetPlayerPreferences}>
                 <RotateCcw size={13} />
@@ -1107,6 +1631,100 @@
               <button class="reset-prefs-btn reset-prefs-btn--clear" onclick={clearPlayerPreferences}>
                 Clear preferences
               </button>
+            </div>
+          {:else if selectedTab === "features"}
+            <div class="settings-section">
+              <h3>Features on this PC</h3>
+              <p class="settings-description">
+                Glucose tested how well the heavier features run on this computer.
+                {#if hardwareCheck?.turnedOff.length}
+                  Features it found "Not recommended" were turned off; you can still turn them on
+                  in their settings.
+                {/if}
+              </p>
+
+              {#if hardwareCheck}
+                {@const r = hardwareCheck.report}
+                <div class="hw-tiles">
+                  <div class="hw-tile">
+                    <Cpu size={18} />
+                    <div>
+                      <div class="hw-tile-label">Processor</div>
+                      <div class="hw-tile-value">{r.cpu_name ? displayHardwareName(r.cpu_name) : "Unknown"}</div>
+                    </div>
+                  </div>
+                  <div class="hw-tile">
+                    <Layers size={18} />
+                    <div>
+                      <div class="hw-tile-label">Threads</div>
+                      <div class="hw-tile-value">{r.threads}</div>
+                    </div>
+                  </div>
+                  <div class="hw-tile">
+                    <MemoryStick size={18} />
+                    <div>
+                      <div class="hw-tile-label">Memory</div>
+                      <div class="hw-tile-value">{r.ram_gb !== null ? `${Math.round(r.ram_gb)} GB` : "Unknown"}</div>
+                    </div>
+                  </div>
+                  <div class="hw-tile">
+                    <Gpu size={18} />
+                    <div>
+                      <div class="hw-tile-label">Graphics</div>
+                      <div class="hw-tile-value">{r.gpu_name ? displayHardwareName(r.gpu_name) : "Unknown"}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="settings-group">
+                  {#each featureAdvice as advice (advice.id)}
+                    <div class="settings-item">
+                      <div class="settings-item-label">
+                        <div class="settings-item-title">{advice.name}</div>
+                        <div class="settings-item-desc">{advice.reason}</div>
+                      </div>
+                      <div class="settings-item-action">
+                        <span class="verdict-chip verdict-{advice.verdict}">{VERDICT_LABELS[advice.verdict]}</span>
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+
+                {#if hardwareCheck.turnedOff.length > 0}
+                  <p class="hw-note">
+                    Turned off after checking: {hardwareCheck.turnedOff
+                      .map((id) => FEATURE_TURNED_OFF_NAMES[id])
+                      .join(", ")}.
+                  </p>
+                {/if}
+                <p class="hw-note">
+                  Results are lower while other programs keep the PC busy. Close heavy apps and
+                  check again for the best result.
+                </p>
+              {:else if !hardwareChecking}
+                <p class="hw-note">This PC has not been checked yet.</p>
+              {/if}
+
+              {#if hardwareCheckError}
+                <p class="hw-error">The check failed: {hardwareCheckError}</p>
+              {/if}
+
+              <div class="hw-actions">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={hardwareChecking}
+                  disabled={hardwareChecking}
+                  onclick={() => runHardwareCheck()}
+                >
+                  {hardwareChecking ? "Checking..." : hardwareCheck ? "Check again" : "Check now"}
+                </Button>
+                {#if hardwareChecking}
+                  <span class="hw-note">This takes a few seconds, up to a minute on slower PCs.</span>
+                {:else if hardwareCheck}
+                  <span class="hw-note">Last checked {new Date(hardwareCheck.checkedAt).toLocaleString()}</span>
+                {/if}
+              </div>
             </div>
           {:else if selectedTab === "shortcuts"}
             <div class="settings-section">
@@ -1450,6 +2068,10 @@
       {/if}
     </div>
   </div>
+{/if}
+
+{#if appReady && showWhatsNew}
+  <WhatsNew version={appVersion} highlights={whatsNewItems} onAction={whatsNewAction} onClose={closeWhatsNew} />
 {/if}
 
 <!-- First-Run Onboarding -->
@@ -1802,6 +2424,49 @@
   .language-select:hover {
     background-color: rgba(255, 255, 255, 0.1);
     border-color: rgba(255, 255, 255, 0.3);
+  }
+
+  .toggle-switch {
+    position: relative;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+    padding: 0;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+
+  .toggle-switch:hover {
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+
+  .toggle-switch:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.6);
+    outline-offset: 2px;
+  }
+
+  .toggle-switch.on {
+    background: #fff;
+    border-color: #fff;
+  }
+
+  .toggle-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.7);
+    transition: transform 0.2s ease, background 0.2s ease;
+  }
+
+  .toggle-switch.on .toggle-knob {
+    transform: translateX(18px);
+    background: #000;
   }
 
   .language-select option {
@@ -2522,6 +3187,202 @@
   .setup-warning a {
     color: var(--color-accent);
     text-decoration: underline;
+  }
+
+  /* Translation models */
+  .tm-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    margin-top: 0.875rem;
+  }
+
+  .tm-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid transparent;
+  }
+
+  .tm-row.tm-needed {
+    border-color: rgba(242, 196, 109, 0.35);
+  }
+
+  .tm-name {
+    flex: 1;
+    font-size: 0.8125rem;
+    color: #fff;
+  }
+
+  .tm-installed {
+    font-size: 0.75rem;
+    color: #7ee2a8;
+  }
+
+  .tm-btn {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 0.3rem 0.65rem;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.06);
+    color: #fff;
+    cursor: pointer;
+  }
+
+  .tm-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .tm-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .tm-btn.tm-remove {
+    background: none;
+    border-color: transparent;
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .tm-btn.tm-remove:hover {
+    color: #f08a8a;
+    background: none;
+  }
+
+  .tm-progress {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  .tm-bar {
+    width: 90px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+  }
+
+  .tm-bar span {
+    display: block;
+    height: 100%;
+    background: var(--color-accent, #a78bfa);
+  }
+
+  /* Features tab */
+  .hw-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .hw-tile {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.875rem 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    color: rgba(255, 255, 255, 0.55);
+    min-width: 0;
+  }
+
+  .hw-tile > div {
+    min-width: 0;
+  }
+
+  .hw-tile :global(svg) {
+    flex-shrink: 0;
+    margin-top: 0.125rem;
+  }
+
+  .hw-tile-label {
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.45);
+    margin-bottom: 0.2rem;
+  }
+
+  .hw-tile-value {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #fff;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .verdict-chip {
+    white-space: nowrap;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.625rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+  }
+
+  .verdict-good {
+    color: #7ee2a8;
+    background: rgba(126, 226, 168, 0.1);
+    border-color: rgba(126, 226, 168, 0.3);
+  }
+
+  .verdict-slow {
+    color: #f2c46d;
+    background: rgba(242, 196, 109, 0.1);
+    border-color: rgba(242, 196, 109, 0.3);
+  }
+
+  .verdict-poor {
+    color: #f08a8a;
+    background: rgba(240, 138, 138, 0.1);
+    border-color: rgba(240, 138, 138, 0.3);
+  }
+
+  .verdict-unknown {
+    color: rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .hw-note {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.45);
+    margin: 0 0 0.75rem 0;
+  }
+
+  .hw-warning {
+    font-size: 0.75rem;
+    color: #f2c46d;
+    margin-top: 0.375rem;
+  }
+
+  .subtitle-position-warning {
+    margin: -0.5rem 0 1rem 0;
+  }
+
+  .hw-error {
+    font-size: 0.8125rem;
+    color: rgba(239, 68, 68, 0.9);
+    margin: 0 0 0.75rem 0;
+  }
+
+  .hw-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .hw-actions .hw-note {
+    margin: 0;
   }
 
   /* Reset preferences */
