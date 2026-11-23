@@ -59,15 +59,14 @@
     { label: 'Orange', value: '#ff9500' },
   ];
 
-  // The preset's own text color leads the swatches when it is not one of them (Highlight's
-  // dark text, Minimal's soft white), so it can be chosen again after trying another.
+  // The preset's own text color leads the big line's swatches when it is not one of them
+  // (Highlight's dark text, Minimal's soft white), so it can be chosen again after trying
+  // another. The small line needs no such swatch: "Same as big" follows the big line.
   let presetColor = $derived(
     SUBTITLE_PRESETS.find((p) => p.id === $subtitleStyleStore.presetId)?.color ?? null,
   );
-  let colorChoices = $derived(
-    presetColor && !TEXT_COLORS.some((c) => c.value === presetColor)
-      ? [{ label: 'Preset color', value: presetColor }, ...TEXT_COLORS]
-      : TEXT_COLORS,
+  let extraPresetColor = $derived(
+    presetColor && !TEXT_COLORS.some((c) => c.value === presetColor) ? presetColor : null,
   );
 
   function previewTextStyle(preset: SubtitleStyle): string {
@@ -182,7 +181,17 @@
     <div class="control-row">
       <span class="control-label">Color</span>
       <div class="color-swatches">
-        {#each colorChoices as tc}
+        {#if extraPresetColor}
+          <button
+            class="color-swatch preset-swatch"
+            class:active={$activeSubtitleStyle.color === extraPresetColor}
+            style="background-color: {extraPresetColor};"
+            title="Preset color"
+            aria-label="Color: preset color"
+            onclick={() => subtitleStyleStore.customize({ color: extraPresetColor })}
+          ></button>
+        {/if}
+        {#each TEXT_COLORS as tc}
           <button
             class="color-swatch"
             class:active={$activeSubtitleStyle.color === tc.value}
@@ -254,7 +263,7 @@
           aria-label="Small line color: same as the big line"
           onclick={() => subtitleStyleStore.customize({ secondaryColor: '' })}
         >Same as big</button>
-        {#each colorChoices as tc}
+        {#each TEXT_COLORS as tc}
           <button
             class="color-swatch"
             class:active={$activeSubtitleStyle.secondaryColor === tc.value}
@@ -498,9 +507,9 @@
     border-color: #fff;
   }
 
-  /* A faint ring, so a dark color (Highlight's text) still shows on the dark panel. */
-  .color-swatch:not(.active) {
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+  /* A faint ring, so a dark preset color (Highlight's text) still shows on the dark panel. */
+  .color-swatch.preset-swatch:not(.active) {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
   }
 
   .section-head {
