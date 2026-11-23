@@ -194,47 +194,6 @@
       </div>
     </div>
 
-    <!-- The small line, shown under the big one when two subtitle tracks are on. -->
-    <div class="control-row">
-      <span class="control-label">Small line</span>
-      <div class="slider-row">
-        <input
-          type="range"
-          min="50"
-          max="100"
-          step="1"
-          aria-label="Small line size"
-          value={Math.round(($activeSubtitleStyle.secondaryScale ?? DEFAULT_SECONDARY_SCALE) * 100)}
-          oninput={(e) => subtitleStyleStore.customize({ secondaryScale: +e.currentTarget.value / 100 })}
-        />
-        <span class="slider-value">{Math.round(($activeSubtitleStyle.secondaryScale ?? DEFAULT_SECONDARY_SCALE) * 100)}%</span>
-      </div>
-    </div>
-
-    <div class="control-row">
-      <span class="control-label">Small color</span>
-      <div class="color-swatches">
-        <button
-          class="color-swatch same-swatch"
-          class:active={!$activeSubtitleStyle.secondaryColor}
-          style="background-color: {$activeSubtitleStyle.color};"
-          title="Same as the big line"
-          aria-label="Small line color: same as the big line"
-          onclick={() => subtitleStyleStore.customize({ secondaryColor: '' })}
-        >=</button>
-        {#each TEXT_COLORS as tc}
-          <button
-            class="color-swatch"
-            class:active={$activeSubtitleStyle.secondaryColor === tc.value}
-            style="background-color: {tc.value};"
-            title={tc.label}
-            aria-label="Small line color: {tc.label}"
-            onclick={() => subtitleStyleStore.customize({ secondaryColor: tc.value })}
-          ></button>
-        {/each}
-      </div>
-    </div>
-
     <div class="control-row">
       <span class="control-label">Font</span>
       <div class="font-buttons">
@@ -245,6 +204,54 @@
             style="font-family: {ff.value};"
             onclick={() => subtitleStyleStore.customize({ fontFamily: ff.value })}
           >{ff.label}</button>
+        {/each}
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-divider"></div>
+
+  <!-- The small line: the second subtitle, shown under the big one when two are on. -->
+  <div class="customizations">
+    <div class="section-head">
+      <span class="section-title">Small line</span>
+      <span class="section-hint">The second subtitle, under the first</span>
+    </div>
+
+    <div class="control-row">
+      <span class="control-label">Size</span>
+      <div class="slider-row">
+        <input
+          type="range"
+          min="50"
+          max="100"
+          step="1"
+          aria-label="Small line size, compared with the big line"
+          value={Math.round(($activeSubtitleStyle.secondaryScale ?? DEFAULT_SECONDARY_SCALE) * 100)}
+          oninput={(e) => subtitleStyleStore.customize({ secondaryScale: +e.currentTarget.value / 100 })}
+        />
+        <span class="slider-value" title="Compared with the big line">{Math.round(($activeSubtitleStyle.secondaryScale ?? DEFAULT_SECONDARY_SCALE) * 100)}%</span>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <span class="control-label">Color</span>
+      <div class="color-swatches">
+        <button
+          class="same-btn"
+          class:active={!$activeSubtitleStyle.secondaryColor}
+          aria-label="Small line color: same as the big line"
+          onclick={() => subtitleStyleStore.customize({ secondaryColor: '' })}
+        >Same as big</button>
+        {#each TEXT_COLORS as tc}
+          <button
+            class="color-swatch"
+            class:active={$activeSubtitleStyle.secondaryColor === tc.value}
+            style="background-color: {tc.value};"
+            title={tc.label}
+            aria-label="Small line color: {tc.label}"
+            onclick={() => subtitleStyleStore.customize({ secondaryColor: tc.value })}
+          ></button>
         {/each}
       </div>
     </div>
@@ -480,14 +487,45 @@
     border-color: #fff;
   }
 
-  /* "Same as the big line": the big line's color with an = on it. */
-  .color-swatch.same-swatch {
-    display: grid;
-    place-items: center;
-    font-size: 11px;
-    font-weight: 700;
-    line-height: 1;
-    color: rgba(0, 0, 0, 0.7);
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+
+  .section-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .section-hint {
+    font-size: 0.68rem;
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  /* "Same as big": the small line follows the big line's color. */
+  .same-btn {
+    height: 20px;
+    padding: 0 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 999px;
+    background: none;
+    color: rgba(255, 255, 255, 0.7);
+    font: inherit;
+    font-size: 0.68rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .same-btn:hover {
+    border-color: rgba(255, 255, 255, 0.35);
+    color: #fff;
+  }
+
+  .same-btn.active {
+    border-color: #fff;
+    color: #fff;
   }
 
   .color-picker-label {
