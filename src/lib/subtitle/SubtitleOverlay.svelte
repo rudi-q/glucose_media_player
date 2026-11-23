@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { ArrowUpDown, X } from 'lucide-svelte';
   import { activeSubtitleStyle } from '$lib/subtitle/subtitleStyleStore';
-  import { parseVtt, type VttCue } from '$lib/subtitle/vttParser';
+  import { DEFAULT_SECONDARY_SCALE } from '$lib/subtitle/subtitlePresets';
+  import type { VttCue } from '$lib/subtitle/vttParser';
   import {
     choosePlacement,
     preloadFaceDetection,
@@ -8,28 +10,98 @@
     type SubtitlePlacement,
   } from '$lib/subtitle/smartPosition';
 
-  let { vttContent, currentTime, enabled, videoElement, liveCues = null, secondaryCues = null, placeholder = null, smartPosition = false }: {
-    vttContent: string | null;
+  // What the hover chip shows about a line.
+  export interface SubtitleLineInfo {
+    label: string;
+    detail: string;
+    // Timing shift in seconds; the cues passed in are already shifted by it.
+    offset: number;
+  }
+
+  let {
+    primaryCues,
+    secondaryCues = null,
+    currentTime,
+    enabled,
+    videoElement,
+    placeholder = null,
+    smartPosition = false,
+    primaryInfo = null,
+    secondaryInfo = null,
+    interactive = false,
+    onSwap,
+    onNudge,
+    onResetSync,
+    onRemove,
+    onLineClick,
+    onHoverChange,
+  }: {
+    // The big line.
+    primaryCues: VttCue[] | null;
+    // The small line, shown under the big one.
+    secondaryCues?: VttCue[] | null;
     currentTime: number;
     enabled: boolean;
     videoElement: HTMLVideoElement | undefined;
-    // Live subtitles replace the loaded track while active.
-    liveCues?: VttCue[] | null;
-    // Shown smaller under the main cues, e.g. the original lines of translated subtitles.
-    secondaryCues?: VttCue[] | null;
     // Shown when no cue is active, e.g. while live subtitles are still being generated.
     placeholder?: string | null;
     // Move cues to the top while the bottom of the picture is bright or busy.
     smartPosition?: boolean;
+    // Set for each line that has a track; the hover chip names it.
+    primaryInfo?: SubtitleLineInfo | null;
+    secondaryInfo?: SubtitleLineInfo | null;
+    // Whether the lines take the mouse (while the player controls show).
+    interactive?: boolean;
+    onSwap?: () => void;
+    onNudge?: (line: 0 | 1, seconds: number) => void;
+    onResetSync?: (line: 0 | 1) => void;
+    onRemove?: (line: 0 | 1) => void;
+    // A click on the subtitle text itself, which would otherwise have reached the video.
+    onLineClick?: () => void;
+    // Whether the mouse rests on a line or its chip, so the player keeps its controls
+    // (and with them the chip) showing meanwhile.
+    onHoverChange?: (hovering: boolean) => void;
   } = $props();
 
-  let cues = $derived(liveCues ?? (vttContent ? parseVtt(vttContent) : []));
-  let activeCues = $derived(cues.filter(c => currentTime >= c.start && currentTime < c.end));
+  // The line the mouse is on. A line can vanish under the mouse when its cue ends, which
+  // fires no mouseleave, so that also ends the hover.
+  let hoveredLine = $state<0 | 1 | null>(null);
+  $effect(() => {
+    if (
+      !enabled ||
+      !interactive ||
+      (hoveredLine === 0 && activeCues.length === 0) ||
+      (hoveredLine === 1 && activeSecondary.length === 0)
+    ) {
+      hoveredLine = null;
+    }
+  });
+  let reportedHover = false;
+  $effect(() => {
+    const hovering = hoveredLine !== null;
+    if (hovering !== reportedHover) {
+      reportedHover = hovering;
+      onHoverChange?.(hovering);
+    }
+  });
+
+  const SYNC_STEP = 0.25;
+
+  let activeCues = $derived((primaryCues ?? []).filter(c => currentTime >= c.start && currentTime < c.end));
   let activeSecondary = $derived(
     (secondaryCues ?? []).filter(c => currentTime >= c.start && currentTime < c.end)
   );
   let showPlaceholder = $derived(activeCues.length === 0 && activeSecondary.length === 0 && !!placeholder);
+  // With two tracks on, the small line keeps its space while it has nothing to show, so
+  // the big line does not move each time a small cue comes and goes.
+  let dual = $derived(!!primaryInfo && !!secondaryInfo);
   let style = $derived($activeSubtitleStyle);
+  let secondaryScale = $derived(style.secondaryScale ?? DEFAULT_SECONDARY_SCALE);
+
+  function formatOffset(seconds: number): string {
+    if (seconds === 0) return 'Sync 0.00s';
+    return `${seconds > 0 ? '+' : '−'}${Math.abs(seconds).toFixed(2)}s`;
+  }
 
   // Smart position: decided once when a new set of cues appears, never while one is shown.
   // Cues stay hidden while the frame is scored (usually 20-50 ms with face detection), so
@@ -215,11 +287,10 @@
     return Array.from(template.content.childNodes).map(serializeCueNode).join('');
   }
 
-  // Secondary lines are this much smaller than the main ones.
-  const SECONDARY_SCALE = 0.72;
-
-  function cueTextStyle(s: typeof style, scale = 1): string {
-    let css = `font-family: ${s.fontFamily}; font-size: ${s.fontSize * scale}px; font-weight: ${s.fontWeight}; color: ${s.color}; line-height: ${s.lineHeight}; letter-spacing: ${s.letterSpacing};`;
+  function cueTextStyle(s: typeof style, secondary = false): string {
+    const scale = secondary ? secondaryScale : 1;
+    const color = secondary && s.secondaryColor ? s.secondaryColor : s.color;
+    let css = `font-family: ${s.fontFamily}; font-size: ${s.fontSize * scale}px; font-weight: ${s.fontWeight}; color: ${color}; line-height: ${s.lineHeight}; letter-spacing: ${s.letterSpacing};`;
     if (s.textShadow !== 'none') css += ` text-shadow: ${s.textShadow};`;
     if (s.textStroke !== 'none') css += ` -webkit-text-stroke: ${s.textStroke};`;
     return css;
@@ -240,46 +311,112 @@
   </div>
 {/if}
 
-{#if enabled && (activeCues.length > 0 || activeSecondary.length > 0 || showPlaceholder)}
+{#snippet chip(line: 0 | 1, info: SubtitleLineInfo)}
+  <!-- Shortcuts for this line; everything here is also in the subtitles menu. -->
+  <div class="line-chip" role="toolbar" aria-label="{info.label} subtitles">
+    <span class="chip-label">{info.label}<span class="chip-detail"> · {info.detail}</span></span>
+    {#if dual}
+      <span class="chip-sep"></span>
+      <button
+        class="chip-btn"
+        title="Swap big and small (Alt+C)"
+        aria-label="Swap big and small lines"
+        onclick={(e) => { e.stopPropagation(); onSwap?.(); }}
+      ><ArrowUpDown size={14} /></button>
+    {/if}
+    <span class="chip-sep"></span>
+    <button
+      class="chip-btn"
+      title="Show {SYNC_STEP}s earlier"
+      aria-label="Show {SYNC_STEP} seconds earlier"
+      onclick={(e) => { e.stopPropagation(); onNudge?.(line, -SYNC_STEP); }}
+    >−</button>
+    <button
+      class="chip-btn chip-sync"
+      class:shifted={info.offset !== 0}
+      title={info.offset !== 0 ? 'Reset timing' : 'Timing of this line'}
+      onclick={(e) => { e.stopPropagation(); onResetSync?.(line); }}
+    >{formatOffset(info.offset)}</button>
+    <button
+      class="chip-btn"
+      title="Show {SYNC_STEP}s later"
+      aria-label="Show {SYNC_STEP} seconds later"
+      onclick={(e) => { e.stopPropagation(); onNudge?.(line, SYNC_STEP); }}
+    >+</button>
+    <span class="chip-sep"></span>
+    <button
+      class="chip-btn"
+      title="Turn off this line"
+      aria-label="Turn off {info.label} subtitles"
+      onclick={(e) => { e.stopPropagation(); onRemove?.(line); }}
+    ><X size={14} /></button>
+  </div>
+{/snippet}
+
+{#snippet cueBox(cue: VttCue, secondary: boolean)}
   <div
-    class="subtitle-overlay"
-    style={overlayPositionStyle}
-    aria-live="polite"
-    aria-atomic="true"
+    class="cue-wrapper"
+    class:secondary
+    class:pill={style.backgroundType === 'pill'}
+    class:box={style.backgroundType === 'box'}
+    class:stripe={style.backgroundType === 'stripe'}
+    class:frosted={style.backgroundType === 'frosted'}
+    style={cueWrapperStyle(style)}
   >
+    <span class="cue-text" style={cueTextStyle(style, secondary)}>
+      {@html sanitize(cue.text)}
+    </span>
+  </div>
+{/snippet}
+
+{#if enabled && (activeCues.length > 0 || activeSecondary.length > 0 || showPlaceholder)}
+  <div class="subtitle-overlay" style={overlayPositionStyle}>
     <div
       class="subtitle-cues"
       class:deciding
       style="{placement === 'top' ? 'top' : 'bottom'}: {smartPosition ? SMART_EDGE_OFFSET : style.position}%"
     >
-      {#each activeCues as cue, i (`${i}-${cue.start}-${cue.end}-${cue.text}`)}
+      {#if activeCues.length > 0}
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
         <div
-          class="cue-wrapper"
-          class:pill={style.backgroundType === 'pill'}
-          class:box={style.backgroundType === 'box'}
-          class:stripe={style.backgroundType === 'stripe'}
-          class:frosted={style.backgroundType === 'frosted'}
-          style={cueWrapperStyle(style)}
+          class="subtitle-line big"
+          class:interactive={interactive && !!primaryInfo}
+          onclick={() => onLineClick?.()}
+          onmouseenter={() => (hoveredLine = 0)}
+          onmouseleave={() => { if (hoveredLine === 0) hoveredLine = null; }}
         >
-          <span class="cue-text" style={cueTextStyle(style)}>
-            {@html sanitize(cue.text)}
-          </span>
+          {#if interactive && primaryInfo}{@render chip(0, primaryInfo)}{/if}
+          <div class="line-cues" aria-live="polite" aria-atomic="true">
+            {#each activeCues as cue, i (`${i}-${cue.start}-${cue.end}-${cue.text}`)}
+              {@render cueBox(cue, false)}
+            {/each}
+          </div>
         </div>
-      {/each}
-      {#each activeSecondary as cue, i (`s-${i}-${cue.start}-${cue.end}-${cue.text}`)}
+      {/if}
+      {#if activeSecondary.length > 0}
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
         <div
-          class="cue-wrapper secondary"
-          class:pill={style.backgroundType === 'pill'}
-          class:box={style.backgroundType === 'box'}
-          class:stripe={style.backgroundType === 'stripe'}
-          class:frosted={style.backgroundType === 'frosted'}
-          style={cueWrapperStyle(style)}
+          class="subtitle-line small"
+          class:interactive={interactive && !!secondaryInfo}
+          onclick={() => onLineClick?.()}
+          onmouseenter={() => (hoveredLine = 1)}
+          onmouseleave={() => { if (hoveredLine === 1) hoveredLine = null; }}
         >
-          <span class="cue-text" style={cueTextStyle(style, SECONDARY_SCALE)}>
-            {@html sanitize(cue.text)}
-          </span>
+          {#if interactive && secondaryInfo}{@render chip(1, secondaryInfo)}{/if}
+          <div class="line-cues" aria-live="polite" aria-atomic="true">
+            {#each activeSecondary as cue, i (`s-${i}-${cue.start}-${cue.end}-${cue.text}`)}
+              {@render cueBox(cue, true)}
+            {/each}
+          </div>
         </div>
-      {/each}
+      {:else if dual && activeCues.length > 0}
+        <!-- The small line's space, held while it has nothing to show. -->
+        <div
+          class="cue-wrapper secondary reserved"
+          aria-hidden="true"
+          style="font-size: {style.fontSize * secondaryScale}px; line-height: {style.lineHeight};"
+        >&nbsp;</div>
+      {/if}
       {#if showPlaceholder}
         <div class="cue-wrapper placeholder">
           <span class="cue-text">{placeholder}</span>
@@ -342,6 +479,105 @@
   .cue-wrapper.frosted { border-radius: 8px; padding: 0.25em 0.7em; border: 1px solid rgba(255,255,255,0.15); }
   .cue-text { display: block; text-align: center; }
   .cue-wrapper.secondary { opacity: 0.85; }
+  .cue-wrapper.reserved { visibility: hidden; background: none; }
+
+  /* One subtitle line: its cues, plus the chip shown while the mouse rests on them. */
+  .subtitle-line {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    width: 100%;
+  }
+  .line-cues {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    width: 100%;
+  }
+  .subtitle-line.interactive .cue-wrapper {
+    pointer-events: auto;
+    cursor: default;
+  }
+  .line-chip {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 9px;
+    background: rgba(18, 18, 22, 0.88);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    color: rgba(255, 255, 255, 0.9);
+    font: 500 12px/1 'Inter Variable', Inter, system-ui, sans-serif;
+    white-space: nowrap;
+    pointer-events: auto;
+    z-index: 2;
+    opacity: 0;
+    visibility: hidden;
+    /* Hides at once; shows after a short rest, so a mouse passing over does not flash it. */
+    transition: opacity 0.15s ease, visibility 0s linear 0.15s;
+  }
+  .subtitle-line.big .line-chip { bottom: 100%; margin-bottom: 6px; }
+  .subtitle-line.small .line-chip { top: 100%; margin-top: 6px; }
+  /* Bridges the gap to the chip, so moving the mouse onto it keeps it open. */
+  .line-chip::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 8px;
+  }
+  .subtitle-line.big .line-chip::after { top: 100%; }
+  .subtitle-line.small .line-chip::after { bottom: 100%; }
+  .subtitle-line.interactive:has(.cue-wrapper:hover) .line-chip,
+  .line-chip:hover,
+  .line-chip:focus-within {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.15s ease 0.3s, visibility 0s linear 0.3s;
+  }
+  .chip-label {
+    padding: 0 8px 0 6px;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .chip-detail { color: rgba(255, 255, 255, 0.55); }
+  .chip-sep {
+    width: 1px;
+    height: 16px;
+    margin: 0 2px;
+    background: rgba(255, 255, 255, 0.12);
+  }
+  .chip-btn {
+    display: grid;
+    place-items: center;
+    min-width: 26px;
+    height: 26px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.7);
+    font: inherit;
+    cursor: pointer;
+  }
+  .chip-btn:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+  .chip-btn:focus-visible { outline: 2px solid var(--color-accent, #a78bfa); outline-offset: 1px; }
+  .chip-sync {
+    min-width: 72px;
+    font-variant-numeric: tabular-nums;
+    color: #fff;
+  }
+  .chip-sync.shifted { color: #f2b45c; }
   .cue-wrapper.placeholder {
     border-radius: 6px;
     padding: 0.2em 0.6em;

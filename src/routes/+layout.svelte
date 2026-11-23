@@ -1366,7 +1366,8 @@
                     <div class="settings-item-label">
                       <div class="settings-item-title">Show original subtitles too</div>
                       <div class="settings-item-desc">
-                        Show the original line, smaller, under the translation.
+                        When live translation starts, show the original as the small line under
+                        it. You can change either line from the subtitles menu.
                       </div>
                     </div>
                     <div class="settings-item-action">

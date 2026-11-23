@@ -23,6 +23,8 @@
     Minimize2,
     Loader2,
     AlertTriangle,
+    ArrowUpDown,
+    ChevronRight,
   } from "lucide-svelte";
   import {
     appSettings,
@@ -50,8 +52,13 @@
     exitBorderlessFullscreen,
   } from "$lib/utils/windowChrome";
   import { loadSubtitleFile, convertSrtToVtt } from "$lib/utils/subtitles";
-  import SubtitleOverlay from "$lib/subtitle/SubtitleOverlay.svelte";
-  import type { VttCue } from "$lib/subtitle/vttParser";
+  import SubtitleOverlay, { type SubtitleLineInfo } from "$lib/subtitle/SubtitleOverlay.svelte";
+  import { parseVtt, type VttCue } from "$lib/subtitle/vttParser";
+  import {
+    languageFromFileName,
+    languageName,
+    readableFileName,
+  } from "$lib/subtitle/subtitleLanguage";
   import {
     addRange,
     findRange,
@@ -140,13 +147,36 @@
   let previewPosition = $state(0);
   let previewRaf: number | null = null;
 
-  // Subtitle state
-  let subtitleSrc = $state<string | null>(null);
-  let subtitleContent = $state<string | null>(null);
+  // Subtitle state. Two lines can show at once: the big line, and a smaller one under it.
+  // Each holds the id of a subtitle track (see subtitleSources), or null.
+  const LIVE_ID = "live";
+  // The untranslated lines of live subtitles while they are being translated.
+  const LIVE_ORIGINAL_ID = "live-original";
+  const isLiveId = (id: string | null) => id === LIVE_ID || id === LIVE_ORIGINAL_ID;
+  const fileTrackId = (path: string) => `file:${path}`;
+  const embeddedTrackId = (index: number) => `emb:${index}`;
+  let bigLine = $state<string | null>(null);
+  let smallLine = $state<string | null>(null);
+  // Shift+C hides the small line without turning it off.
+  let smallLineHidden = $state(false);
+  // Cues of the file and embedded tracks loaded so far, by track id.
+  let loadedCues = $state.raw<Record<string, VttCue[]>>({});
+  // Timing shift per track, in seconds, set from the menu or the subtitle chip.
+  let subtitleOffsets = $state<Record<string, number>>({});
+  // Subtitle files opened or generated for this video, so they stay listed.
+  interface AddedSubtitleFile {
+    path: string;
+    // The Whisper model, for generated files.
+    generatedWith?: string;
+  }
+  let addedSubtitleFiles = $state<AddedSubtitleFile[]>([]);
+  // The track being loaded from the menu, for a hint while an embedded track extracts.
+  let loadingSubtitleId = $state<string | null>(null);
   let subtitlesEnabled = $state(true);
-  let subtitleFileName = $state<string | null>(null);
   let showSubtitleMenu = $state(false);
   let showSubtitleStylePanel = $state(false);
+  // The menu's Generate / Import section: closed, its three choices, or the model list.
+  let subtitleAddPanel = $state<"closed" | "choices" | "models">("closed");
 
   // Embedded subtitle tracks (populated for MKV and other containers)
   interface EmbeddedSubtitleTrack {
@@ -156,7 +186,6 @@
     title: string | null;
   }
   let embeddedSubtitleTracks = $state<EmbeddedSubtitleTrack[]>([]);
-  let selectedEmbeddedLanguage = $state('en');
 
   // Subtitle files next to the video (or in a Subs folder), including ones whose names
   // differ from the video's but share its title. From subtitle_match.rs.
@@ -199,15 +228,13 @@
   let generationVideoDuration = 0;    // video duration captured at generation start
   let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
   let isCancelling = $state(false);   // true after cancel button clicked, suppresses error alert
-  let showModelSelector = $state(false);
 
-  // Live subtitles: generated ahead of the playhead while the video plays.
-  // While active they replace the loaded subtitle track in the overlay.
+  // Live subtitles: generated ahead of the playhead while the video plays. They run only
+  // while one of the subtitle lines shows them.
   let liveActive = $state(false);
   let liveModel = $state("");
   let liveCues = $state<VttCue[]>([]);
-  // Untranslated cues while translating, shown under the translation when dual
-  // subtitles are on.
+  // Untranslated cues while translating, offered as their own track (LIVE_ORIGINAL_ID).
   let liveOriginalCues = $state<VttCue[]>([]);
   let liveDualSubtitles = $state(false);
   let liveRanges = $state<CoveredRange[]>([]);
@@ -224,13 +251,22 @@
     return () => window.removeEventListener(LIVE_SUBTITLE_WAIT_EVENT, read);
   });
 
+  // "Show original subtitles too" (Settings): when live translation starts, the original
+  // goes on the small line. Turning it on or off in Settings while live translation runs
+  // adds or removes that line at once.
   $effect(() => {
-    const read = () => {
+    liveDualSubtitles = getLiveDualSubtitles(readStorage(LIVE_DUAL_SUBTITLES_KEY));
+    const changed = () => {
       liveDualSubtitles = getLiveDualSubtitles(readStorage(LIVE_DUAL_SUBTITLES_KEY));
+      if (!liveActive || !liveKey?.translateTo) return;
+      if (liveDualSubtitles && !smallLine && bigLine === LIVE_ID) {
+        setSubtitleLines(bigLine, LIVE_ORIGINAL_ID);
+      } else if (!liveDualSubtitles && smallLine === LIVE_ORIGINAL_ID) {
+        setSubtitleLines(bigLine, null);
+      }
     };
-    read();
-    window.addEventListener(LIVE_DUAL_SUBTITLES_EVENT, read);
-    return () => window.removeEventListener(LIVE_DUAL_SUBTITLES_EVENT, read);
+    window.addEventListener(LIVE_DUAL_SUBTITLES_EVENT, changed);
+    return () => window.removeEventListener(LIVE_DUAL_SUBTITLES_EVENT, changed);
   });
 
   let smartSubtitlePosition = $state(false);
@@ -310,7 +346,202 @@
     if (liveState === "loading") return liveLoadingMessage || "Loading speech model...";
     return `Generating ${what}...`;
   });
-  let subtitleLoadId = 0; // Serialize subtitle loads to prevent race conditions
+
+  // ---- Subtitle tracks and the two lines ----
+
+  interface SubtitleSource {
+    id: string;
+    // What the viewer recognizes: the language, or the file name when it has none.
+    label: string;
+    // Where it comes from: "Live", "Embedded · SRT", the file name...
+    detail: string;
+    // English language name, when known; used to point out two lines in one language.
+    language: string | null;
+  }
+
+  function fileName(path: string): string {
+    return path.split(/[/\\]/).pop() || path;
+  }
+
+  function fileSource(path: string, generatedWith?: string): SubtitleSource {
+    const name = fileName(path);
+    const { language, variant } = languageFromFileName(name);
+    const label = language ? (variant ? `${language} (${variant})` : language) : readableFileName(name);
+    const detail = generatedWith ? `Generated · ${generatedWith}` : language ? name : "Subtitle file";
+    return { id: fileTrackId(path), label, detail, language };
+  }
+
+  // Every track either line can show, in menu order: live, embedded, then files.
+  let subtitleSources = $derived.by(() => {
+    const sources: SubtitleSource[] = [];
+    if (liveActive && liveKey) {
+      const spoken = languageName(liveKey.language);
+      const translated = liveKey.translateTo
+        ? LIVE_TRANSLATE_NAMES[liveKey.translateTo as LiveTranslate]
+        : null;
+      sources.push({
+        id: LIVE_ID,
+        label: translated ?? spoken ?? "Live subtitles",
+        detail: translated ? "Live translation" : "Live",
+        language: translated ?? spoken,
+      });
+      if (translated) {
+        sources.push({
+          id: LIVE_ORIGINAL_ID,
+          label: spoken ?? "Original",
+          detail: "Live original",
+          language: spoken,
+        });
+      }
+    }
+    for (const track of embeddedSubtitleTracks) {
+      const language = languageName(track.language);
+      const label = language ?? track.title ?? `Track ${track.index}`;
+      const extra = language && track.title ? ` · ${track.title}` : "";
+      sources.push({
+        id: embeddedTrackId(track.index),
+        label,
+        detail: `Embedded · ${formatCodecLabel(track.codec_name)}${extra}`,
+        language,
+      });
+    }
+    const seen = new Set<string>();
+    for (const file of addedSubtitleFiles) {
+      seen.add(file.path);
+      sources.push(fileSource(file.path, file.generatedWith));
+    }
+    for (const sub of nearbySubtitles) {
+      if (seen.has(sub.path)) continue;
+      seen.add(sub.path);
+      sources.push(fileSource(sub.path));
+    }
+    return sources;
+  });
+
+  function sourceById(id: string | null): SubtitleSource | null {
+    return id ? (subtitleSources.find((s) => s.id === id) ?? null) : null;
+  }
+
+  function cuesForTrack(id: string): VttCue[] | null {
+    if (id === LIVE_ID) return liveActive ? liveCues : null;
+    if (id === LIVE_ORIGINAL_ID) return liveActive ? liveOriginalCues : null;
+    return loadedCues[id] ?? null;
+  }
+
+  function shiftCues(cues: VttCue[] | null, offset: number): VttCue[] | null {
+    if (!cues || offset === 0) return cues;
+    return cues.map((c) => ({ ...c, start: c.start + offset, end: c.end + offset }));
+  }
+
+  let bigLineCues = $derived(
+    bigLine ? shiftCues(cuesForTrack(bigLine), subtitleOffsets[bigLine] ?? 0) : null,
+  );
+  let smallLineCues = $derived(
+    smallLine && !smallLineHidden
+      ? shiftCues(cuesForTrack(smallLine), subtitleOffsets[smallLine] ?? 0)
+      : null,
+  );
+
+  function lineInfo(id: string | null): SubtitleLineInfo | null {
+    const source = sourceById(id);
+    if (!id || !source) return null;
+    return { label: source.label, detail: source.detail, offset: subtitleOffsets[id] ?? 0 };
+  }
+  let bigLineInfo = $derived(lineInfo(bigLine));
+  let smallLineInfo = $derived(smallLineHidden ? null : lineInfo(smallLine));
+  let liveLineShown = $derived(isLiveId(bigLine) || (isLiveId(smallLine) && !smallLineHidden));
+
+  // Sets both lines. A small line without a big one moves up, and live subtitles stop once
+  // neither line shows them, so they do not keep working in the background.
+  function setSubtitleLines(big: string | null, small: string | null) {
+    if (!big && small) {
+      big = small;
+      small = null;
+    }
+    if (big === small) small = null;
+    bigLine = big;
+    smallLine = small;
+    if (!small) smallLineHidden = false;
+    if (big) subtitlesEnabled = true;
+    if (liveActive && !isLiveId(big) && !isLiveId(small)) disableLiveSubtitles();
+    checkLiveWait();
+  }
+
+  // Loads a file or embedded track's cues, once. False when it could not be loaded.
+  async function loadSubtitleTrack(id: string): Promise<boolean> {
+    if (isLiveId(id) || loadedCues[id]) return true;
+    const setupId = videoSetupId;
+    loadingSubtitleId = id;
+    try {
+      let vtt: string | null = null;
+      if (id.startsWith("file:")) {
+        vtt = (await loadSubtitleFile(id.slice("file:".length)))?.vttContent ?? null;
+      } else if (id.startsWith("emb:")) {
+        const videoPath = currentVideoPath ?? data.videoPath;
+        if (!videoPath) return false;
+        try {
+          const srt = await invoke<string>("extract_embedded_subtitle", {
+            videoPath,
+            streamIndex: Number(id.slice("emb:".length)),
+          });
+          vtt = convertSrtToVtt(srt);
+        } catch (err) {
+          console.error("Failed to extract embedded subtitle:", err);
+          alert("Failed to load embedded subtitle: " + err);
+        }
+      }
+      // A newer video replaced this one while it loaded.
+      if (isVideoSetupStale(setupId) || vtt === null) return false;
+      loadedCues = { ...loadedCues, [id]: parseVtt(vtt) };
+      return true;
+    } finally {
+      if (loadingSubtitleId === id) loadingSubtitleId = null;
+    }
+  }
+
+  // Puts a track on a line (0 big, 1 small), or turns the line off with null.
+  async function chooseSubtitle(line: 0 | 1, id: string | null): Promise<boolean> {
+    const setupId = videoSetupId;
+    if (id && !(await loadSubtitleTrack(id))) return false;
+    if (isVideoSetupStale(setupId)) return false;
+    if (line === 0) setSubtitleLines(id, smallLine === id ? null : smallLine);
+    else setSubtitleLines(bigLine, id);
+    return true;
+  }
+
+  // Opens a subtitle file (imported, generated or found next to the video) on the big
+  // line; the small line stays as it is.
+  async function loadSubtitle(path: string, generatedWith?: string) {
+    if (!addedSubtitleFiles.some((f) => f.path === path)) {
+      addedSubtitleFiles = [...addedSubtitleFiles, { path, generatedWith }];
+    }
+    await chooseSubtitle(0, fileTrackId(path));
+  }
+
+  function swapSubtitleLines() {
+    if (bigLine && smallLine) setSubtitleLines(smallLine, bigLine);
+  }
+
+  function toggleSmallLine() {
+    if (smallLine) smallLineHidden = !smallLineHidden;
+  }
+
+  function nudgeSubtitleLine(line: 0 | 1, seconds: number) {
+    const id = line === 0 ? bigLine : smallLine;
+    if (!id) return;
+    const next = Math.round(((subtitleOffsets[id] ?? 0) + seconds) * 100) / 100;
+    subtitleOffsets[id] = Math.max(-30, Math.min(30, next));
+  }
+
+  function resetSubtitleSync(line: 0 | 1) {
+    const id = line === 0 ? bigLine : smallLine;
+    if (id) subtitleOffsets[id] = 0;
+  }
+
+  function formatSubtitleOffset(seconds: number): string {
+    if (seconds === 0) return "0.00s";
+    return `${seconds > 0 ? "+" : "−"}${Math.abs(seconds).toFixed(2)}s`;
+  }
 
   // HEVC codec warning
   let showHevcWarning = $state(false);
@@ -361,17 +592,15 @@
   // Hide the OS cursor once the controls have faded during playback, mirroring
   // the controls-visibility signal. Any mousemove sets showControls = true,
   // which re-reveals the cursor. Kept visible whenever an interactive overlay
-  // is open (context menu, next-video card, generation/conversion, model
-  // picker) and in PiP (separate window) so the user can always click.
+  // is open (context menu, next-video card, conversion) and in PiP (separate
+  // window) so the user can always click.
   let cursorHidden = $derived(
     !showControls &&
       isPlaying &&
       viewMode !== "pip" &&
       !showContextMenu &&
       !showNextVideoOverlay &&
-      !isGeneratingSubtitles &&
-      !isConverting &&
-      !showModelSelector,
+      !isConverting,
   );
 
   // Progress tracking
@@ -501,18 +730,17 @@
     nextVideoNotFound = false;
     revokeNextVideoThumbnail();
 
-    ++subtitleLoadId;
-    if (subtitleSrc && subtitleSrc.startsWith("blob:")) {
-      URL.revokeObjectURL(subtitleSrc);
-    }
-    subtitleSrc = null;
-    subtitleContent = null;
-    subtitleFileName = null;
+    disableLiveSubtitles(false, false);
+    bigLine = null;
+    smallLine = null;
+    smallLineHidden = false;
+    loadedCues = {};
+    subtitleOffsets = {};
+    addedSubtitleFiles = [];
+    loadingSubtitleId = null;
     embeddedSubtitleTracks = [];
     nearbySubtitles = [];
-    selectedEmbeddedLanguage = "en";
     subtitlesEnabled = true;
-    disableLiveSubtitles(false, false);
 
     await cleanupAudioRemuxFiles();
     if (isVideoSetupStale(setupId)) return;
@@ -573,7 +801,7 @@
 
       // Auto-load the first embedded track when no external file was found
       if (!externalSubtitleLoaded && tracks.length > 0) {
-        await loadEmbeddedSubtitle(tracks[0], videoPath);
+        await chooseSubtitle(0, embeddedTrackId(tracks[0].index));
         if (isVideoSetupStale(setupId)) return;
       }
     } catch (err) {
@@ -604,7 +832,7 @@
     // live-capable model is installed and there is audio, so it never surfaces an error
     // by itself.
     if (
-      !subtitleSrc &&
+      !bigLine &&
       embeddedSubtitleTracks.length === 0 &&
       embeddedAudioTracks.length > 0 &&
       getAutoLiveSubtitles(readStorage(AUTO_LIVE_SUBTITLES_KEY)) &&
@@ -808,14 +1036,6 @@
       if (videoElement && currentVideoPath && duration > 0) {
         saveWatchProgress();
       }
-      // Clean up subtitle blob URL
-      if (subtitleSrc && subtitleSrc.startsWith("blob:")) {
-        try {
-          URL.revokeObjectURL(subtitleSrc);
-        } catch (err) {
-          console.error("Failed to revoke subtitle blob URL:", err);
-        }
-      }
       if (liveActive) {
         disableLiveSubtitles(false);
       } else {
@@ -906,6 +1126,18 @@
       return;
     }
 
+    // Alt+C swaps the two subtitle lines; Shift+C hides or shows the small one.
+    if (e.code === "KeyC" && e.altKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      swapSubtitleLines();
+      return;
+    }
+    if (e.code === "KeyC" && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      toggleSmallLine();
+      return;
+    }
+
     // Number keys 0-9 for scrubbing
     if (e.key >= "0" && e.key <= "9") {
       e.preventDefault();
@@ -981,41 +1213,6 @@
     }
   }
 
-  async function loadSubtitle(path: string) {
-    const loadId = ++subtitleLoadId;
-    const result = await loadSubtitleFile(path);
-
-    // Ignore if another load has started while we were awaiting
-    if (loadId !== subtitleLoadId) {
-      if (result?.blobUrl && result.blobUrl.startsWith("blob:")) {
-        URL.revokeObjectURL(result.blobUrl);
-      }
-      return;
-    }
-
-    if (result) {
-      // Revoke previous blob URL if exists
-      if (subtitleSrc && subtitleSrc.startsWith("blob:")) {
-        URL.revokeObjectURL(subtitleSrc);
-      }
-
-      subtitleSrc = result.blobUrl;
-      subtitleContent = result.vttContent;
-      subtitleFileName = result.fileName;
-      selectedEmbeddedLanguage = '';
-      subtitlesEnabled = true;
-      // Live cues take priority over a loaded track, so the chosen file only shows once
-      // live subtitles are off.
-      disableLiveSubtitles();
-    }
-  }
-
-  function formatEmbeddedTrackLabel(track: EmbeddedSubtitleTrack): string {
-    if (track.title) return track.title;
-    if (track.language) return track.language.toUpperCase();
-    return `Track ${track.index}`;
-  }
-
   function formatCodecLabel(codec: string): string {
     switch (codec) {
       case "subrip":
@@ -1032,43 +1229,6 @@
     }
   }
 
-  async function loadEmbeddedSubtitle(
-    track: EmbeddedSubtitleTrack,
-    videoPath = currentVideoPath ?? data.videoPath,
-  ) {
-    if (!videoPath) return;
-    const loadId = ++subtitleLoadId;
-    try {
-      const srtContent = await invoke<string>("extract_embedded_subtitle", {
-        videoPath,
-        streamIndex: track.index,
-      });
-
-      // Ignore if another load has started while we were awaiting
-      if (loadId !== subtitleLoadId) {
-        return;
-      }
-
-      // Revoke previous blob URL to avoid memory leaks
-      if (subtitleSrc && subtitleSrc.startsWith("blob:")) {
-        URL.revokeObjectURL(subtitleSrc);
-      }
-
-      const vttText = convertSrtToVtt(srtContent);
-      const blob = new Blob([vttText], { type: "text/vtt;charset=utf-8" });
-      subtitleSrc = URL.createObjectURL(blob);
-      subtitleContent = vttText;
-      subtitleFileName = formatEmbeddedTrackLabel(track);
-      selectedEmbeddedLanguage = track.language ?? 'en';
-      subtitlesEnabled = true;
-      // As for subtitle files: the chosen track replaces live subtitles.
-      disableLiveSubtitles();
-    } catch (err) {
-      console.error("Failed to extract embedded subtitle:", err);
-      alert("Failed to load embedded subtitle: " + err);
-    }
-  }
-
   async function openSubtitleDialog() {
     const result = await invoke<string | null>("open_subtitle_dialog");
     if (result) {
@@ -1077,7 +1237,7 @@
   }
 
   function toggleSubtitles() {
-    if (!subtitleSrc && !liveActive) return;
+    if (!bigLine) return;
     subtitlesEnabled = !subtitlesEnabled;
     checkLiveWait();
   }
@@ -1376,16 +1536,7 @@
     }
     if (showSubtitleMenu && !target.closest(".subtitle-control")) {
       showSubtitleMenu = false;
-    }
-    if (
-      showModelSelector &&
-      !(
-        target.closest(".ai-subtitle-generator") ||
-        target.closest(".subtitle-control") ||
-        target.closest(".model-selector")
-      )
-    ) {
-      showModelSelector = false;
+      subtitleAddPanel = "closed";
     }
     if (showContextMenu && !target.closest(".context-menu")) {
       showContextMenu = false;
@@ -1997,9 +2148,7 @@
 
   function toggleSubtitleMenu() {
     showSubtitleMenu = !showSubtitleMenu;
-    if (showSubtitleMenu) {
-      showModelSelector = false;
-    }
+    subtitleAddPanel = "closed";
   }
 
   // Checks run when a video opens and whenever the model menu opens; only the latest one
@@ -2024,13 +2173,10 @@
   // session reports its own.
   let livePreferredModel = "";
 
-  function openAIFromUnifiedMenu() {
-    showSubtitleMenu = false;
-    // A model may have been downloaded since the video opened.
-    refreshLiveModelAvailable();
-    setTimeout(() => {
-      showModelSelector = true;
-    }, 0);
+  function toggleSubtitleAddPanel() {
+    subtitleAddPanel = subtitleAddPanel === "closed" ? "choices" : "closed";
+    // A live model may have been downloaded since the video opened.
+    if (subtitleAddPanel !== "closed") refreshLiveModelAvailable();
   }
 
   async function startSubtitleGeneration(modelSize: string) {
@@ -2050,7 +2196,7 @@
       return;
     }
 
-    showModelSelector = false;
+    subtitleAddPanel = "closed";
     isGeneratingSubtitles = true;
     generationProgress = 0;
     generationMessage = "Starting subtitle generation...";
@@ -2076,8 +2222,13 @@
         writeStorage(`glucose_whisper_coef_${modelSize}`, String(coefficient));
       }
 
-      // Auto-load the generated subtitle
-      await loadSubtitle(subtitlePath);
+      // Show the generated subtitles on the big line, named by the model that made them.
+      const modelName: Record<string, string> = {
+        tiny: "Tiny",
+        small: "Small",
+        "large-v3-turbo": "Large V3 Turbo",
+      };
+      await loadSubtitle(subtitlePath, modelName[modelSize] ?? modelSize);
     } catch (err) {
       if (!isCancelling && String(err) !== "cancelled") {
         console.error("Failed to generate subtitles:", err);
@@ -2149,21 +2300,27 @@
   function enableLiveSubtitles(auto = false) {
     if (!currentVideoPath) return;
     liveAutoStarted = auto;
-    showModelSelector = false;
     showSubtitleMenu = false;
+    subtitleAddPanel = "closed";
     liveActive = true;
     liveState = "loading";
     liveLoadingMessage = "";
     liveError = null;
-    subtitlesEnabled = true;
+    const translateTo = getLiveTranslate(readStorage(LIVE_TRANSLATE_KEY));
     loadLiveSession(
       {
         videoPath: currentVideoPath,
         audioStreamIndex: selectedAudioTrackIndex,
         language: $appSettings.subtitleLanguage,
-        translateTo: getLiveTranslate(readStorage(LIVE_TRANSLATE_KEY)),
+        translateTo,
       },
       videoElement?.currentTime ?? 0,
+    );
+    // Live subtitles go on the big line, as any new track does. With translation and
+    // "Show original subtitles too" on, the original takes the small line.
+    setSubtitleLines(
+      LIVE_ID,
+      translateTo && liveDualSubtitles ? LIVE_ORIGINAL_ID : smallLine,
     );
   }
 
@@ -2175,6 +2332,14 @@
     liveSession = 0;
     invoke("stop_live_subtitles", { unload: false, request: newLiveRequest() }).catch(() => {});
     liveKey = key;
+    // Without translation there are no separate original lines (auto-start falls back to
+    // that when the translation model is missing).
+    if (!key.translateTo && (bigLine === LIVE_ORIGINAL_ID || smallLine === LIVE_ORIGINAL_ID)) {
+      const keep = [bigLine, smallLine].filter((id) => id !== LIVE_ORIGINAL_ID);
+      bigLine = keep[0] ?? null;
+      smallLine = keep[1] ?? null;
+      if (!bigLine) bigLine = LIVE_ID;
+    }
     // A press of play during an earlier wait does not carry over to this session.
     liveWaitOverride = false;
     liveWorkerPos = 0;
@@ -2249,15 +2414,21 @@
     }).catch((err) => console.warn("Failed to save live subtitle cache:", err));
   }
 
-  // Turning live mode off restores whatever subtitle track was loaded before. A wait
-  // for subtitles ends with it; `resume` is false when the video itself is going away.
-  // `unload` is false when another video is opening, so the models stay in memory in
-  // case live mode starts again for it; they are released when the player closes.
+  // Turning live mode off takes it off both subtitle lines; another track on the small
+  // line moves up. A wait for subtitles ends with it; `resume` is false when the video
+  // itself is going away. `unload` is false when another video is opening, so the models
+  // stay in memory in case live mode starts again for it; they are released when the
+  // player closes.
   function disableLiveSubtitles(resume = true, unload = true) {
     if (!liveActive) return;
     flushLiveCache();
     liveKey = null;
     liveActive = false;
+    // Set directly rather than through setSubtitleLines, which calls this function.
+    const keep = [bigLine, smallLine].filter((id) => id && !isLiveId(id));
+    bigLine = keep[0] ?? null;
+    smallLine = keep[1] ?? null;
+    if (!smallLine) smallLineHidden = false;
     if (resume) endLiveWait();
     else liveWaiting = false;
     liveCues = [];
@@ -2477,14 +2648,22 @@
     ></video>
 
     <SubtitleOverlay
-      vttContent={subtitleContent}
+      primaryCues={bigLineCues}
+      secondaryCues={smallLineCues}
       {currentTime}
       enabled={subtitlesEnabled}
       {videoElement}
-      liveCues={liveActive ? liveCues : null}
-      secondaryCues={liveActive && liveDualSubtitles ? liveOriginalCues : null}
       smartPosition={smartSubtitlePosition}
-      placeholder={livePlaceholder}
+      placeholder={liveLineShown ? livePlaceholder : null}
+      primaryInfo={bigLineInfo}
+      secondaryInfo={smallLineInfo}
+      interactive={showControls && viewMode !== "pip"}
+      onSwap={swapSubtitleLines}
+      onNudge={nudgeSubtitleLine}
+      onResetSync={resetSubtitleSync}
+      onRemove={(line) => chooseSubtitle(line, null)}
+      onLineClick={togglePlay}
+      onHoverChange={(hovering) => (hovering ? handleControlsEnter() : handleControlsLeave())}
     />
   </div>
 
@@ -2528,38 +2707,6 @@
       >
         <X size={14} />
       </button>
-    </div>
-  {/if}
-
-  <!-- AI Subtitle Generation Progress Overlay -->
-  {#if isGeneratingSubtitles}
-    <div class="generation-overlay">
-      <div class="generation-modal">
-        <div class="generation-icon">
-          <Loader2 size={48} strokeWidth={2} class="spinner" />
-        </div>
-        <h3>Generating AI Subtitles</h3>
-        <div class="progress-container">
-          <div class="progress-track">
-            <div
-              class="progress-fill"
-              style="width: {generationProgress}%"
-            ></div>
-          </div>
-          <div class="progress-percentage">
-            {Math.round(generationProgress)}%
-          </div>
-        </div>
-        <p class="generation-message">{generationMessage}</p>
-        <button
-          class="cancel-generation-btn"
-          onclick={cancelSubtitleGeneration}
-          disabled={isCancelling}
-        >
-          {isCancelling ? "Cancelling..." : "Cancel"}
-        </button>
-        <p class="generation-hint">Do not close Glucose while generation is in progress.</p>
-      </div>
     </div>
   {/if}
 
@@ -2726,106 +2873,236 @@
             {/if}
           </div>
 
-          <!-- Consolidated Subtitles Menu -->
+          <!-- Subtitles menu: a dropdown for each line, then Generate / Import and style. -->
+          {#snippet linePicker(line: 0 | 1)}
+            {@const id = line === 0 ? bigLine : smallLine}
+            {@const other = line === 0 ? smallLine : bigLine}
+            {@const otherLanguage = sourceById(other)?.language ?? null}
+            <div class="line-picker">
+              <label class="line-picker-label" for="subtitle-line-{line}">
+                <span class="line-size-icon" class:small={line === 1}>{line === 0 ? "Aa" : "aa"}</span>
+                {line === 0 ? "Big line" : "Small line"}
+                {#if line === 1 && smallLineHidden}
+                  <span class="line-hidden-tag">hidden (Shift+C)</span>
+                {/if}
+              </label>
+              <select
+                id="subtitle-line-{line}"
+                class="line-select"
+                value={id ?? ""}
+                disabled={line === 1 && !bigLine}
+                onchange={(e) => {
+                  const select = e.currentTarget;
+                  chooseSubtitle(line, select.value || null).then((ok) => {
+                    // Not loaded: show the line's actual track again.
+                    if (!ok) select.value = (line === 0 ? bigLine : smallLine) ?? "";
+                  });
+                }}
+              >
+                <option value="">None</option>
+                {#each subtitleSources as source (source.id)}
+                  <option value={source.id} disabled={source.id === other}>
+                    {source.label} · {source.detail}{source.id === other
+                      ? ` (on the ${line === 0 ? "small" : "big"} line)`
+                      : source.id !== id && otherLanguage && source.language === otherLanguage
+                        ? " (same language as the other line)"
+                        : ""}
+                  </option>
+                {/each}
+              </select>
+              {#if loadingSubtitleId && loadingSubtitleId !== id && loadingSubtitleId !== other}
+                <div class="line-timing"><span>Loading…</span></div>
+              {:else if id}
+                {@const offset = subtitleOffsets[id] ?? 0}
+                <div class="line-timing">
+                  <span class="line-timing-label">Timing</span>
+                  <button
+                    class="line-timing-btn"
+                    title="Show 0.25s earlier"
+                    aria-label="Show {line === 0 ? 'big' : 'small'} line 0.25 seconds earlier"
+                    onclick={() => nudgeSubtitleLine(line, -0.25)}
+                  >−</button>
+                  <button
+                    class="line-timing-btn line-timing-value"
+                    class:shifted={offset !== 0}
+                    title={offset !== 0 ? "Reset timing" : "Timing of this line"}
+                    onclick={() => resetSubtitleSync(line)}
+                  >{formatSubtitleOffset(offset)}</button>
+                  <button
+                    class="line-timing-btn"
+                    title="Show 0.25s later"
+                    aria-label="Show {line === 0 ? 'big' : 'small'} line 0.25 seconds later"
+                    onclick={() => nudgeSubtitleLine(line, 0.25)}
+                  >+</button>
+                </div>
+              {/if}
+            </div>
+          {/snippet}
+
           <div class="subtitle-control">
             <button
               class="control-button"
-              class:subtitle-active={(subtitleSrc || liveActive) && subtitlesEnabled}
+              class:subtitle-active={bigLine && subtitlesEnabled}
               class:generating={isGeneratingSubtitles}
-              data-tooltip="Subtitles (C)"
+              data-tooltip={isGeneratingSubtitles
+                ? `Generating subtitles ${Math.round(generationProgress)}%`
+                : "Subtitles (C)"}
               aria-label="Subtitles (C)"
-              onclick={() => (showSubtitleMenu = !showSubtitleMenu)}
-              disabled={isGeneratingSubtitles}
+              onclick={toggleSubtitleMenu}
             >
-              {#if (subtitleSrc || liveActive) && subtitlesEnabled}
+              {#if bigLine && subtitlesEnabled}
                 <Captions size={20} />
               {:else}
                 <CaptionsOff size={20} />
               {/if}
+              {#if bigLine && smallLine && subtitlesEnabled && !smallLineHidden}
+                <span class="subtitle-count-badge" aria-hidden="true">2</span>
+              {/if}
             </button>
 
-            {#if showSubtitleMenu && !isGeneratingSubtitles}
-              <div class="subtitle-menu">
-                <div class="model-header">Subtitles</div>
-                <button
-                  class="model-option"
-                  onclick={() => {
-                    showSubtitleMenu = false;
-                    openSubtitleDialog();
-                  }}
-                >
-                  <span class="model-name">Import subtitle from device</span>
-                  <span class="model-desc"
-                    >Open .srt, .vtt or compatible file</span
+            {#if showSubtitleMenu}
+              <!-- Clicks stop here: a click that redraws the menu detaches its target, which
+                   the outside-click check would otherwise take for a click outside. -->
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+              <div class="subtitle-menu" onclick={(e) => e.stopPropagation()}>
+                <div class="subtitle-menu-head">
+                  <span class="subtitle-menu-title">Subtitles</span>
+                  <button
+                    class="menu-switch"
+                    role="switch"
+                    aria-checked={!!bigLine && subtitlesEnabled}
+                    aria-label="Show subtitles (C)"
+                    disabled={!bigLine}
+                    onclick={toggleSubtitles}
                   >
+                    {bigLine && subtitlesEnabled ? "On" : "Off"}
+                    <span class="menu-switch-track"></span>
+                  </button>
+                </div>
+
+                {#if isGeneratingSubtitles}
+                  <div class="generation-row">
+                    <div class="generation-row-top">
+                      <span class="generation-row-message">{generationMessage || "Generating subtitles..."}</span>
+                      <span class="generation-row-percent">{Math.round(generationProgress)}%</span>
+                      <button
+                        class="generation-row-cancel"
+                        onclick={cancelSubtitleGeneration}
+                        disabled={isCancelling}
+                      >{isCancelling ? "Cancelling..." : "Cancel"}</button>
+                    </div>
+                    <div class="generation-row-track">
+                      <div class="generation-row-fill" style="width: {generationProgress}%"></div>
+                    </div>
+                    <span class="generation-row-hint">Keep Glucose open until it finishes. You can keep watching.</span>
+                  </div>
+                {/if}
+
+                <div class="line-pickers">
+                  {@render linePicker(0)}
+                  {#if bigLine && smallLine}
+                    <button class="swap-lines" onclick={swapSubtitleLines}>
+                      <ArrowUpDown size={13} /> Swap big and small <kbd>Alt+C</kbd>
+                    </button>
+                  {/if}
+                  {@render linePicker(1)}
+                </div>
+
+                <div class="subtitle-menu-divider"></div>
+                <button
+                  class="model-option add-toggle"
+                  aria-expanded={subtitleAddPanel !== "closed"}
+                  onclick={toggleSubtitleAddPanel}
+                >
+                  <span class="model-name">Generate / Import</span>
+                  <ChevronRight size={14} class={subtitleAddPanel !== "closed" ? "add-chevron open" : "add-chevron"} />
                 </button>
-                <button class="model-option" onclick={openAIFromUnifiedMenu}>
-                  <span class="model-name">Generate with AI</span>
-                  <span class="model-desc">Auto-generate using Whisper AI</span>
-                </button>
-                {#if liveActive}
+
+                {#if subtitleAddPanel === "choices"}
+                  {#if liveActive}
+                    <button class="model-option" onclick={() => disableLiveSubtitles()}>
+                      <span class="model-name">Live subtitles</span>
+                      <span class="model-desc"
+                        >On{liveModel ? ` · ${liveModel}` : ""}{liveKey?.translateTo
+                          ? ` · ${LIVE_TRANSLATE_NAMES[liveKey.translateTo as LiveTranslate]}`
+                          : ""} · Click to turn off</span
+                      >
+                    </button>
+                  {:else if liveModelAvailable}
+                    <button class="model-option" onclick={() => enableLiveSubtitles()}>
+                      <span class="model-name">Live subtitles</span>
+                      <span class="model-desc">Appear as you watch{hardwareWarning("live")}</span>
+                    </button>
+                  {:else}
+                    <button class="model-option" disabled>
+                      <span class="model-name">Live subtitles</span>
+                      <span class="model-desc">Download a live model in Settings first</span>
+                    </button>
+                  {/if}
+                  <button
+                    class="model-option"
+                    disabled={isGeneratingSubtitles}
+                    onclick={() => (subtitleAddPanel = "models")}
+                  >
+                    <span class="model-name">Generate for the whole video</span>
+                    <span class="model-desc"
+                      >{isGeneratingSubtitles
+                        ? "Already generating, see the top of this menu"
+                        : "Takes a few minutes, most accurate"}</span
+                    >
+                  </button>
                   <button
                     class="model-option"
                     onclick={() => {
                       showSubtitleMenu = false;
-                      disableLiveSubtitles();
+                      subtitleAddPanel = "closed";
+                      openSubtitleDialog();
                     }}
                   >
-                    <span class="model-name"
-                      >Live subtitles{liveModel ? ` · ${liveModel}` : ""}{liveKey?.translateTo
-                        ? ` · ${LIVE_TRANSLATE_NAMES[liveKey.translateTo as LiveTranslate]}`
-                        : ""}</span
-                    >
-                    <span class="model-desc">Turn off live subtitles</span>
+                    <span class="model-name">Import subtitle file</span>
+                    <span class="model-desc">.srt, .vtt or similar</span>
+                  </button>
+                {:else if subtitleAddPanel === "models"}
+                  <div class="model-header">Generate for the whole video</div>
+                  {#if (setupStatus?.models_installed.length ?? 0) > 0}
+                    {#each setupStatus?.models_installed ?? [] as model}
+                      {#if model === "tiny"}
+                        <button class="model-option" onclick={() => startSubtitleGeneration("tiny")}>
+                          <span class="model-name">Tiny</span>
+                          <span class="model-desc">{getEstimatedTranscriptionTime("tiny")} • Fastest</span>
+                        </button>
+                      {:else if model === "small"}
+                        <button class="model-option" onclick={() => startSubtitleGeneration("small")}>
+                          <span class="model-name">Small</span>
+                          <span class="model-desc">{getEstimatedTranscriptionTime("small")} • Balanced</span>
+                        </button>
+                      {:else if model === "large-v3-turbo"}
+                        <button class="model-option" onclick={() => startSubtitleGeneration("large-v3-turbo")}>
+                          <span class="model-name">Large V3 Turbo</span>
+                          <span class="model-desc"
+                            >{getEstimatedTranscriptionTime("large-v3-turbo")} • Most
+                            Accurate{hardwareWarning("generation")}</span
+                          >
+                        </button>
+                      {/if}
+                    {/each}
+                  {:else}
+                    <div class="no-models-message">
+                      No AI models installed. Open Settings to download models.
+                    </div>
+                  {/if}
+                  <button class="model-option add-back" onclick={() => (subtitleAddPanel = "choices")}>
+                    <span class="model-desc">‹ Back</span>
                   </button>
                 {/if}
-                {#if embeddedSubtitleTracks.length > 0}
-                  <div class="subtitle-menu-divider"></div>
-                  {#each embeddedSubtitleTracks as track}
-                    <button
-                      class="model-option"
-                      onclick={() => {
-                        showSubtitleMenu = false;
-                        loadEmbeddedSubtitle(track);
-                      }}
-                    >
-                      <span class="model-name">{formatEmbeddedTrackLabel(track)}</span>
-                      <span class="model-desc">Embedded · {formatCodecLabel(track.codec_name)}{track.language ? ` · ${track.language}` : ""}</span>
-                    </button>
-                  {/each}
-                {/if}
-                {#if nearbySubtitles.length > 0}
-                  <div class="subtitle-menu-divider"></div>
-                  <div class="model-header">Subtitle files nearby</div>
-                  {#each nearbySubtitles as sub (sub.path)}
-                    <button
-                      class="model-option"
-                      title={sub.path}
-                      onclick={() => {
-                        showSubtitleMenu = false;
-                        loadSubtitle(sub.path);
-                      }}
-                    >
-                      <span class="model-name nearby-name">{sub.name}</span>
-                      <span class="model-desc">{NEARBY_SUBTITLE_DESC[sub.kind]}</span>
-                    </button>
-                  {/each}
-                {/if}
-                {#if subtitleFileName}
-                  <div class="subtitle-menu-divider"></div>
-                  <button class="model-option" onclick={toggleSubtitles}>
-                    <span class="model-name">{subtitleFileName}</span>
-                    <span class="model-desc"
-                      >{subtitlesEnabled ? "Hide" : "Show"} subtitles</span
-                    >
-                  </button>
-                {/if}
+
                 <div class="subtitle-menu-divider"></div>
                 <button
                   class="model-option"
                   onclick={(e) => {
                     e.stopPropagation();
                     showSubtitleMenu = false;
+                    subtitleAddPanel = "closed";
                     if (showSubtitleStylePanel) closeSubtitleStylePanel();
                     else showSubtitleStylePanel = true;
                   }}
@@ -2839,61 +3116,6 @@
 
           {#if showSubtitleStylePanel}
             <SubtitleStylePanel onClose={closeSubtitleStylePanel} />
-          {/if}
-
-          <!-- Model selector anchored to unified subtitle control -->
-          {#if showModelSelector && !isGeneratingSubtitles}
-            <div class="model-selector">
-              <div class="model-header">Select AI Model</div>
-              <!-- The Live entry is only offered while live subtitles are off, so a live
-                   model alone counts only then; otherwise the menu would open empty. -->
-              {#if (setupStatus?.models_installed.length ?? 0) > 0 || (liveModelAvailable && !liveActive)}
-                {#if !liveActive && liveModelAvailable}
-                  <button class="model-option" onclick={() => enableLiveSubtitles()}>
-                    <span class="model-name">Live (real-time)</span>
-                    <span class="model-desc">Subtitles appear as you watch{hardwareWarning("live")}</span>
-                  </button>
-                {/if}
-                {#each setupStatus?.models_installed ?? [] as model}
-                  {#if model === "tiny"}
-                    <button
-                      class="model-option"
-                      onclick={() => startSubtitleGeneration("tiny")}
-                    >
-                      <span class="model-name">Tiny</span>
-                      <span class="model-desc"
-                        >{getEstimatedTranscriptionTime("tiny")} • Fastest</span
-                      >
-                    </button>
-                  {:else if model === "small"}
-                    <button
-                      class="model-option"
-                      onclick={() => startSubtitleGeneration("small")}
-                    >
-                      <span class="model-name">Small</span>
-                      <span class="model-desc"
-                        >{getEstimatedTranscriptionTime("small")} • Balanced</span
-                      >
-                    </button>
-                  {:else if model === "large-v3-turbo"}
-                    <button
-                      class="model-option"
-                      onclick={() => startSubtitleGeneration("large-v3-turbo")}
-                    >
-                      <span class="model-name">Large V3 Turbo</span>
-                      <span class="model-desc"
-                        >{getEstimatedTranscriptionTime("large-v3-turbo")} • Most
-                        Accurate{hardwareWarning("generation")}</span
-                      >
-                    </button>
-                  {/if}
-                {/each}
-              {:else}
-                <div class="no-models-message">
-                  No AI models installed. Open Settings to download models.
-                </div>
-              {/if}
-            </div>
           {/if}
 
           <button
@@ -2978,7 +3200,7 @@
           <span class="shortcut">P</span>
         </button>
       {/if}
-      {#if subtitleSrc}
+      {#if bigLine}
         <button
           class="context-menu-item"
           onclick={() => {
@@ -3375,7 +3597,6 @@
   /* Hide close button in PiP mode (handled via conditional rendering) */
   /* Hide subtitle menus and volume menus in PiP mode */
   .pip-controls .subtitle-menu,
-  .pip-controls .model-selector,
   .pip-controls .volume-menu {
     display: none !important;
   }
@@ -3756,39 +3977,337 @@
     -webkit-backdrop-filter: blur(var(--blur-md));
     border: 1px solid var(--color-border);
     border-radius: 8px;
-    padding: 0.75rem 0;
-    min-width: 260px;
+    padding: 0.5rem 0;
+    width: 320px;
+    max-height: min(70vh, 640px);
+    overflow-y: auto;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
     z-index: 100;
   }
 
-  .nearby-name {
-    max-width: 280px;
+  .subtitle-menu-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.35rem 1rem 0.6rem;
+  }
+
+  .subtitle-menu-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .menu-switch {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 2px;
+    border: none;
+    background: none;
+    color: rgba(255, 255, 255, 0.6);
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .menu-switch:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .menu-switch-track {
+    position: relative;
+    width: 30px;
+    height: 18px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.18);
+    transition: background 0.15s ease;
+  }
+
+  .menu-switch-track::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.15s ease;
+  }
+
+  .menu-switch[aria-checked="true"] .menu-switch-track {
+    background: var(--color-accent);
+  }
+
+  .menu-switch[aria-checked="true"] .menu-switch-track::after {
+    transform: translateX(12px);
+  }
+
+  .menu-switch:focus-visible,
+  .line-select:focus-visible,
+  .line-timing-btn:focus-visible,
+  .swap-lines:focus-visible,
+  .generation-row-cancel:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  .generation-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin: 0 0.75rem 0.6rem;
+    padding: 0.6rem 0.7rem;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .generation-row-top {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+  }
+
+  .generation-row-message {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    color: #fff;
+  }
+
+  .generation-row-percent {
+    font-variant-numeric: tabular-nums;
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .generation-row-cancel {
+    padding: 0.2rem 0.55rem;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    background: none;
+    color: #fff;
+    font: inherit;
+    font-size: 0.72rem;
+    cursor: pointer;
+  }
+
+  .generation-row-cancel:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .generation-row-cancel:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .generation-row-track {
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+  }
+
+  .generation-row-fill {
+    height: 100%;
+    background: var(--color-accent);
+    transition: width 0.3s ease;
+  }
+
+  .generation-row-hint {
+    font-size: 0.68rem;
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .line-pickers {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0 1rem 0.25rem;
+  }
+
+  .line-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .line-picker-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.65);
+  }
+
+  .line-size-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 24px;
+    height: 18px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .line-size-icon.small {
+    font-size: 0.55rem;
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  .line-hidden-tag {
+    font-weight: 500;
+    color: #f2b45c;
+  }
+
+  .line-select {
+    width: 100%;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #fff;
+    font: inherit;
+    font-size: 0.82rem;
+    color-scheme: dark;
+    cursor: pointer;
+  }
+
+  .line-select:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .line-select option {
+    background: #1b1a22;
+    color: #fff;
+  }
+
+  .line-timing {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 0.72rem;
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .line-timing-label {
+    margin-right: 0.35rem;
+  }
+
+  .line-timing-btn {
+    min-width: 26px;
+    height: 24px;
+    padding: 0 0.4rem;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: rgba(255, 255, 255, 0.7);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .line-timing-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+  }
+
+  .line-timing-value {
+    min-width: 58px;
+    font-variant-numeric: tabular-nums;
+    color: #fff;
+  }
+
+  .line-timing-value.shifted {
+    color: #f2b45c;
+  }
+
+  .swap-lines {
+    align-self: center;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0.55rem;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: rgba(255, 255, 255, 0.65);
+    font: inherit;
+    font-size: 0.74rem;
+    cursor: pointer;
+  }
+
+  .swap-lines:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+  }
+
+  .swap-lines kbd {
+    font: inherit;
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  .model-option.add-toggle {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  :global(.add-chevron) {
+    color: rgba(255, 255, 255, 0.6);
+    transition: transform 0.15s ease;
+  }
+
+  :global(.add-chevron.open) {
+    transform: rotate(90deg);
+  }
+
+  .model-option:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  .model-option:disabled:hover {
+    background: none;
+  }
+
+  .model-option.add-back {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+
+  .subtitle-count-badge {
+    position: absolute;
+    top: 2px;
+    right: 0;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: var(--color-accent);
+    color: #140f24;
+    font-size: 0.6rem;
+    font-weight: 700;
+    line-height: 14px;
+    text-align: center;
+    pointer-events: none;
   }
 
   .subtitle-menu-divider {
     height: 1px;
     background: rgba(255, 255, 255, 0.05);
     margin: 0.5rem 0;
-  }
-
-  .model-selector {
-    position: absolute;
-    bottom: 100%;
-    right: 0;
-    margin-bottom: 0.5rem;
-    background: var(--surface-panel);
-    backdrop-filter: blur(var(--blur-md));
-    -webkit-backdrop-filter: blur(var(--blur-md));
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    padding: 0.75rem 0;
-    min-width: 220px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-    z-index: 100;
   }
 
   .model-header {
@@ -3946,34 +4465,6 @@
     color: rgba(255, 255, 255, 0.7);
     line-height: 1.5;
     margin: 0;
-  }
-
-  .cancel-generation-btn {
-    margin-top: 1.25rem;
-    padding: 0.45rem 1.25rem;
-    background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 8px;
-    color: rgba(255, 255, 255, 0.55);
-    font-size: 0.8125rem;
-    cursor: pointer;
-    transition: border-color 0.15s ease, color 0.15s ease;
-  }
-
-  .cancel-generation-btn:hover:not(:disabled) {
-    border-color: rgba(255, 255, 255, 0.38);
-    color: rgba(255, 255, 255, 0.9);
-  }
-
-  .cancel-generation-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .generation-hint {
-    margin-top: 0.75rem;
-    font-size: 0.75rem;
-    color: rgba(255, 255, 255, 0.3);
   }
 
   /* Context Menu */

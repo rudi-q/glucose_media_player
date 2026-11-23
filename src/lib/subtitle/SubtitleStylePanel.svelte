@@ -2,7 +2,7 @@
   import { readStorage, writeStorage } from "$lib/utils/storage";
   import { X } from 'lucide-svelte';
   import { subtitleStyleStore, activeSubtitleStyle } from '$lib/subtitle/subtitleStyleStore';
-  import { SUBTITLE_PRESETS, type SubtitleStyle } from '$lib/subtitle/subtitlePresets';
+  import { SUBTITLE_PRESETS, DEFAULT_SECONDARY_SCALE, type SubtitleStyle } from '$lib/subtitle/subtitlePresets';
   import {
     SUBTITLE_POSITION_KEY,
     SUBTITLE_POSITION_EVENT,
@@ -191,6 +191,47 @@
           />
           <span class="color-picker-plus">+</span>
         </label>
+      </div>
+    </div>
+
+    <!-- The small line, shown under the big one when two subtitle tracks are on. -->
+    <div class="control-row">
+      <span class="control-label">Small line</span>
+      <div class="slider-row">
+        <input
+          type="range"
+          min="50"
+          max="100"
+          step="1"
+          aria-label="Small line size"
+          value={Math.round(($activeSubtitleStyle.secondaryScale ?? DEFAULT_SECONDARY_SCALE) * 100)}
+          oninput={(e) => subtitleStyleStore.customize({ secondaryScale: +e.currentTarget.value / 100 })}
+        />
+        <span class="slider-value">{Math.round(($activeSubtitleStyle.secondaryScale ?? DEFAULT_SECONDARY_SCALE) * 100)}%</span>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <span class="control-label">Small color</span>
+      <div class="color-swatches">
+        <button
+          class="color-swatch same-swatch"
+          class:active={!$activeSubtitleStyle.secondaryColor}
+          style="background-color: {$activeSubtitleStyle.color};"
+          title="Same as the big line"
+          aria-label="Small line color: same as the big line"
+          onclick={() => subtitleStyleStore.customize({ secondaryColor: '' })}
+        >=</button>
+        {#each TEXT_COLORS as tc}
+          <button
+            class="color-swatch"
+            class:active={$activeSubtitleStyle.secondaryColor === tc.value}
+            style="background-color: {tc.value};"
+            title={tc.label}
+            aria-label="Small line color: {tc.label}"
+            onclick={() => subtitleStyleStore.customize({ secondaryColor: tc.value })}
+          ></button>
+        {/each}
       </div>
     </div>
 
@@ -437,6 +478,16 @@
 
   .color-swatch.active {
     border-color: #fff;
+  }
+
+  /* "Same as the big line": the big line's color with an = on it. */
+  .color-swatch.same-swatch {
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    color: rgba(0, 0, 0, 0.7);
   }
 
   .color-picker-label {
