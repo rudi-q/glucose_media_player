@@ -59,6 +59,17 @@
     { label: 'Orange', value: '#ff9500' },
   ];
 
+  // The preset's own text color leads the swatches when it is not one of them (Highlight's
+  // dark text, Minimal's soft white), so it can be chosen again after trying another.
+  let presetColor = $derived(
+    SUBTITLE_PRESETS.find((p) => p.id === $subtitleStyleStore.presetId)?.color ?? null,
+  );
+  let colorChoices = $derived(
+    presetColor && !TEXT_COLORS.some((c) => c.value === presetColor)
+      ? [{ label: 'Preset color', value: presetColor }, ...TEXT_COLORS]
+      : TEXT_COLORS,
+  );
+
   function previewTextStyle(preset: SubtitleStyle): string {
     let style = `font-family: ${preset.fontFamily}; font-weight: ${preset.fontWeight}; color: ${preset.color}; letter-spacing: ${preset.letterSpacing}; font-size: 11px; line-height: 1.4;`;
     if (preset.textShadow !== 'none') {
@@ -171,7 +182,7 @@
     <div class="control-row">
       <span class="control-label">Color</span>
       <div class="color-swatches">
-        {#each TEXT_COLORS as tc}
+        {#each colorChoices as tc}
           <button
             class="color-swatch"
             class:active={$activeSubtitleStyle.color === tc.value}
@@ -243,7 +254,7 @@
           aria-label="Small line color: same as the big line"
           onclick={() => subtitleStyleStore.customize({ secondaryColor: '' })}
         >Same as big</button>
-        {#each TEXT_COLORS as tc}
+        {#each colorChoices as tc}
           <button
             class="color-swatch"
             class:active={$activeSubtitleStyle.secondaryColor === tc.value}
@@ -487,6 +498,11 @@
     border-color: #fff;
   }
 
+  /* A faint ring, so a dark color (Highlight's text) still shows on the dark panel. */
+  .color-swatch:not(.active) {
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+  }
+
   .section-head {
     display: flex;
     align-items: baseline;
@@ -516,6 +532,7 @@
     font-size: 0.68rem;
     cursor: pointer;
     white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .same-btn:hover {
