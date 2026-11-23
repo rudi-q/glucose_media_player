@@ -411,11 +411,11 @@
         </div>
       {:else if dual && activeCues.length > 0}
         <!-- The small line's space, held while it has nothing to show. -->
-        <div
-          class="cue-wrapper secondary reserved"
-          aria-hidden="true"
-          style="font-size: {style.fontSize * secondaryScale}px; line-height: {style.lineHeight};"
-        >&nbsp;</div>
+        <!-- Same classes and text style as a real small cue, so it takes the same height
+             with each background style's padding and border. -->
+        <div class="reserved" aria-hidden="true">
+          {@render cueBox({ start: 0, end: 0, text: ' ' }, true)}
+        </div>
       {/if}
       {#if showPlaceholder}
         <div class="cue-wrapper placeholder">
@@ -479,7 +479,12 @@
   .cue-wrapper.frosted { border-radius: 8px; padding: 0.25em 0.7em; border: 1px solid rgba(255,255,255,0.15); }
   .cue-text { display: block; text-align: center; }
   .cue-wrapper.secondary { opacity: 0.85; }
-  .cue-wrapper.reserved { visibility: hidden; background: none; }
+  .reserved {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+    visibility: hidden;
+  }
 
   /* One subtitle line: its cues, plus the chip shown while the mouse rests on them. */
   .subtitle-line {

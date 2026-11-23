@@ -76,6 +76,13 @@ export function languageFromFileName(fileName: string): FileLanguage {
     }
     if (FILLER.has(word)) continue;
     const isCode = /^[a-z]{2,3}$/.test(word);
+    // A tag with a region or script ("pt-BR", "zh-Hant") is split into two words above;
+    // read it whole, so "Movie.pt-BR.srt" is Brazilian Portuguese rather than Breton.
+    if (/^[a-z]{2,4}$/.test(word) && i > 1 && /^[a-z]{2,3}$/i.test(words[i - 1])) {
+      const base = words[i - 1].toLowerCase();
+      const full = languageName(base) ? languageName(`${base}-${words[i]}`) : null;
+      if (full) return { language: full, variant };
+    }
     const language = isCode ? (i > 0 ? languageName(word) : null) : nameForWord(word);
     return { language, variant };
   }

@@ -500,10 +500,15 @@
   }
 
   // Puts a track on a line (0 big, 1 small), or turns the line off with null.
+  // The latest choice per line: a slow load (an embedded track extracting) must not
+  // replace a choice made on that line meanwhile, None included.
+  const lineChoice = [0, 0];
+
   async function chooseSubtitle(line: 0 | 1, id: string | null): Promise<boolean> {
     const setupId = videoSetupId;
+    const choice = ++lineChoice[line];
     if (id && !(await loadSubtitleTrack(id))) return false;
-    if (isVideoSetupStale(setupId)) return false;
+    if (isVideoSetupStale(setupId) || choice !== lineChoice[line]) return false;
     if (line === 0) setSubtitleLines(id, smallLine === id ? null : smallLine);
     else setSubtitleLines(bigLine, id);
     return true;
@@ -523,7 +528,10 @@
   }
 
   function toggleSmallLine() {
-    if (smallLine) smallLineHidden = !smallLineHidden;
+    if (!smallLine) return;
+    smallLineHidden = !smallLineHidden;
+    // Hiding a live small line ends any wait for it.
+    checkLiveWait();
   }
 
   function nudgeSubtitleLine(line: 0 | 1, seconds: number) {
@@ -2206,6 +2214,7 @@
     if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; }
 
     try {
+      const setupId = videoSetupId;
       // Get current subtitle language from store at call time
       const currentSettings = $appSettings;
       const subtitlePath = await invoke<string>("generate_subtitles", {
@@ -2213,6 +2222,15 @@
         modelSize: modelSize,
         language: currentSettings.subtitleLanguage,
       });
+
+      // Another video opened while this one was being transcribed: its subtitles do
+      // not belong on the new video.
+      if (isVideoSetupStale(setupId)) {
+        isGeneratingSubtitles = false;
+        generationProgress = 0;
+        generationMessage = "";
+        return;
+      }
 
       // Store the actual elapsed/duration ratio so future estimates are calibrated
       // to this machine's performance for this model.
@@ -2228,6 +2246,13 @@
         small: "Small",
         "large-v3-turbo": "Large V3 Turbo",
       };
+      // Each run for a video writes the same file, so cues read from an earlier run are
+      // dropped and the new file is read.
+      const generatedId = fileTrackId(subtitlePath);
+      if (loadedCues[generatedId]) {
+        const { [generatedId]: _old, ...rest } = loadedCues;
+        loadedCues = rest;
+      }
       await loadSubtitle(subtitlePath, modelName[modelSize] ?? modelSize);
     } catch (err) {
       if (!isCancelling && String(err) !== "cancelled") {
@@ -2496,10 +2521,12 @@
   // ranges or the worker state change.
   function checkLiveWait() {
     if (!videoElement) return;
-    // Not while subtitles are hidden: nothing would explain the pause.
+    // Not while subtitles, or the line showing the live ones, are hidden: nothing would
+    // explain the pause. Live subtitles keep being made in the background meanwhile.
     const waitEnabled =
       liveActive &&
       subtitlesEnabled &&
+      liveLineShown &&
       !liveError &&
       liveState !== "done" &&
       liveWaitPreference === "pause";
