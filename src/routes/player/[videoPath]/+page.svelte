@@ -467,7 +467,8 @@
     bigLine = big;
     smallLine = small;
     if (!small) smallLineHidden = false;
-    if (big) subtitlesEnabled = true;
+    // Subtitles hidden with C stay hidden here: only choosing a track (chooseSubtitle,
+    // enableLiveSubtitles) shows them, not a swap or a setting that drops a line.
     if (liveActive && !isLiveId(big) && !isLiveId(small)) disableLiveSubtitles();
     checkLiveWait();
   }
@@ -514,6 +515,8 @@
     const choice = ++lineChoice[line];
     if (id && !(await loadSubtitleTrack(id))) return false;
     if (isVideoSetupStale(setupId) || choice !== lineChoice[line]) return false;
+    // Choosing a track shows subtitles, even if they were hidden with C.
+    if (id) subtitlesEnabled = true;
     if (line === 0) setSubtitleLines(id, smallLine === id ? null : smallLine);
     else setSubtitleLines(bigLine, id);
     return true;
@@ -544,11 +547,15 @@
     if (!id) return;
     const next = Math.round(((subtitleOffsets[id] ?? 0) + seconds) * 100) / 100;
     subtitleOffsets[id] = Math.max(-30, Math.min(30, next));
+    // A live line's timing changes which moment it needs ready.
+    checkLiveWait();
   }
 
   function resetSubtitleSync(line: 0 | 1) {
     const id = line === 0 ? bigLine : smallLine;
-    if (id) subtitleOffsets[id] = 0;
+    if (!id) return;
+    subtitleOffsets[id] = 0;
+    checkLiveWait();
   }
 
   function formatSubtitleOffset(seconds: number): string {
@@ -2348,6 +2355,7 @@
     );
     // Live subtitles go on the big line, as any new track does. With translation and
     // "Show original subtitles too" on, the original takes the small line.
+    subtitlesEnabled = true;
     setSubtitleLines(
       LIVE_ID,
       translateTo && liveDualSubtitles ? LIVE_ORIGINAL_ID : smallLine,
@@ -2536,9 +2544,16 @@
       liveState !== "done" &&
       liveWaitPreference === "pause";
     const time = videoElement.currentTime;
-    // The last second is treated as ready, in case the audio ends before the video.
-    const ready =
-      !!findRange(liveRanges, time) || (duration > 0 && duration - time < 1);
+    // A live line shifted by its timing shows, at `time`, what was said at
+    // `time - offset`, so each visible live line needs that moment transcribed. The last
+    // second is treated as ready, in case the audio ends before the video.
+    const shownLive = [bigLine, smallLineHidden ? null : smallLine].filter(
+      (id): id is string => isLiveId(id),
+    );
+    const ready = shownLive.every((id) => {
+      const source = time - (subtitleOffsets[id] ?? 0);
+      return !!findRange(liveRanges, source) || (duration > 0 && duration - source < 1);
+    });
 
     if (!waitEnabled || ready) {
       if (ready) liveWaitOverride = false;
