@@ -323,7 +323,7 @@
   let liveWorkerPos = 0;
   // Where the current worker session started. Moments before it are not transcribed by
   // this session (the worker only moves forward).
-  let liveSessionStart = 0;
+  let liveSessionStart = $state(0);
   let livePlayheadSentAt = 0;
   // The video, track and language the current live cues belong to; used as the cache key.
   // Raw (not proxied) so the identity checks against a captured key keep working.
@@ -347,7 +347,7 @@
   let livePlaceholder = $derived.by(() => {
     if (!liveActive) return null;
     if (liveError) return `Live subtitles: ${liveError}`;
-    if (findRange(liveRanges, currentTime) || liveState === "done") return null;
+    if (liveReadyAt(currentTime) || liveState === "done") return null;
     const lang = liveKey?.translateTo;
     const what = lang ? `${LIVE_TRANSLATE_NAMES[lang as LiveTranslate]} subtitles` : "subtitles";
     if (liveWaiting) return `Waiting for ${what}...`;
@@ -2539,6 +2539,23 @@
     }
   }
 
+  // Whether every visible live line has its subtitles ready at playback time `time`.
+  // A live line shifted by its timing shows, at `time`, what was said at
+  // `time - offset`, so each visible live line needs that moment transcribed. A moment
+  // before the worker's start (or before 0, with a positive offset) is never
+  // transcribed, so it counts as ready rather than waiting forever. The last second is
+  // treated as ready too, in case the audio ends before the video.
+  function liveReadyAt(time: number): boolean {
+    const shownLive = [bigLine, smallLineHidden ? null : smallLine].filter(
+      (id): id is string => isLiveId(id),
+    );
+    return shownLive.every((id) => {
+      const source = time - (subtitleOffsets[id] ?? 0);
+      if (source < 0 || source < liveSessionStart) return true;
+      return !!findRange(liveRanges, source) || (duration > 0 && duration - source < 1);
+    });
+  }
+
   // "Pause until ready": pauses when playback reaches a point live subtitles are not
   // ready for, and resumes once they are. Called whenever the playhead, the covered
   // ranges or the worker state change.
@@ -2553,20 +2570,7 @@
       !liveError &&
       liveState !== "done" &&
       liveWaitPreference === "pause";
-    const time = videoElement.currentTime;
-    // A live line shifted by its timing shows, at `time`, what was said at
-    // `time - offset`, so each visible live line needs that moment transcribed. A moment
-    // before the worker's start (or before 0, with a positive offset) is never
-    // transcribed, so it counts as ready rather than waiting forever. The last second is
-    // treated as ready too, in case the audio ends before the video.
-    const shownLive = [bigLine, smallLineHidden ? null : smallLine].filter(
-      (id): id is string => isLiveId(id),
-    );
-    const ready = shownLive.every((id) => {
-      const source = time - (subtitleOffsets[id] ?? 0);
-      if (source < 0 || source < liveSessionStart) return true;
-      return !!findRange(liveRanges, source) || (duration > 0 && duration - source < 1);
-    });
+    const ready = liveReadyAt(videoElement.currentTime);
 
     if (!waitEnabled || ready) {
       if (ready) liveWaitOverride = false;
