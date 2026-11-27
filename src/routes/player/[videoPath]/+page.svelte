@@ -261,8 +261,13 @@
       if (!liveActive || !liveKey?.translateTo) return;
       if (liveDualSubtitles && !smallLine && bigLine === LIVE_ID) {
         setSubtitleLines(bigLine, LIVE_ORIGINAL_ID);
-      } else if (!liveDualSubtitles && smallLine === LIVE_ORIGINAL_ID) {
-        setSubtitleLines(bigLine, null);
+      } else if (
+        !liveDualSubtitles &&
+        (bigLine === LIVE_ORIGINAL_ID || smallLine === LIVE_ORIGINAL_ID)
+      ) {
+        const big = bigLine === LIVE_ORIGINAL_ID ? null : bigLine;
+        const small = smallLine === LIVE_ORIGINAL_ID ? null : smallLine;
+        setSubtitleLines(big || small ? big : LIVE_ID, small);
       }
     };
     window.addEventListener(LIVE_DUAL_SUBTITLES_EVENT, changed);
@@ -2360,10 +2365,10 @@
     // Without translation there are no separate original lines (auto-start falls back to
     // that when the translation model is missing).
     if (!key.translateTo && (bigLine === LIVE_ORIGINAL_ID || smallLine === LIVE_ORIGINAL_ID)) {
-      const keep = [bigLine, smallLine].filter((id) => id !== LIVE_ORIGINAL_ID);
-      bigLine = keep[0] ?? null;
-      smallLine = keep[1] ?? null;
-      if (!bigLine) bigLine = LIVE_ID;
+      setSubtitleLines(
+        bigLine === LIVE_ORIGINAL_ID ? LIVE_ID : bigLine,
+        smallLine === LIVE_ORIGINAL_ID ? LIVE_ID : smallLine,
+      );
     }
     // A press of play during an earlier wait does not carry over to this session.
     liveWaitOverride = false;
