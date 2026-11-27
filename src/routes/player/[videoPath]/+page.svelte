@@ -355,6 +355,14 @@
     return `Generating ${what}...`;
   });
 
+  // The line the live placeholder goes on: the first visible live line that is not
+  // ready, so a waiting small line says so even while the big line shows a cue.
+  let livePlaceholderLine = $derived.by((): 0 | 1 => {
+    const ids = shownLiveIds();
+    const waiting = ids.find((id) => !liveLineReadyAt(id, currentTime)) ?? ids[0];
+    return waiting && waiting !== bigLine ? 1 : 0;
+  });
+
   // ---- Subtitle tracks and the two lines ----
 
   interface SubtitleSource {
@@ -2539,21 +2547,26 @@
     }
   }
 
-  // Whether every visible live line has its subtitles ready at playback time `time`.
+  // The live tracks on a visible line, big line first.
+  function shownLiveIds(): string[] {
+    return [bigLine, smallLineHidden ? null : smallLine].filter((id): id is string => isLiveId(id));
+  }
+
+  // Whether the live track `id` has its subtitles ready at playback time `time`.
   // A live line shifted by its timing shows, at `time`, what was said at
-  // `time - offset`, so each visible live line needs that moment transcribed. A moment
-  // before the worker's start (or before 0, with a positive offset) is never
-  // transcribed, so it counts as ready rather than waiting forever. The last second is
-  // treated as ready too, in case the audio ends before the video.
+  // `time - offset`, so it needs that moment transcribed. A moment before the worker's
+  // start (or before 0, with a positive offset) is never transcribed, so it counts as
+  // ready rather than waiting forever. The last second is treated as ready too, in case
+  // the audio ends before the video.
+  function liveLineReadyAt(id: string, time: number): boolean {
+    const source = time - (subtitleOffsets[id] ?? 0);
+    if (source < 0 || source < liveSessionStart) return true;
+    return !!findRange(liveRanges, source) || (duration > 0 && duration - source < 1);
+  }
+
+  // Whether every visible live line has its subtitles ready at playback time `time`.
   function liveReadyAt(time: number): boolean {
-    const shownLive = [bigLine, smallLineHidden ? null : smallLine].filter(
-      (id): id is string => isLiveId(id),
-    );
-    return shownLive.every((id) => {
-      const source = time - (subtitleOffsets[id] ?? 0);
-      if (source < 0 || source < liveSessionStart) return true;
-      return !!findRange(liveRanges, source) || (duration > 0 && duration - source < 1);
-    });
+    return shownLiveIds().every((id) => liveLineReadyAt(id, time));
   }
 
   // "Pause until ready": pauses when playback reaches a point live subtitles are not
@@ -2719,6 +2732,7 @@
       {videoElement}
       smartPosition={smartSubtitlePosition}
       placeholder={liveLineShown ? livePlaceholder : null}
+      placeholderLine={livePlaceholderLine}
       primaryInfo={bigLineInfo}
       secondaryInfo={smallLineInfo}
       interactive={showControls && viewMode !== "pip"}

@@ -25,6 +25,7 @@
     enabled,
     videoElement,
     placeholder = null,
+    placeholderLine = 0,
     smartPosition = false,
     primaryInfo = null,
     secondaryInfo = null,
@@ -43,8 +44,11 @@
     currentTime: number;
     enabled: boolean;
     videoElement: HTMLVideoElement | undefined;
-    // Shown when no cue is active, e.g. while live subtitles are still being generated.
+    // Shown in place of a line that has no cue, e.g. while its live subtitles are still
+    // being generated: it appears even when the other line shows a cue.
     placeholder?: string | null;
+    // The line the placeholder belongs to: 0 for the big line, 1 for the small one.
+    placeholderLine?: 0 | 1;
     // Move cues to the top while the bottom of the picture is bright or busy.
     smartPosition?: boolean;
     // Set for each line that has a track; the hover chip names it.
@@ -91,7 +95,9 @@
   let activeSecondary = $derived(
     (secondaryCues ?? []).filter(c => currentTime >= c.start && currentTime < c.end)
   );
-  let showPlaceholder = $derived(activeCues.length === 0 && activeSecondary.length === 0 && !!placeholder);
+  let showPlaceholder = $derived(
+    !!placeholder && (placeholderLine === 1 ? activeSecondary.length === 0 : activeCues.length === 0),
+  );
   // With two tracks on, the small line keeps its space while it has nothing to show, so
   // the big line does not move each time a small cue comes and goes.
   let dual = $derived(!!primaryInfo && !!secondaryInfo);
@@ -369,6 +375,12 @@
   </div>
 {/snippet}
 
+{#snippet placeholderBox()}
+  <div class="cue-wrapper placeholder">
+    <span class="cue-text">{placeholder}</span>
+  </div>
+{/snippet}
+
 {#if enabled && (activeCues.length > 0 || activeSecondary.length > 0 || showPlaceholder)}
   <div class="subtitle-overlay" style={overlayPositionStyle}>
     <div
@@ -392,6 +404,8 @@
             {/each}
           </div>
         </div>
+      {:else if showPlaceholder && placeholderLine === 0}
+        {@render placeholderBox()}
       {/if}
       {#if activeSecondary.length > 0}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -409,17 +423,14 @@
             {/each}
           </div>
         </div>
+      {:else if showPlaceholder && placeholderLine === 1}
+        {@render placeholderBox()}
       {:else if dual && activeCues.length > 0}
         <!-- The small line's space, held while it has nothing to show. -->
         <!-- Same classes and text style as a real small cue, so it takes the same height
              with each background style's padding and border. -->
         <div class="reserved" aria-hidden="true">
           {@render cueBox({ start: 0, end: 0, text: ' ' }, true)}
-        </div>
-      {/if}
-      {#if showPlaceholder}
-        <div class="cue-wrapper placeholder">
-          <span class="cue-text">{placeholder}</span>
         </div>
       {/if}
     </div>
