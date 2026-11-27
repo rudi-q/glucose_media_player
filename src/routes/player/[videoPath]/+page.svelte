@@ -321,6 +321,9 @@
   let liveStartWhenReady = false;
   // Where the current worker session is transcribing from next.
   let liveWorkerPos = 0;
+  // Where the current worker session started. Moments before it are not transcribed by
+  // this session (the worker only moves forward).
+  let liveSessionStart = 0;
   let livePlayheadSentAt = 0;
   // The video, track and language the current live cues belong to; used as the cache key.
   // Raw (not proxied) so the identity checks against a captured key keep working.
@@ -527,6 +530,10 @@
   async function loadSubtitle(path: string, generatedWith?: string) {
     if (!addedSubtitleFiles.some((f) => f.path === path)) {
       addedSubtitleFiles = [...addedSubtitleFiles, { path, generatedWith }];
+    } else if (generatedWith) {
+      // Generated again, maybe with another model: show the new one. A plain import
+      // keeps the label.
+      addedSubtitleFiles = addedSubtitleFiles.map((f) => (f.path === path ? { ...f, generatedWith } : f));
     }
     await chooseSubtitle(0, fileTrackId(path));
   }
@@ -2282,6 +2289,7 @@
     const key = liveKey;
     if (!key) return;
     liveWorkerPos = time;
+    liveSessionStart = time;
     liveError = null;
     // A worker that reached the end reported "done"; until the new session reports its own
     // state, that would hide the "Generating" hint and stop "pause until ready" waiting.
@@ -2381,6 +2389,7 @@
     // A press of play during an earlier wait does not carry over to this session.
     liveWaitOverride = false;
     liveWorkerPos = 0;
+    liveSessionStart = 0;
     liveCues = [];
     liveOriginalCues = [];
     liveRanges = [];
@@ -2478,6 +2487,7 @@
     liveNoticeDismissed = "";
     liveWaitOverride = false;
     liveWorkerPos = 0;
+    liveSessionStart = 0;
     liveStartWhenReady = false;
     invoke("stop_live_subtitles", { unload, request: newLiveRequest() }).catch(() => {});
   }
@@ -2545,13 +2555,16 @@
       liveWaitPreference === "pause";
     const time = videoElement.currentTime;
     // A live line shifted by its timing shows, at `time`, what was said at
-    // `time - offset`, so each visible live line needs that moment transcribed. The last
-    // second is treated as ready, in case the audio ends before the video.
+    // `time - offset`, so each visible live line needs that moment transcribed. A moment
+    // before the worker's start (or before 0, with a positive offset) is never
+    // transcribed, so it counts as ready rather than waiting forever. The last second is
+    // treated as ready too, in case the audio ends before the video.
     const shownLive = [bigLine, smallLineHidden ? null : smallLine].filter(
       (id): id is string => isLiveId(id),
     );
     const ready = shownLive.every((id) => {
       const source = time - (subtitleOffsets[id] ?? 0);
+      if (source < 0 || source < liveSessionStart) return true;
       return !!findRange(liveRanges, source) || (duration > 0 && duration - source < 1);
     });
 
