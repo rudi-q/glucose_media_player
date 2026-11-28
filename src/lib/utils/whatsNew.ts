@@ -11,15 +11,39 @@ export const LAST_SEEN_VERSION_KEY = "glucose_last_seen_version";
 export type WhatsNewAction = "live" | "translation" | "smart" | "features";
 
 export interface WhatsNewHighlight {
-  icon: "captions" | "languages" | "scan-face" | "activity";
+  icon: "captions" | "languages" | "scan-face" | "activity" | "mouse-pointer" | "sparkles";
   title: string;
   text: string;
-  action: WhatsNewAction;
-  actionLabel: string;
+  // A button for the highlight, for features with a setting to open or turn on. Features
+  // used from the player have none: the text says where to find them.
+  action?: WhatsNewAction;
+  actionLabel?: string;
 }
 
 // Keyed by "major.minor". A feature version without an entry shows no screen.
 const HIGHLIGHTS: Record<string, WhatsNewHighlight[]> = {
+  "4.1": [
+    {
+      icon: "captions",
+      title: "Two subtitles at once",
+      text: "Show a second, smaller line under the first: live subtitles with a subtitle file, two languages, or a translation with its original. Pick both lines in the subtitles menu.",
+    },
+    {
+      icon: "mouse-pointer",
+      title: "Fix a line where you see it",
+      text: "Rest the mouse on a subtitle line to swap it, shift its timing or turn it off.",
+    },
+    {
+      icon: "languages",
+      title: "Subtitles named by language",
+      text: "Subtitle tracks and files show their language, read from the track or the file name.",
+    },
+    {
+      icon: "sparkles",
+      title: "Keep watching while subtitles generate",
+      text: "Generating subtitles for a whole video no longer covers the player. Progress and Cancel are in the subtitles menu.",
+    },
+  ],
   "4.0": [
     {
       icon: "captions",

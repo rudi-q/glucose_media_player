@@ -1,7 +1,17 @@
 <script lang="ts">
   import { fade } from "svelte/transition";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { Activity, Captions, Check, ExternalLink, Languages, PartyPopper, ScanFace } from "lucide-svelte";
+  import {
+    Activity,
+    Captions,
+    Check,
+    ExternalLink,
+    Languages,
+    MousePointer2,
+    PartyPopper,
+    ScanFace,
+    Sparkles,
+  } from "lucide-svelte";
   import { RELEASE_SUMMARY, type WhatsNewAction, type WhatsNewHighlight } from "$lib/utils/whatsNew";
   import { trapFocus } from "$lib/utils/trapFocus";
 
@@ -19,7 +29,14 @@
     onClose: () => void;
   } = $props();
 
-  const ICONS = { captions: Captions, languages: Languages, "scan-face": ScanFace, activity: Activity };
+  const ICONS = {
+    captions: Captions,
+    languages: Languages,
+    "scan-face": ScanFace,
+    activity: Activity,
+    "mouse-pointer": MousePointer2,
+    sparkles: Sparkles,
+  };
   let done = $state<Partial<Record<WhatsNewAction, boolean>>>({});
   let majorMinor = $derived(version.split(".").slice(0, 2).join("."));
   // An action that opens Settings closes this screen at once, without the fade: while it
@@ -62,18 +79,19 @@
     </div>
 
     <div class="wn-body">
-      {#each highlights as h (h.action)}
+      {#each highlights as h (h.title)}
         {@const Icon = ICONS[h.icon]}
+        {@const action = h.action}
         <div class="wn-item">
           <div class="wn-icon"><Icon size={18} /></div>
           <div class="wn-text">
             <div class="wn-item-title">{h.title}</div>
             <div class="wn-item-desc">{h.text}</div>
           </div>
-          {#if done[h.action]}
+          {#if action && done[action]}
             <span class="wn-done"><Check size={14} /> Done</span>
-          {:else}
-            <button class="wn-action" onclick={() => act(h.action)}>{h.actionLabel}</button>
+          {:else if action}
+            <button class="wn-action" onclick={() => act(action)}>{h.actionLabel}</button>
           {/if}
         </div>
       {/each}

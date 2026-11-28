@@ -13,7 +13,13 @@ export interface SubtitleStyle {
   /** Vertical position as a percentage from the bottom of the viewport */
   position: number;
   lineHeight: number;
+  /** Size of the small (second) subtitle line, as a fraction of fontSize. Presets leave it unset. */
+  secondaryScale?: number;
+  /** Color of the small line; unset or empty follows `color`. */
+  secondaryColor?: string;
 }
+
+export const DEFAULT_SECONDARY_SCALE = 0.72;
 
 export const SUBTITLE_PRESETS: SubtitleStyle[] = [
   {

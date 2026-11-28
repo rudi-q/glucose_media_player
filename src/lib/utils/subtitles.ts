@@ -23,11 +23,11 @@ export function convertSrtToVtt(srt: string): string {
 }
 
 /**
- * Load subtitle file from path and return WebVTT blob URL
+ * Load a subtitle file from a path and return it as WebVTT text
  */
 export async function loadSubtitleFile(
 	path: string
-): Promise<{ blobUrl: string; fileName: string; vttContent: string } | null> {
+): Promise<{ fileName: string; vttContent: string } | null> {
 	try {
 		if (import.meta.env.DEV) {
 			console.log('=== LOADING SUBTITLE ===');
@@ -105,16 +105,11 @@ export async function loadSubtitleFile(
 		return null;
 	}
 
-		// Create a blob URL from the content
-		const blob = new Blob([vttContent], { type: 'text/vtt;charset=utf-8' });
-		const blobUrl = URL.createObjectURL(blob);
-
 		if (import.meta.env.DEV) {
-			console.log('Subtitle blob URL created:', blobUrl);
 			console.log('=== SUBTITLE LOADING COMPLETE ===');
 		}
 
-		return { blobUrl, fileName, vttContent };
+		return { fileName, vttContent };
 	} catch (err) {
 		console.error('Failed to load subtitle:', err);
 		alert('Failed to load subtitle file: ' + err);

@@ -24,6 +24,7 @@ _A powerfully modern, thoughtfully designed media playback experience._
 - **Live Subtitles**: Subtitles are generated as the video plays, a few minutes ahead of you, using Whisper on your own PC. The seek bar shows how far they're ready, and each video's subtitles are saved for instant rewatching. They can start automatically when a video has none.
 - **Live Translation**: Translate live subtitles on-device, from English into German, French, Spanish, Russian, Turkish, Italian or Dutch, and from several languages into English. Optionally show the original line under the translation.
 - **100% Private**: Transcription and translation run locally, with no internet needed once models are downloaded. Models are added and removed in Settings.
+- **Two Subtitles at Once**: Show a second, smaller subtitle line under the first: live subtitles with a subtitle file, two languages, or a live translation with its original. Hover a line to swap it, fix its timing or turn it off.
 - **Full-Video Transcription**: Generate subtitles for a whole video in one go, formatted to Netflix-style timing and line-length rules.
 - **Smart Subtitle Position**: Subtitles move out of the way of faces and of busy areas at the bottom of the picture.
 - **Custom Subtitle Styles**: Presets and live controls for font, size, colour and background.
@@ -90,6 +91,8 @@ Glucose offers several convenient ways to open your media:
 | `↑` / `↓` | Increase/Decrease volume |
 | `M` | Mute/Unmute |
 | `C` / `S` | Toggle subtitles on/off (video) |
+| `Shift` + `C` | Hide/show the small subtitle line |
+| `Alt` + `C` | Swap the big and small subtitle lines |
 | `F` | Toggle View Mode |
 | `P` | Toggle Picture-in-Picture mode |
 | `0` – `9` | Jump to 0%–90% of the file |

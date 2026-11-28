@@ -18,7 +18,10 @@ function sanitizeCustomizations(raw: unknown): Partial<Omit<SubtitleStyle, 'id' 
   for (const key of ['fontSize', 'position', 'lineHeight'] as const) {
     if (typeof obj[key] === 'number' && isFinite(obj[key] as number)) result[key] = obj[key] as number;
   }
-  for (const key of ['fontFamily', 'fontWeight', 'color', 'backgroundColor', 'textShadow', 'textStroke', 'letterSpacing'] as const) {
+  if (typeof obj.secondaryScale === 'number' && isFinite(obj.secondaryScale)) {
+    result.secondaryScale = Math.min(1, Math.max(0.4, obj.secondaryScale));
+  }
+  for (const key of ['fontFamily', 'fontWeight', 'color', 'backgroundColor', 'textShadow', 'textStroke', 'letterSpacing', 'secondaryColor'] as const) {
     if (typeof obj[key] === 'string') result[key] = obj[key] as string;
   }
   if (BG_TYPES.includes(obj.backgroundType as typeof BG_TYPES[number])) {
