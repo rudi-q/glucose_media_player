@@ -1,6 +1,6 @@
 [package]
 name = "glucose"
-version = "4.0.0"
+version = "4.1.0"
 description = "A modern video and audio player with on-device live subtitles and translation"
 edition = "2021"
 

@@ -2,7 +2,7 @@
   import { readStorage, writeStorage } from "$lib/utils/storage";
   import { X } from 'lucide-svelte';
   import { subtitleStyleStore, activeSubtitleStyle } from '$lib/subtitle/subtitleStyleStore';
-  import { SUBTITLE_PRESETS, type SubtitleStyle } from '$lib/subtitle/subtitlePresets';
+  import { SUBTITLE_PRESETS, DEFAULT_SECONDARY_SCALE, type SubtitleStyle } from '$lib/subtitle/subtitlePresets';
   import {
     SUBTITLE_POSITION_KEY,
     SUBTITLE_POSITION_EVENT,
@@ -58,6 +58,16 @@
     { label: 'Pink', value: '#ff80ab' },
     { label: 'Orange', value: '#ff9500' },
   ];
+
+  // The preset's own text color leads the big line's swatches when it is not one of them
+  // (Highlight's dark text, Minimal's soft white), so it can be chosen again after trying
+  // another. The small line needs no such swatch: "Same as big" follows the big line.
+  let presetColor = $derived(
+    SUBTITLE_PRESETS.find((p) => p.id === $subtitleStyleStore.presetId)?.color ?? null,
+  );
+  let extraPresetColor = $derived(
+    presetColor && !TEXT_COLORS.some((c) => c.value === presetColor) ? presetColor : null,
+  );
 
   function previewTextStyle(preset: SubtitleStyle): string {
     let style = `font-family: ${preset.fontFamily}; font-weight: ${preset.fontWeight}; color: ${preset.color}; letter-spacing: ${preset.letterSpacing}; font-size: 11px; line-height: 1.4;`;
@@ -171,6 +181,16 @@
     <div class="control-row">
       <span class="control-label">Color</span>
       <div class="color-swatches">
+        {#if extraPresetColor}
+          <button
+            class="color-swatch preset-swatch"
+            class:active={$activeSubtitleStyle.color === extraPresetColor}
+            style="background-color: {extraPresetColor};"
+            title="Preset color"
+            aria-label="Color: preset color"
+            onclick={() => subtitleStyleStore.customize({ color: extraPresetColor })}
+          ></button>
+        {/if}
         {#each TEXT_COLORS as tc}
           <button
             class="color-swatch"
@@ -204,6 +224,54 @@
             style="font-family: {ff.value};"
             onclick={() => subtitleStyleStore.customize({ fontFamily: ff.value })}
           >{ff.label}</button>
+        {/each}
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-divider"></div>
+
+  <!-- The small line: the second subtitle, shown under the big one when two are on. -->
+  <div class="customizations">
+    <div class="section-head">
+      <span class="section-title">Small line</span>
+      <span class="section-hint">The second subtitle, under the first</span>
+    </div>
+
+    <div class="control-row">
+      <span class="control-label">Size</span>
+      <div class="slider-row">
+        <input
+          type="range"
+          min="50"
+          max="100"
+          step="1"
+          aria-label="Small line size, compared with the big line"
+          value={Math.round(($activeSubtitleStyle.secondaryScale ?? DEFAULT_SECONDARY_SCALE) * 100)}
+          oninput={(e) => subtitleStyleStore.customize({ secondaryScale: +e.currentTarget.value / 100 })}
+        />
+        <span class="slider-value" title="Compared with the big line">{Math.round(($activeSubtitleStyle.secondaryScale ?? DEFAULT_SECONDARY_SCALE) * 100)}%</span>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <span class="control-label">Color</span>
+      <div class="color-swatches">
+        <button
+          class="same-btn"
+          class:active={!$activeSubtitleStyle.secondaryColor}
+          aria-label="Small line color: same as the big line"
+          onclick={() => subtitleStyleStore.customize({ secondaryColor: '' })}
+        >Same as big</button>
+        {#each TEXT_COLORS as tc}
+          <button
+            class="color-swatch"
+            class:active={$activeSubtitleStyle.secondaryColor === tc.value}
+            style="background-color: {tc.value};"
+            title={tc.label}
+            aria-label="Small line color: {tc.label}"
+            onclick={() => subtitleStyleStore.customize({ secondaryColor: tc.value })}
+          ></button>
         {/each}
       </div>
     </div>
@@ -437,6 +505,53 @@
 
   .color-swatch.active {
     border-color: #fff;
+  }
+
+  /* A faint ring, so a dark preset color (Highlight's text) still shows on the dark panel. */
+  .color-swatch.preset-swatch:not(.active) {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
+  }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+
+  .section-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .section-hint {
+    font-size: 0.68rem;
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  /* "Same as big": the small line follows the big line's color. */
+  .same-btn {
+    height: 20px;
+    padding: 0 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 999px;
+    background: none;
+    color: rgba(255, 255, 255, 0.7);
+    font: inherit;
+    font-size: 0.68rem;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .same-btn:hover {
+    border-color: rgba(255, 255, 255, 0.35);
+    color: #fff;
+  }
+
+  .same-btn.active {
+    border-color: #fff;
+    color: #fff;
   }
 
   .color-picker-label {
